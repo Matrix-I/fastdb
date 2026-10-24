@@ -68,10 +68,8 @@ impl VirtualDataGrid {
         self.scroll_top = (self.scroll_top + delta_y).clamp(0.0, max_scroll_y);
         self.scroll_left = (self.scroll_left + delta_x).max(0.0);
     }
-}
 
-impl Render for VirtualDataGrid {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_grid(&mut self) -> impl IntoElement {
         let theme = &self.theme;
         let row_height = theme.row_height;
         let header_height = theme.header_height;
@@ -234,5 +232,11 @@ impl Render for VirtualDataGrid {
         }
 
         grid_container.child(body)
+    }
+}
+
+impl Render for VirtualDataGrid {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_grid()
     }
 }

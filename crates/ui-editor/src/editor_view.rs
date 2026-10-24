@@ -77,10 +77,8 @@ impl SqlEditorView {
         self.buffer.insert_str(&item.label);
         self.show_completions = false;
     }
-}
 
-impl Render for SqlEditorView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_editor(&mut self) -> impl IntoElement {
         let theme = &self.theme;
         let (cursor_line, _cursor_col) = self.buffer.cursor_line_col();
 
@@ -248,5 +246,11 @@ impl Render for SqlEditorView {
         }
 
         editor_container
+    }
+}
+
+impl Render for SqlEditorView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_editor()
     }
 }
