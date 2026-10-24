@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/platform-hal",
+    "crates/mem-engine",
+    "crates/db-wire",
+    "crates/sql-intel",
+    "crates/ui-core",
+    "crates/ui-editor",
+    "crates/ui-grid",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# UI Framework (Zed GPUI)
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+
+# Async Runtime & Channels
+tokio = { version = "1.43", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "fs"] }
+flume = "0.11"
+futures = "0.3"
+async-trait = "0.1"
+
+# Memory, Concurrency & Compression
+bytes = "1.9"
+memmap2 = "0.9"
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
+parking_lot = "0.12"
+lru = "0.13"
+smallvec = "1.13"
+itoa = "1.0"
+ryu = "1.0"
+uuid = { version = "1.11", features = ["v4"] }
+
+# Database Drivers & SSH
+tokio-postgres = { version = "0.7", features = ["runtime"] }
+postgres-types = "0.2"
+mysql_async = "0.34"
+rusqlite = { version = "0.32", features = ["bundled"] }
+russh = "0.46"
+
+# Text Buffer & SQL AST
+ropey = "1.6"
+tree-sitter = "0.24"
+tree-sitter-sequel = "0.3"
+
+# OS Integration (macOS & Linux)
+directories = "5.0"
+keyring = { version = "3.6", features = ["apple-native", "sync-secret-service", "crypto-rust"] }
+
+# Error & Logging
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rust-embed = "8.13"
+
+# Internal workspace dependencies
+platform-hal = { path = "crates/platform-hal" }
+mem-engine = { path = "crates/mem-engine" }
+db-wire = { path = "crates/db-wire" }
+sql-intel = { path = "crates/sql-intel" }
+ui-core = { path = "crates/ui-core" }
+ui-editor = { path = "crates/ui-editor" }
+ui-grid = { path = "crates/ui-grid" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

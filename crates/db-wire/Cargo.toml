@@ -1,0 +1,21 @@
+[package]
+name = "db-wire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-postgres.workspace = true
+postgres-types.workspace = true
+mysql_async.workspace = true
+rusqlite.workspace = true
+russh.workspace = true
+flume.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+mem-engine.workspace = true
+platform-hal.workspace = true

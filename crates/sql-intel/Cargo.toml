@@ -1,0 +1,13 @@
+[package]
+name = "sql-intel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-sequel.workspace = true
+rusqlite.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

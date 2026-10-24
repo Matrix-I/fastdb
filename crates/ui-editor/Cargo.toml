@@ -1,0 +1,12 @@
+[package]
+name = "ui-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gpui.workspace = true
+ropey.workspace = true
+ui-core.workspace = true
+sql-intel.workspace = true
+platform-hal.workspace = true

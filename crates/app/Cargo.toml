@@ -1,0 +1,25 @@
+[package]
+name = "fastdb-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fastdb"
+path = "src/main.rs"
+
+[dependencies]
+gpui.workspace = true
+tokio.workspace = true
+flume.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+platform-hal.workspace = true
+mem-engine.workspace = true
+db-wire.workspace = true
+sql-intel.workspace = true
+ui-core.workspace = true
+ui-editor.workspace = true
+ui-grid.workspace = true
+rust-embed.workspace = true
