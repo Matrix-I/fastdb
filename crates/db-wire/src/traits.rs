@@ -1,1 +1,88 @@
-// db-wire traits
+use std::sync::Arc;
+use std::time::Duration;
+use anyhow::Result;
+use async_trait::async_trait;
+use mem_engine::{ColumnMeta, QueryResultPager};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbDriverKind {
+    Postgres,
+    MySql,
+    Sqlite,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshTunnelConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub key_path: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectionConfig {
+    pub driver: DbDriverKind,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub user: String,
+    pub password: Option<String>,
+    pub use_unix_socket: bool,
+    pub ssh_tunnel: Option<SshTunnelConfig>,
+    pub connect_timeout: Duration,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            driver: DbDriverKind::Postgres,
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "postgres".to_string(),
+            user: "postgres".to_string(),
+            password: None,
+            use_unix_socket: true,
+            ssh_tunnel: None,
+            connect_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    SchemaReady(Vec<ColumnMeta>),
+    PageAppended { total_rows: u64 },
+    Completed { total_rows: u64, elapsed_ms: u64 },
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct TableSummary {
+    pub schema: String,
+    pub name: String,
+    pub table_type: String, // "BASE TABLE" or "VIEW"
+}
+
+#[async_trait]
+pub trait DatabaseDriver: Send + Sync {
+    /// Test connection to verify credentials and connectivity
+    async fn ping(&self) -> Result<()>;
+
+    /// Stream query results straight into QueryResultPager and emit StreamEvents
+    async fn execute_streaming(
+        &self,
+        sql: &str,
+        pager: Arc<QueryResultPager>,
+        event_tx: flume::Sender<StreamEvent>,
+    ) -> Result<()>;
+
+    /// Cancel actively running query out-of-band immediately
+    async fn cancel_active_query(&self) -> Result<()>;
+
+    /// List schemas and tables for sidebar tree and autocomplete
+    async fn list_tables(&self) -> Result<Vec<TableSummary>>;
+
+    /// List column metadata for a specific table
+    async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>>;
+}

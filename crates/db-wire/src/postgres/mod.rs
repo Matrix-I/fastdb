@@ -1,0 +1,240 @@
+pub mod binary_decoder;
+
+use std::sync::Arc;
+use std::time::Instant;
+use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
+use futures::StreamExt;
+use mem_engine::{ColumnMeta, QueryResultPager};
+use parking_lot::Mutex;
+use platform_hal::socket::{detect_local_unix_socket, DbKind};
+use tokio_postgres::{CancelToken, Client, NoTls};
+use tracing::{debug, info, warn};
+
+use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
+use binary_decoder::{decode_pg_cell, pg_type_to_data_type};
+
+pub struct PostgresDriver {
+    pub config: ConnectionConfig,
+    client: tokio::sync::Mutex<Option<Arc<Client>>>,
+    cancel_token: Arc<Mutex<Option<CancelToken>>>,
+}
+
+impl PostgresDriver {
+    pub fn new(config: ConnectionConfig) -> Self {
+        Self {
+            config,
+            client: tokio::sync::Mutex::new(None),
+            cancel_token: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    async fn get_or_connect(&self) -> Result<Arc<Client>> {
+        let mut guard = self.client.lock().await;
+        if let Some(ref client) = *guard {
+            if !client.is_closed() {
+                return Ok(Arc::clone(client));
+            }
+        }
+
+        let client = Arc::new(self.connect_raw().await?);
+        *self.cancel_token.lock() = Some(client.cancel_token());
+        *guard = Some(Arc::clone(&client));
+        Ok(client)
+    }
+
+    async fn connect_raw(&self) -> Result<Client> {
+        let mut pg_config = tokio_postgres::Config::new();
+        pg_config.user(&self.config.user);
+        if let Some(ref pw) = self.config.password {
+            pg_config.password(pw);
+        }
+        pg_config.dbname(&self.config.database);
+        pg_config.connect_timeout(self.config.connect_timeout);
+
+        // Check for local Unix Domain Socket if enabled
+        let unix_socket = if self.config.use_unix_socket {
+            detect_local_unix_socket(DbKind::Postgres, &self.config.host, self.config.port)
+        } else {
+            None
+        };
+
+        if let Some(socket_path) = unix_socket {
+            info!("Connecting to PostgreSQL via Unix Domain Socket: {}", socket_path.display());
+            pg_config.host_path(socket_path);
+        } else {
+            info!("Connecting to PostgreSQL via TCP {}:{}", self.config.host, self.config.port);
+            pg_config.host(&self.config.host);
+            pg_config.port(self.config.port);
+        }
+
+        let (client, connection) = pg_config
+            .connect(NoTls)
+            .await
+            .with_context(|| format!("Failed to connect to PostgreSQL ({}:{})", self.config.host, self.config.port))?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                warn!("PostgreSQL connection error: {}", e);
+            }
+        });
+
+        Ok(client)
+    }
+}
+
+#[async_trait]
+impl DatabaseDriver for PostgresDriver {
+    async fn ping(&self) -> Result<()> {
+        let client = self.get_or_connect().await?;
+        client.simple_query("SELECT 1;").await?;
+        Ok(())
+    }
+
+    async fn execute_streaming(
+        &self,
+        sql: &str,
+        pager: Arc<QueryResultPager>,
+        event_tx: flume::Sender<StreamEvent>,
+    ) -> Result<()> {
+        let start_time = Instant::now();
+        let client = self.get_or_connect().await?;
+
+        // Update cancel token for this connection
+        *self.cancel_token.lock() = Some(client.cancel_token());
+
+        let statement = match client.prepare(sql).await {
+            Ok(stmt) => stmt,
+            Err(e) => {
+                let err_msg = format!("SQL Preparation Error: {e}");
+                let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
+                bail!(err_msg);
+            }
+        };
+
+        // Extract column metadata from statement
+        let columns: Vec<ColumnMeta> = statement
+            .columns()
+            .iter()
+            .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
+            .collect();
+
+        let num_cols = columns.len();
+        let _ = event_tx.send(StreamEvent::SchemaReady(columns));
+
+        let row_stream = match client.query_raw(&statement, std::iter::empty::<i32>()).await {
+            Ok(s) => s,
+            Err(e) => {
+                let err_msg = format!("Query execution error: {e}");
+                let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
+                bail!(err_msg);
+            }
+        };
+
+        futures::pin_mut!(row_stream);
+
+        let mut total_rows = 0u64;
+        let mut last_event_instant = Instant::now();
+        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
+
+        while let Some(row_res) = row_stream.next().await {
+            let row = match row_res {
+                Ok(r) => r,
+                Err(e) => {
+                    let err_msg = format!("Row stream error: {e}");
+                    let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
+                    bail!(err_msg);
+                }
+            };
+
+            for col_idx in 0..num_cols {
+                cell_buffers[col_idx] = decode_pg_cell(&row, col_idx);
+            }
+
+            let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
+            let (rows, rollover) = pager.append_row(cell_slices)?;
+            total_rows = rows;
+
+            // Throttled notification: notify every 16ms (60 FPS) or on page rollover
+            if rollover || last_event_instant.elapsed().as_millis() >= 16 {
+                let _ = event_tx.send(StreamEvent::PageAppended { total_rows });
+                last_event_instant = Instant::now();
+            }
+        }
+
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        let _ = event_tx.send(StreamEvent::Completed {
+            total_rows,
+            elapsed_ms,
+        });
+
+        debug!("Postgres query streaming completed: {} rows in {}ms", total_rows, elapsed_ms);
+        Ok(())
+    }
+
+    async fn cancel_active_query(&self) -> Result<()> {
+        let maybe_token = self.cancel_token.lock().clone();
+        if let Some(token) = maybe_token {
+            token.cancel_query(NoTls).await?;
+            info!("Cancelled active PostgreSQL query");
+        }
+        Ok(())
+    }
+
+    async fn list_tables(&self) -> Result<Vec<TableSummary>> {
+        let client = self.get_or_connect().await?;
+        let sql = r#"
+            SELECT table_schema, table_name, table_type
+            FROM information_schema.tables
+            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+            ORDER BY table_schema, table_name;
+        "#;
+
+        let rows = client.query(sql, &[]).await?;
+        let tables = rows
+            .into_iter()
+            .map(|r| TableSummary {
+                schema: r.get(0),
+                name: r.get(1),
+                table_type: r.get(2),
+            })
+            .collect();
+
+        Ok(tables)
+    }
+
+    async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
+        let client = self.get_or_connect().await?;
+        let sql = r#"
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = $2
+            ORDER BY ordinal_position;
+        "#;
+
+        let rows = client.query(sql, &[&schema, &table]).await?;
+        let cols = rows
+            .into_iter()
+            .map(|r| {
+                let name: String = r.get(0);
+                let dtype_str: String = r.get(1);
+                let is_null_str: String = r.get(2);
+                let data_type = match dtype_str.to_lowercase().as_str() {
+                    "integer" | "int" => mem_engine::DataType::Int4,
+                    "bigint" => mem_engine::DataType::Int8,
+                    "smallint" => mem_engine::DataType::Int2,
+                    "boolean" => mem_engine::DataType::Bool,
+                    "numeric" | "decimal" => mem_engine::DataType::Numeric,
+                    "real" => mem_engine::DataType::Float4,
+                    "double precision" => mem_engine::DataType::Float8,
+                    "json" | "jsonb" => mem_engine::DataType::Json,
+                    "uuid" => mem_engine::DataType::Uuid,
+                    _ => mem_engine::DataType::Text,
+                };
+                ColumnMeta::new(name, data_type).with_nullable(is_null_str == "YES")
+            })
+            .collect();
+
+        Ok(cols)
+    }
+}
