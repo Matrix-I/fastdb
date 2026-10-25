@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-use db_wire::{create_driver, ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
+use db_wire::{create_driver, ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary};
 use mem_engine::DataType;
 use gpui::*;
 use platform_hal::keychain::{CredentialStore, KeychainStore};
@@ -41,6 +41,8 @@ pub enum DataViewMode {
 }
 
 pub struct TabState {
+    /// Stable identity, so async query results land in the right tab after tabs move or close
+    pub id: u64,
     pub title: String,
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
@@ -54,6 +56,40 @@ pub struct TabState {
     pub editor: SqlEditorView,
     pub grid: VirtualDataGrid,
     pub execution_time_ms: Option<u64>,
+}
+
+/// Outcome of applying one streaming event to a tab
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryStatus {
+    Running { rows: u64 },
+    Done { rows: u64, elapsed_ms: u64 },
+    Failed(String),
+}
+
+impl TabState {
+    /// Applies a streaming query event to this tab's grid
+    pub fn apply_stream_event(&mut self, event: StreamEvent) -> QueryStatus {
+        match event {
+            StreamEvent::SchemaReady(pager) => {
+                self.grid.set_pager(pager);
+                if let Some(ref t_name) = self.table_name {
+                    self.grid.set_table_name(t_name.clone());
+                }
+                self.execution_time_ms = None;
+                QueryStatus::Running { rows: 0 }
+            }
+            StreamEvent::PageAppended { total_rows } => {
+                self.grid.on_rows_appended();
+                QueryStatus::Running { rows: total_rows }
+            }
+            StreamEvent::Completed { total_rows, elapsed_ms } => {
+                self.grid.on_rows_appended();
+                self.execution_time_ms = Some(elapsed_ms);
+                QueryStatus::Done { rows: total_rows, elapsed_ms }
+            }
+            StreamEvent::Error(e) => QueryStatus::Failed(e),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +125,10 @@ pub struct Workspace {
     pub schema_cache: Arc<SchemaCache>,
     pub tables: Vec<TableSummary>,
     pub is_running_query: bool,
+    /// Incremented per query run so events from a superseded run are ignored
+    pub query_generation: u64,
+    pub cancel_requested: bool,
+    pub next_tab_id: u64,
     pub status_message: String,
 
     // Real Database Connection Setup State
@@ -302,6 +342,9 @@ impl Workspace {
             schema_cache,
             tables: Vec::new(),
             is_running_query: false,
+            query_generation: 0,
+            cancel_requested: false,
+            next_tab_id: 1,
             status_message,
 
             // Connection Setup Form Defaults
@@ -1108,7 +1151,9 @@ impl Workspace {
         } else {
             let mut grid = VirtualDataGrid::new(None, self.theme.clone());
             grid.set_table_name(table);
+            let id = self.allocate_tab_id();
             self.tabs.push(TabState {
+                id,
                 title: table.to_string(),
                 schema_name: Some(schema.to_string()),
                 table_name: Some(table.to_string()),
@@ -1130,6 +1175,12 @@ impl Workspace {
         self.run_active_query(cx);
     }
 
+    fn allocate_tab_id(&mut self) -> u64 {
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        id
+    }
+
     pub fn run_active_query(&mut self, cx: &mut Context<Self>) {
         let Some(ref driver) = self.driver else {
             self.show_connection_modal = true;
@@ -1142,6 +1193,14 @@ impl Workspace {
             return;
         }
 
+        // The connection runs one statement at a time, and a cancel request targets whatever is
+        // running when it arrives, so a new run waits for the current one instead of racing it
+        if self.is_running_query {
+            self.status_message = "⏳ A query is still running — cancel it or wait for it to finish.".to_string();
+            cx.notify();
+            return;
+        }
+
         let sql = self.build_query_for_tab(self.active_tab);
 
         if sql.trim().trim_matches(';').trim().is_empty() {
@@ -1150,43 +1209,117 @@ impl Workspace {
             return;
         }
 
+        self.query_generation += 1;
+        let generation = self.query_generation;
+        let tab_id = self.tabs[self.active_tab].id;
         self.is_running_query = true;
+        self.cancel_requested = false;
         self.status_message = format!("Executing query: {}", sql.trim().replace('\n', " "));
         cx.notify();
 
+        let (event_tx, event_rx) = flume::unbounded();
         let driver = Arc::clone(driver);
-        let active_tab_idx = self.active_tab;
-        let query_sql = sql.clone();
+        db_wire::get_runtime().spawn(async move {
+            // Failures are reported through StreamEvent::Error
+            let _ = driver.execute_streaming(&sql, event_tx).await;
+        });
 
         cx.spawn(async move |this, cx| {
-            let exec_result = cx.background_executor().spawn(async move {
-                let rt = db_wire::get_runtime();
-                rt.block_on(async {
-                    driver.execute_query(&query_sql).await
-                })
-            }).await;
-
-            let _ = this.update(cx, |this, cx| {
-                this.is_running_query = false;
-                match exec_result {
-                    Ok((pager, total_rows, elapsed_ms)) => {
-                        this.status_message = format!("✅ Fetched {} rows in {}ms (120 FPS Zero-Copy)", total_rows, elapsed_ms);
-                        if active_tab_idx < this.tabs.len() {
-                            let tab = &mut this.tabs[active_tab_idx];
-                            tab.execution_time_ms = Some(elapsed_ms);
-                            tab.grid.set_pager(pager);
-                            if let Some(ref t_name) = tab.table_name {
-                                tab.grid.set_table_name(t_name.clone());
-                            }
+            while let Ok(event) = event_rx.recv_async().await {
+                let keep_listening = this
+                    .update(cx, |this, cx| {
+                        let keep = this.apply_query_event(generation, tab_id, event);
+                        // Nobody will see the rest of an orphaned run, so stop it on the server
+                        if keep && !this.tabs.iter().any(|t| t.id == tab_id) {
+                            this.cancel_running_query(cx);
                         }
-                    }
-                    Err(e) => {
-                        this.status_message = format!("❌ SQL Error: {}", e);
-                    }
+                        cx.notify();
+                        keep
+                    })
+                    .unwrap_or(false);
+                if !keep_listening {
+                    return;
                 }
-                cx.notify();
+            }
+
+            // The driver hung up without a final event
+            let _ = this.update(cx, |this, cx| {
+                if this.query_generation == generation && this.is_running_query {
+                    this.is_running_query = false;
+                    this.status_message = "❌ Query ended without a result.".to_string();
+                    cx.notify();
+                }
             });
-        }).detach();
+        })
+        .detach();
+    }
+
+    /// Routes a streaming event to its tab and updates the status bar.
+    /// Returns false once the run is finished or no longer relevant.
+    fn apply_query_event(&mut self, generation: u64, tab_id: u64, event: StreamEvent) -> bool {
+        if self.query_generation != generation {
+            return false;
+        }
+
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            // The tab was closed while its query was running: drop events until the run ends
+            let finished = matches!(event, StreamEvent::Completed { .. } | StreamEvent::Error(_));
+            if finished {
+                self.is_running_query = false;
+                self.status_message = "⏹ Query cancelled (tab closed).".to_string();
+            }
+            return !finished;
+        };
+
+        match tab.apply_stream_event(event) {
+            QueryStatus::Running { rows } => {
+                self.status_message = format!("⏳ Fetching rows… {} so far", rows);
+                true
+            }
+            QueryStatus::Done { rows, elapsed_ms } => {
+                self.is_running_query = false;
+                self.status_message = format!("✅ Fetched {} rows in {}ms", rows, elapsed_ms);
+                false
+            }
+            QueryStatus::Failed(e) => {
+                self.is_running_query = false;
+                self.status_message = if self.cancel_requested {
+                    "⏹ Query cancelled.".to_string()
+                } else {
+                    format!("❌ SQL Error: {}", e)
+                };
+                false
+            }
+        }
+    }
+
+    pub fn cancel_running_query(&mut self, cx: &mut Context<Self>) {
+        let Some(ref driver) = self.driver else {
+            return;
+        };
+        if !self.is_running_query || self.cancel_requested {
+            return;
+        }
+
+        self.cancel_requested = true;
+        self.status_message = "⏹ Cancelling query…".to_string();
+        cx.notify();
+
+        let driver = Arc::clone(driver);
+        let generation = self.query_generation;
+        cx.spawn(async move |this, cx| {
+            let result = db_wire::run_on_shared_runtime(async move { driver.cancel_active_query().await }).await;
+            if let Err(e) = result {
+                let _ = this.update(cx, |this, cx| {
+                    if this.query_generation == generation && this.is_running_query {
+                        this.cancel_requested = false;
+                        this.status_message = format!("❌ Cancel failed: {}", e);
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     #[allow(dead_code)]
@@ -1200,7 +1333,9 @@ impl Workspace {
         );
         let grid = VirtualDataGrid::new(None, self.theme.clone());
 
+        let id = self.allocate_tab_id();
         self.tabs.push(TabState {
+            id,
             title,
             schema_name: None,
             table_name: None,
@@ -3138,16 +3273,21 @@ impl Render for Workspace {
                                                 .w(px(24.0))
                                                 .h(px(24.0))
                                                 .rounded_xs()
-                                                .bg(if is_running_query { theme.bg_surface_hover } else { rgb(0x238636) })
-                                                .hover(|s| s.bg(rgb(0x2ea043)))
+                                                .bg(if is_running_query { rgb(0xda3633) } else { rgb(0x238636) })
+                                                .hover(move |s| s.bg(if is_running_query { rgb(0xf85149) } else { rgb(0x2ea043) }))
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.run_active_query(cx);
+                                                    // While a query runs, the button cancels it
+                                                    if this.is_running_query {
+                                                        this.cancel_running_query(cx);
+                                                    } else {
+                                                        this.run_active_query(cx);
+                                                    }
                                                     cx.notify();
                                                 }))
                                                 .child(
                                                     if is_running_query {
-                                                        div().text_size(px(11.0)).child("⏳").into_any_element()
+                                                        div().text_size(px(11.0)).text_color(rgb(0xffffff)).child("⏹").into_any_element()
                                                     } else {
                                                         img("icons/sql_exec.svg").w(px(13.0)).h(px(13.0)).into_any_element()
                                                     }

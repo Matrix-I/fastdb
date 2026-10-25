@@ -11,6 +11,8 @@ pub const MIN_COL_WIDTH: f32 = 75.0;
 pub const MAX_AUTO_COL_WIDTH: f32 = 1200.0;
 pub const MAX_EXPANDED_COL_WIDTH: f32 = 2500.0;
 pub const GUTTER_WIDTH: f32 = 52.0;
+/// Number of leading rows measured when auto-fitting column widths
+pub const WIDTH_SAMPLE_ROWS: u64 = 100;
 
 pub fn dbeaver_type_badge(data_type: mem_engine::DataType) -> &'static str {
     match data_type {
@@ -45,6 +47,8 @@ pub struct VirtualDataGrid {
     pub natural_widths: Vec<f32>,
     pub column_widths: Vec<f32>,
     pub manual_column_widths: HashSet<usize>,
+    /// Rows already measured for column widths; grows while results stream in
+    pub width_sampled_rows: u64,
     pub selection: GridSelection,
     pub changeset: Changeset,
     pub editing_cell: Option<(u64, usize, String)>,
@@ -66,6 +70,7 @@ impl VirtualDataGrid {
             natural_widths: Vec::new(),
             column_widths: Vec::new(),
             manual_column_widths: HashSet::new(),
+            width_sampled_rows: 0,
             selection: GridSelection::new(),
             changeset: Changeset::new(),
             editing_cell: None,
@@ -127,7 +132,7 @@ impl VirtualDataGrid {
         let num_cols = pager.num_cols() as usize;
         let mut snug_widths = Vec::with_capacity(num_cols);
         let mut natural_widths = Vec::with_capacity(num_cols);
-        let sample_rows = pager.total_rows().min(100);
+        let sample_rows = pager.total_rows().min(WIDTH_SAMPLE_ROWS);
 
         for (col_idx, col) in pager.columns.iter().enumerate() {
             // 1. Column header width: name + DBeaver data type badge + key icon + dropdown arrow + padding
@@ -176,10 +181,24 @@ impl VirtualDataGrid {
 
     /// Recalculates intrinsic content widths and applies viewport expansion distribution
     pub fn recalculate_all_widths(&mut self) {
+        self.width_sampled_rows = self
+            .pager
+            .as_ref()
+            .map(|p| p.total_rows().min(WIDTH_SAMPLE_ROWS))
+            .unwrap_or(0);
         let (snug, natural) = self.calculate_content_and_natural_widths();
         self.content_widths = snug;
         self.natural_widths = natural;
         self.apply_viewport_distribution();
+    }
+
+    /// Re-measures column widths while the leading sample rows are still streaming in.
+    /// Cheap once the sample is complete, so it can be called on every appended batch.
+    pub fn on_rows_appended(&mut self) {
+        let total_rows = self.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
+        if self.width_sampled_rows < WIDTH_SAMPLE_ROWS && total_rows > self.width_sampled_rows {
+            self.recalculate_all_widths();
+        }
     }
 
     /// Update the grid's available viewport width and distribute columns if width changed
@@ -791,6 +810,30 @@ mod tests {
     use super::*;
     use mem_engine::{ColumnMeta, DataType};
     use core::prelude::v1::test;
+
+    #[test]
+    fn test_widths_follow_rows_streamed_after_schema() {
+        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("note", DataType::Text)];
+        let pager = Arc::new(QueryResultPager::new(cols).unwrap());
+
+        // The grid receives the pager as soon as the schema is known, before any rows
+        let mut grid = VirtualDataGrid::new(None, Theme::dark());
+        grid.set_pager(Arc::clone(&pager));
+        let header_only_width = grid.content_widths[1];
+
+        pager.append_row(vec![
+            Some(&b"1"[..]),
+            Some(&b"A streamed note that is much wider than the column header text"[..]),
+        ]).unwrap();
+        grid.on_rows_appended();
+        assert!(grid.content_widths[1] > header_only_width, "widths must grow with streamed rows");
+
+        // A column the user resized keeps its width while more rows stream in
+        grid.set_column_width(1, 90.0);
+        pager.append_row(vec![Some(&b"2"[..]), Some(&b"another long streamed note value here"[..])]).unwrap();
+        grid.on_rows_appended();
+        assert_eq!(grid.column_widths[1], 90.0);
+    }
 
     #[test]
     fn test_auto_fit_content_widths() {

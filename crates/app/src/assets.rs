@@ -346,6 +346,7 @@ mod tests {
         use ui_core::theme::Theme;
 
         let tab = TabState {
+            id: 1,
             title: "additionalInfo".to_string(),
             schema_name: Some("public".to_string()),
             table_name: Some("additionalInfo".to_string()),
@@ -439,5 +440,73 @@ mod tests {
         // Nothing left to migrate on the next start
         let (mut reloaded, _) = Workspace::load_saved_connections_from_str(&rewritten);
         assert!(!Workspace::migrate_plaintext_passwords(&store, &mut reloaded));
+    }
+
+    fn sample_table_tab() -> crate::workspace::TabState {
+        use crate::workspace::{DataViewMode, PropertySection, TabState, TableSubTab};
+        use ui_core::theme::Theme;
+
+        TabState {
+            id: 7,
+            title: "users".to_string(),
+            schema_name: Some("public".to_string()),
+            table_name: Some("users".to_string()),
+            filter_sql: String::new(),
+            active_subtab: TableSubTab::Data,
+            active_property_section: PropertySection::Columns,
+            properties_header_collapsed: false,
+            view_mode: DataViewMode::Grid,
+            show_sql_dialog: false,
+            limit: 200,
+            editor: ui_editor::SqlEditorView::new("SELECT 1;", Theme::dark(), None),
+            grid: ui_grid::VirtualDataGrid::new(None, Theme::dark()),
+            execution_time_ms: None,
+        }
+    }
+
+    #[test]
+    fn test_stream_events_fill_the_tab_grid_incrementally() {
+        use crate::workspace::QueryStatus;
+        use db_wire::{ColumnMeta, DataType, QueryResultPager, StreamEvent};
+        use std::sync::Arc;
+
+        let mut tab = sample_table_tab();
+        let pager = Arc::new(
+            QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int4), ColumnMeta::new("name", DataType::Text)])
+                .unwrap(),
+        );
+
+        // The grid shows the result as soon as the schema arrives
+        assert_eq!(tab.apply_stream_event(StreamEvent::SchemaReady(Arc::clone(&pager))), QueryStatus::Running { rows: 0 });
+        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &pager));
+        assert_eq!(tab.grid.table_name, "users");
+
+        pager.append_row(vec![Some(&b"1"[..]), Some(&b"a fairly long user name streamed in"[..])]).unwrap();
+        pager.append_row(vec![Some(&b"2"[..]), None]).unwrap();
+        assert_eq!(tab.apply_stream_event(StreamEvent::PageAppended { total_rows: 2 }), QueryStatus::Running { rows: 2 });
+        assert_eq!(tab.grid.width_sampled_rows, 2);
+
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::Completed { total_rows: 2, elapsed_ms: 15 }),
+            QueryStatus::Done { rows: 2, elapsed_ms: 15 }
+        );
+        assert_eq!(tab.execution_time_ms, Some(15));
+    }
+
+    #[test]
+    fn test_stream_error_before_schema_keeps_previous_result() {
+        use crate::workspace::QueryStatus;
+        use db_wire::{ColumnMeta, DataType, QueryResultPager, StreamEvent};
+        use std::sync::Arc;
+
+        let mut tab = sample_table_tab();
+        let previous = Arc::new(QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int4)]).unwrap());
+        tab.grid.set_pager(Arc::clone(&previous));
+
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::Error("relation does not exist".to_string())),
+            QueryStatus::Failed("relation does not exist".to_string())
+        );
+        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &previous));
     }
 }
