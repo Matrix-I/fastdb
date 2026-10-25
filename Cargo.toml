@@ -10,6 +10,8 @@ members = [
     "crates/ui-editor",
     "crates/ui-grid",
 ]
+# Vendored patch crates are not workspace members
+exclude = ["vendor/xattr"]
 
 [workspace.package]
 version = "0.1.0"
@@ -69,6 +71,12 @@ sql-intel = { path = "crates/sql-intel" }
 ui-core = { path = "crates/ui-core" }
 ui-editor = { path = "crates/ui-editor" }
 ui-grid = { path = "crates/ui-grid" }
+
+# gpui 0.2.2 pulls in xattr 0.2.3 (via gpui_http_client -> zed-async-tar), which reads
+# libc::ENOATTR on Linux; libc 0.2.190 removed it. Drop this patch and vendor/xattr once
+# `cargo tree -i xattr` no longer shows xattr 0.2.x.
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
 
 # Unoptimized GPUI makes every re-render (one per key press or hover change) visibly slow,
 # so dev builds optimize dependencies fully and our own crates lightly
