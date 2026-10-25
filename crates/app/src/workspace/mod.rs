@@ -20,6 +20,7 @@ mod properties_panel;
 mod query;
 mod status_bar;
 mod table_view;
+mod text_input;
 mod top_bar;
 mod widgets;
 
@@ -29,6 +30,7 @@ pub use query::TabState;
 #[cfg(test)]
 pub use query::QueryStatus;
 use ddl::render_dbeaver_col_badge;
+use text_input::{handle_line_key, render_caret_text, CaretPick, LineInput};
 use widgets::{dbeaver_driver_icon, render_field_content};
 
 
@@ -128,6 +130,10 @@ pub struct Workspace {
     pub cursor_visible: bool,
     pub field_selected_all: bool,
     pub filter_selected_all: bool,
+    /// Caret of the active form field, as a char index (clamped; `usize::MAX` = end)
+    pub field_cursor: usize,
+    /// Caret of the filter bar, as a char index (clamped; `usize::MAX` = end)
+    pub filter_cursor: usize,
 }
 
 impl Workspace {
@@ -244,6 +250,8 @@ impl Workspace {
             cursor_visible: true,
             field_selected_all: false,
             filter_selected_all: false,
+            field_cursor: usize::MAX,
+            filter_cursor: usize::MAX,
         };
 
         cx.spawn(async move |this, cx| {

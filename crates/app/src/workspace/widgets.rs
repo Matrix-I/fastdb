@@ -1,74 +1,46 @@
 use super::*;
 
+/// Contents of a single-line input: placeholder, the value with a caret at `caret`
+/// (a char index) while active, or the whole value highlighted when selected.
+/// Clicking a character reports the caret position through `on_pick`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_field_content(
     value: &str,
     placeholder: &str,
     is_active: bool,
     is_selected_all: bool,
+    caret: usize,
     cursor_visible: bool,
     theme: &Theme,
+    on_pick: &CaretPick,
 ) -> Div {
-    let mut row = div().flex().items_center().h(px(18.0)).w_full().overflow_hidden();
+    let row = div().flex().items_center().h(px(18.0)).w_full().overflow_hidden();
 
     if value.is_empty() {
+        let placeholder_el = div().text_color(theme.text_muted).child(placeholder.to_string());
         if is_active {
-            row = row
-                .child(
-                    div()
-                        .w(px(1.5))
-                        .h(px(14.0))
-                        .rounded_xs()
-                        .bg(if cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
-                )
-                .child(
-                    div()
-                        .pl_1()
-                        .text_color(theme.text_muted)
-                        .child(placeholder.to_string())
-                );
+            row.children(render_caret_text("", Some(0), cursor_visible, on_pick))
+                .child(placeholder_el.pl_1())
         } else {
-            row = row.child(
-                div()
-                    .text_color(theme.text_muted)
-                    .child(placeholder.to_string())
-            );
+            row.child(placeholder_el)
         }
+    } else if is_active && is_selected_all {
+        row.child(
+            div()
+                .flex()
+                .items_center()
+                .px_1()
+                .py_0p5()
+                .rounded_xs()
+                .bg(rgb(0x264f78))
+                .text_color(rgb(0xffffff))
+                .children(render_caret_text(value, None, false, on_pick)),
+        )
     } else {
-        if is_active && is_selected_all {
-            row = row.child(
-                div()
-                    .px_1()
-                    .py_0p5()
-                    .rounded_xs()
-                    .bg(rgb(0x264f78))
-                    .text_color(rgb(0xffffff))
-                    .child(value.to_string())
-            );
-        } else if is_active {
-            row = row
-                .child(
-                    div()
-                        .text_color(theme.text_primary)
-                        .child(value.to_string())
-                )
-                .child(
-                    div()
-                        .pl(px(1.0))
-                        .w(px(1.5))
-                        .h(px(14.0))
-                        .rounded_xs()
-                        .bg(if cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
-                );
-        } else {
-            row = row.child(
-                div()
-                    .text_color(theme.text_primary)
-                    .child(value.to_string())
-            );
-        }
+        let caret = is_active.then_some(caret);
+        row.text_color(theme.text_primary)
+            .children(render_caret_text(value, caret, cursor_visible, on_pick))
     }
-
-    row
 }
 
 pub(super) fn dbeaver_driver_icon(driver: &str, is_connected: bool) -> Div {

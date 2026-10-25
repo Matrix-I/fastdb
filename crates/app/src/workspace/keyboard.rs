@@ -39,6 +39,7 @@ impl Workspace {
             }
             if event.keystroke.key == "tab" {
                 self.field_selected_all = false;
+                self.field_cursor = usize::MAX;
                 self.cursor_visible = true;
                 self.active_field = match (self.selected_driver_kind, self.active_field) {
                     (DbDriverKind::Sqlite, None) => Some(FormField::Name),
@@ -56,175 +57,20 @@ impl Workspace {
                 cx.notify();
                 return;
             }
-            // Select All (Cmd+A / Ctrl+A)
-            if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                && event.keystroke.key.eq_ignore_ascii_case("a")
-            {
-                if self.active_field.is_some() {
-                    self.field_selected_all = true;
+            if let Some(field) = self.active_field {
+                let mut caret = self.field_cursor;
+                let mut selected_all = self.field_selected_all;
+                let input = LineInput {
+                    text: self.field_value_mut(field),
+                    caret: &mut caret,
+                    selected_all: &mut selected_all,
+                    digits_only: field == FormField::Port,
+                };
+                if handle_line_key(input, &event.keystroke, cx) {
+                    self.field_cursor = caret;
+                    self.field_selected_all = selected_all;
                     self.cursor_visible = true;
                     cx.notify();
-                    return;
-                }
-            }
-            // Copy (Cmd+C / Ctrl+C)
-            if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                && event.keystroke.key.eq_ignore_ascii_case("c")
-            {
-                if let Some(field) = self.active_field {
-                    let text = match field {
-                        FormField::Name => &self.form_name,
-                        FormField::Host => &self.form_host,
-                        FormField::Port => &self.form_port,
-                        FormField::Database => &self.form_database,
-                        FormField::User => &self.form_user,
-                        FormField::Password => &self.form_password,
-                    };
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                    return;
-                }
-            }
-            // Cut (Cmd+X / Ctrl+X)
-            if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                && event.keystroke.key.eq_ignore_ascii_case("x")
-            {
-                if let Some(field) = self.active_field {
-                    let target = match field {
-                        FormField::Name => &mut self.form_name,
-                        FormField::Host => &mut self.form_host,
-                        FormField::Port => &mut self.form_port,
-                        FormField::Database => &mut self.form_database,
-                        FormField::User => &mut self.form_user,
-                        FormField::Password => &mut self.form_password,
-                    };
-                    cx.write_to_clipboard(ClipboardItem::new_string(target.clone()));
-                    target.clear();
-                    self.field_selected_all = false;
-                    self.cursor_visible = true;
-                    cx.notify();
-                    return;
-                }
-            }
-            // Clipboard paste (Cmd+V on macOS or Ctrl+V on Linux/Windows)
-            if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                && event.keystroke.key.eq_ignore_ascii_case("v")
-            {
-                if let Some(item) = cx.read_from_clipboard() {
-                    if let Some(pasted) = item.text() {
-                        let clean = pasted.trim_matches(|c| c == '\r' || c == '\n');
-                        if let Some(field) = self.active_field {
-                            let target = match field {
-                                FormField::Name => &mut self.form_name,
-                                FormField::Host => &mut self.form_host,
-                                FormField::Port => &mut self.form_port,
-                                FormField::Database => &mut self.form_database,
-                                FormField::User => &mut self.form_user,
-                                FormField::Password => &mut self.form_password,
-                            };
-                            if self.field_selected_all {
-                                target.clear();
-                                self.field_selected_all = false;
-                            }
-                            if field == FormField::Port {
-                                let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
-                                target.push_str(&digits);
-                            } else {
-                                target.push_str(clean);
-                            }
-                            self.cursor_visible = true;
-                            cx.notify();
-                        }
-                    }
-                }
-                return;
-            }
-            // Cancel selection on Left / Right / Up / Down arrow navigation
-            if event.keystroke.key == "left" || event.keystroke.key == "right" || event.keystroke.key == "up" || event.keystroke.key == "down" {
-                if self.field_selected_all {
-                    self.field_selected_all = false;
-                    self.cursor_visible = true;
-                    cx.notify();
-                    return;
-                }
-            }
-            // Cmd+Backspace = clear entire field
-            if event.keystroke.modifiers.platform && event.keystroke.key == "backspace" {
-                if let Some(field) = self.active_field {
-                    let target = match field {
-                        FormField::Name => &mut self.form_name,
-                        FormField::Host => &mut self.form_host,
-                        FormField::Port => &mut self.form_port,
-                        FormField::Database => &mut self.form_database,
-                        FormField::User => &mut self.form_user,
-                        FormField::Password => &mut self.form_password,
-                    };
-                    target.clear();
-                    self.field_selected_all = false;
-                    self.cursor_visible = true;
-                    cx.notify();
-                }
-                return;
-            }
-            // Backspace or Delete
-            if event.keystroke.key == "backspace" || event.keystroke.key == "delete" {
-                if let Some(field) = self.active_field {
-                    let target = match field {
-                        FormField::Name => &mut self.form_name,
-                        FormField::Host => &mut self.form_host,
-                        FormField::Port => &mut self.form_port,
-                        FormField::Database => &mut self.form_database,
-                        FormField::User => &mut self.form_user,
-                        FormField::Password => &mut self.form_password,
-                    };
-                    if self.field_selected_all {
-                        target.clear();
-                        self.field_selected_all = false;
-                    } else {
-                        target.pop();
-                    }
-                    self.cursor_visible = true;
-                    cx.notify();
-                }
-                return;
-            }
-            // Printable character insertion
-            let input_char = if let Some(ref kc) = event.keystroke.key_char {
-                if kc.chars().count() == 1 {
-                    Some(kc.as_str())
-                } else {
-                    None
-                }
-            } else if event.keystroke.key.chars().count() == 1 {
-                Some(event.keystroke.key.as_str())
-            } else {
-                None
-            };
-
-            if let Some(char_str) = input_char {
-                if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
-                    if let Some(field) = self.active_field {
-                        let target = match field {
-                            FormField::Name => &mut self.form_name,
-                            FormField::Host => &mut self.form_host,
-                            FormField::Port => &mut self.form_port,
-                            FormField::Database => &mut self.form_database,
-                            FormField::User => &mut self.form_user,
-                            FormField::Password => &mut self.form_password,
-                        };
-                        if self.field_selected_all {
-                            target.clear();
-                            self.field_selected_all = false;
-                        }
-                        if field == FormField::Port {
-                            if char_str.chars().all(|c| c.is_ascii_digit()) {
-                                target.push_str(char_str);
-                            }
-                        } else {
-                            target.push_str(char_str);
-                        }
-                        self.cursor_visible = true;
-                        cx.notify();
-                    }
                 }
             }
         } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
@@ -240,90 +86,16 @@ impl Workspace {
                     cx.notify();
                 } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
                     self.run_active_query(cx);
-                } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                    && event.keystroke.key.eq_ignore_ascii_case("a")
-                {
-                    self.filter_selected_all = true;
-                    self.cursor_visible = true;
-                    cx.notify();
-                } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                    && event.keystroke.key.eq_ignore_ascii_case("c")
-                {
-                    cx.write_to_clipboard(ClipboardItem::new_string(tab.filter_sql.clone()));
-                } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                    && event.keystroke.key.eq_ignore_ascii_case("x")
-                {
-                    cx.write_to_clipboard(ClipboardItem::new_string(tab.filter_sql.clone()));
-                    tab.filter_sql.clear();
-                    self.filter_selected_all = false;
-                    self.cursor_visible = true;
-                    cx.notify();
-                } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                    && event.keystroke.key.eq_ignore_ascii_case("v")
-                {
-                    if let Some(item) = cx.read_from_clipboard() {
-                        if let Some(pasted) = item.text() {
-                            let clean = pasted.trim_matches(|c| c == '\r' || c == '\n');
-                            if self.filter_selected_all {
-                                tab.filter_sql.clear();
-                                self.filter_selected_all = false;
-                            }
-                            tab.filter_sql.push_str(clean);
-                            self.cursor_visible = true;
-                            cx.notify();
-                        }
-                    }
-                } else if event.keystroke.modifiers.platform && event.keystroke.key == "backspace" {
-                    tab.filter_sql.clear();
-                    self.filter_selected_all = false;
-                    self.cursor_visible = true;
-                    cx.notify();
-                } else if event.keystroke.key == "backspace" || event.keystroke.key == "delete" {
-                    if self.filter_selected_all {
-                        tab.filter_sql.clear();
-                        self.filter_selected_all = false;
-                    } else {
-                        tab.filter_sql.pop();
-                    }
-                    self.cursor_visible = true;
-                    cx.notify();
-                } else if event.keystroke.key == "left" || event.keystroke.key == "right" {
-                    if self.filter_selected_all {
-                        self.filter_selected_all = false;
+                } else {
+                    let input = LineInput {
+                        text: &mut tab.filter_sql,
+                        caret: &mut self.filter_cursor,
+                        selected_all: &mut self.filter_selected_all,
+                        digits_only: false,
+                    };
+                    if handle_line_key(input, &event.keystroke, cx) {
                         self.cursor_visible = true;
                         cx.notify();
-                    }
-                } else if event.keystroke.key == "space" {
-                    if self.filter_selected_all {
-                        tab.filter_sql.clear();
-                        self.filter_selected_all = false;
-                    }
-                    tab.filter_sql.push(' ');
-                    self.cursor_visible = true;
-                    cx.notify();
-                } else {
-                    let input_char = if let Some(ref kc) = event.keystroke.key_char {
-                        if kc.chars().count() == 1 {
-                            Some(kc.as_str())
-                        } else {
-                            None
-                        }
-                    } else if event.keystroke.key.chars().count() == 1 {
-                        Some(event.keystroke.key.as_str())
-                    } else {
-                        None
-                    };
-
-                    if let Some(char_str) = input_char {
-                        if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
-                            if self.filter_selected_all {
-                                tab.filter_sql.clear();
-                                self.filter_selected_all = false;
-                            }
-                            tab.filter_sql.push_str(char_str);
-                            self.cursor_visible = true;
-                            cx.notify();
-                        }
                     }
                 }
             } else if tab.table_name.is_none() {

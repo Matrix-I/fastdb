@@ -228,75 +228,21 @@ impl Workspace {
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                                         this.is_filter_focused = true;
                                         this.filter_selected_all = event.click_count() >= 2;
+                                        this.filter_cursor = usize::MAX;
                                         this.cursor_visible = true;
                                         cx.notify();
                                     }))
-                                    .child({
-                                        let mut filter_row = div().flex().items_center().h(px(18.0)).w_full().overflow_hidden();
-                                        if filter_sql.is_empty() {
-                                            if is_filter_focused {
-                                                filter_row = filter_row
-                                                    .child(
-                                                        div()
-                                                            .w(px(1.5))
-                                                            .h(px(13.0))
-                                                            .rounded_xs()
-                                                            .bg(if self.cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .pl_1()
-                                                            .text_size(px(11.0))
-                                                            .text_color(theme.text_muted)
-                                                            .child("Enter a SQL expression to filter results (use Ctrl+Space)")
-                                                    );
-                                            } else {
-                                                filter_row = filter_row.child(
-                                                    div()
-                                                        .text_size(px(11.0))
-                                                        .text_color(theme.text_muted)
-                                                        .child("Enter a SQL expression to filter results (use Ctrl+Space)")
-                                                );
-                                            }
-                                        } else {
-                                            if is_filter_focused && self.filter_selected_all {
-                                                filter_row = filter_row.child(
-                                                    div()
-                                                        .px_1()
-                                                        .py_0p5()
-                                                        .rounded_xs()
-                                                        .bg(rgb(0x264f78))
-                                                        .text_color(rgb(0xffffff))
-                                                        .text_size(px(11.5))
-                                                        .child(filter_sql.clone())
-                                                );
-                                            } else if is_filter_focused {
-                                                filter_row = filter_row
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(11.5))
-                                                            .text_color(theme.text_primary)
-                                                            .child(filter_sql.clone())
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .pl(px(1.0))
-                                                            .w(px(1.5))
-                                                            .h(px(13.0))
-                                                            .rounded_xs()
-                                                            .bg(if self.cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
-                                                    );
-                                            } else {
-                                                filter_row = filter_row.child(
-                                                    div()
-                                                        .text_size(px(11.5))
-                                                        .text_color(theme.text_primary)
-                                                        .child(filter_sql.clone())
-                                                );
-                                            }
-                                        }
-                                        filter_row
-                                    })
+                                    .text_size(px(11.5))
+                                    .child(render_field_content(
+                                        &filter_sql,
+                                        "Enter a SQL expression to filter results (use Ctrl+Space)",
+                                        is_filter_focused,
+                                        is_filter_focused && self.filter_selected_all,
+                                        self.filter_cursor,
+                                        self.cursor_visible,
+                                        theme,
+                                        &self.filter_caret_pick(cx),
+                                    ))
                             )
                             // Execute Query Button ▶ (Green play arrow)
                             .child(

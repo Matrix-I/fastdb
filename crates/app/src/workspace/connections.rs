@@ -496,6 +496,7 @@ impl Workspace {
         self.form_password = "".to_string();
         self.form_use_unix_socket = false;
         self.active_field = Some(FormField::Name);
+        self.field_cursor = usize::MAX;
         self.field_selected_all = false;
         self.cursor_visible = true;
         self.show_password = false;
@@ -528,6 +529,7 @@ impl Workspace {
             self.editing_connection_id = Some(saved.id.clone());
             self.test_result = None;
             self.active_field = Some(FormField::Database);
+            self.field_cursor = usize::MAX;
             self.field_selected_all = false;
             self.cursor_visible = true;
             self.show_password = false;
@@ -651,6 +653,7 @@ impl Workspace {
         self.form_password = "".to_string();
         self.form_use_unix_socket = true;
         self.active_field = Some(FormField::Host);
+        self.field_cursor = usize::MAX;
         self.test_result = None;
     }
 
@@ -663,6 +666,7 @@ impl Workspace {
         self.form_password = "".to_string();
         self.form_use_unix_socket = true;
         self.active_field = Some(FormField::Host);
+        self.field_cursor = usize::MAX;
         self.test_result = None;
     }
 
@@ -675,6 +679,7 @@ impl Workspace {
         self.form_password = "".to_string();
         self.form_use_unix_socket = false;
         self.active_field = Some(FormField::Database);
+        self.field_cursor = usize::MAX;
         self.test_result = None;
     }
 }
