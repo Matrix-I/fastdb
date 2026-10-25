@@ -38,6 +38,7 @@ pub struct Workspace {
 
     // Real Database Connection Setup State
     pub is_connected: bool,
+    pub is_connecting: bool,
     pub show_connection_modal: bool,
     pub selected_driver_kind: DbDriverKind,
     pub form_host: String,
@@ -81,6 +82,7 @@ impl Workspace {
 
             // Connection Setup Form Defaults (PostgreSQL)
             is_connected: false,
+            is_connecting: false,
             show_connection_modal: true,
             selected_driver_kind: DbDriverKind::Postgres,
             form_host: "localhost".to_string(),
@@ -115,110 +117,173 @@ impl Workspace {
             },
             use_unix_socket: self.form_use_unix_socket,
             ssh_tunnel: None,
-            connect_timeout: std::time::Duration::from_secs(4),
+            connect_timeout: std::time::Duration::from_millis(2500),
         }
     }
 
-    pub fn test_connection(&mut self) {
-        let config = self.build_current_config();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        match create_driver(config) {
-            Ok(driver) => {
-                let res = rt.block_on(async { driver.ping().await });
-                match res {
-                    Ok(_) => {
-                        self.test_result = Some(Ok("Connection test successful! Ping responded.".to_string()));
-                    }
-                    Err(e) => {
-                        self.test_result = Some(Err(format!("Ping failed: {}", e)));
-                    }
-                }
-            }
-            Err(e) => {
-                self.test_result = Some(Err(format!("Driver initialization error: {}", e)));
-            }
-        }
-    }
-
-    pub fn connect_to_database(&mut self) {
-        let config = self.build_current_config();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let driver_res = create_driver(config.clone());
-        let driver = match driver_res {
-            Ok(d) => d,
-            Err(e) => {
-                self.test_result = Some(Err(format!("Failed to initialize driver: {}", e)));
-                return;
-            }
-        };
-
-        // Ping test
-        let ping_res = rt.block_on(async { driver.ping().await });
-        if let Err(e) = ping_res {
-            self.test_result = Some(Err(format!("Connection refused: {}", e)));
+    pub fn test_connection(&mut self, cx: &mut Context<Self>) {
+        if self.is_connecting {
             return;
         }
 
-        // Query real tables from the database
-        let tables = match rt.block_on(async { driver.list_tables().await }) {
-            Ok(t) => t,
-            Err(e) => {
-                self.test_result = Some(Err(format!("Connected but failed to list tables: {}", e)));
-                return;
-            }
-        };
-
-        // Cache tables and column metadata into SchemaCache for Autocomplete
-        let _ = self.schema_cache.clear();
-        for t in &tables {
-            let _ = self.schema_cache.add_table(&t.schema, &t.name, &t.table_type);
-            if let Ok(cols) = rt.block_on(async { driver.list_columns(&t.schema, &t.name).await }) {
-                for c in cols {
-                    let _ = self.schema_cache.add_column(&t.schema, &t.name, &c.name, c.data_type.display_name(), c.is_primary_key);
-                }
-            }
-        }
-
-        self.tables = tables;
-        self.driver = Some(driver);
-        self.is_connected = true;
-        self.show_connection_modal = false;
+        self.is_connecting = true;
+        self.status_message = "Testing database connection...".to_string();
         self.test_result = None;
+        cx.notify();
 
-        let db_label = format!("{:?} ({}:{})", config.driver, config.host, config.port);
-        self.status_message = format!("🟢 Connected to real database: {} — {} tables found", db_label, self.tables.len());
+        let config = self.build_current_config();
 
-        // Update active tab with a starter query
-        let starter_sql = if let Some(first_table) = self.tables.first() {
-            match self.selected_driver_kind {
-                DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", first_table.schema, first_table.name),
-                DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", first_table.schema, first_table.name),
-                DbDriverKind::Sqlite => format!("SELECT * FROM \"{}\" LIMIT 100;", first_table.name),
-            }
-        } else if self.selected_driver_kind == DbDriverKind::Sqlite {
-            "-- Connected to real SQLite database.\n-- You can create tables and run queries:\nCREATE TABLE IF NOT EXISTS notes (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    title TEXT NOT NULL,\n    content TEXT,\n    created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n);\nINSERT INTO notes (title, content) VALUES ('Welcome', 'Connected to real SQLite database via FastDB pure Rust engine');\nSELECT * FROM notes;".to_string()
-        } else {
-            "SELECT 1;".to_string()
-        };
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(r) => r,
+                    Err(e) => return Err(format!("Failed to create runtime: {}", e)),
+                };
 
-        if !self.tabs.is_empty() {
-            let tab = &mut self.tabs[self.active_tab];
-            tab.editor = SqlEditorView::new(&starter_sql, self.theme.clone(), Some(self.schema_cache.clone()));
-            tab.grid = VirtualDataGrid::new(None, self.theme.clone());
+                let timeout_duration = std::time::Duration::from_millis(2500);
+                let outcome = rt.block_on(async {
+                    tokio::time::timeout(timeout_duration, async {
+                        let driver = create_driver(config)
+                            .map_err(|e| format!("Driver initialization error: {}", e))?;
+                        driver.ping().await
+                            .map_err(|e| format!("Ping failed: {}", e))?;
+                        Ok::<_, String>("Connection test successful! Database responded to ping.".to_string())
+                    }).await
+                });
+
+                match outcome {
+                    Ok(Ok(msg)) => Ok(msg),
+                    Ok(Err(e)) => Err(e),
+                    Err(_) => Err("Connection timed out (server unreachable or offline)".to_string()),
+                }
+            }).await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.is_connecting = false;
+                match result {
+                    Ok(msg) => {
+                        this.test_result = Some(Ok(msg));
+                        this.status_message = "✓ Database connection test passed.".to_string();
+                    }
+                    Err(err) => {
+                        this.test_result = Some(Err(err.clone()));
+                        this.status_message = format!("✕ Test failed: {}", err);
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    pub fn connect_to_database(&mut self, cx: &mut Context<Self>) {
+        if self.is_connecting {
+            return;
         }
 
-        // Execute starter query if tables exist
-        if !self.tables.is_empty() {
-            self.run_active_query();
-        }
+        self.is_connecting = true;
+        self.status_message = "Connecting to database...".to_string();
+        self.test_result = None;
+        cx.notify();
+
+        let config = self.build_current_config();
+        let selected_driver_kind = self.selected_driver_kind;
+
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(r) => r,
+                    Err(e) => return Err(format!("Failed to create runtime: {}", e)),
+                };
+
+                let timeout_duration = std::time::Duration::from_millis(2500);
+                let outcome = rt.block_on(async {
+                    tokio::time::timeout(timeout_duration, async {
+                        let driver = create_driver(config.clone())
+                            .map_err(|e| format!("Driver initialization error: {}", e))?;
+
+                        driver.ping().await
+                            .map_err(|e| format!("Connection refused: {}", e))?;
+
+                        let tables = driver.list_tables().await
+                            .map_err(|e| format!("Connected but failed to list tables: {}", e))?;
+
+                        let mut columns_info = Vec::new();
+                        for t in &tables {
+                            if let Ok(cols) = driver.list_columns(&t.schema, &t.name).await {
+                                columns_info.push((t.schema.clone(), t.name.clone(), cols));
+                            }
+                        }
+
+                        Ok::<_, String>((driver, tables, columns_info, config))
+                    }).await
+                });
+
+                match outcome {
+                    Ok(Ok(val)) => Ok(val),
+                    Ok(Err(e)) => Err(e),
+                    Err(_) => Err("Connection timed out (server unreachable or offline)".to_string()),
+                }
+            }).await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.is_connecting = false;
+                match result {
+                    Ok((driver, tables, columns_info, config)) => {
+                        let _ = this.schema_cache.clear();
+                        for t in &tables {
+                            let _ = this.schema_cache.add_table(&t.schema, &t.name, &t.table_type);
+                        }
+                        for (schema, table, cols) in columns_info {
+                            for c in cols {
+                                let _ = this.schema_cache.add_column(&schema, &table, &c.name, c.data_type.display_name(), c.is_primary_key);
+                            }
+                        }
+
+                        this.tables = tables;
+                        this.driver = Some(driver);
+                        this.is_connected = true;
+                        this.show_connection_modal = false;
+                        this.test_result = None;
+
+                        let db_label = format!("{:?} ({}:{})", config.driver, config.host, config.port);
+                        this.status_message = format!("🟢 Connected to real database: {} — {} tables found", db_label, this.tables.len());
+
+                        let starter_sql = if let Some(first_table) = this.tables.first() {
+                            match selected_driver_kind {
+                                DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", first_table.schema, first_table.name),
+                                DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", first_table.schema, first_table.name),
+                                DbDriverKind::Sqlite => format!("SELECT * FROM \"{}\" LIMIT 100;", first_table.name),
+                            }
+                        } else if selected_driver_kind == DbDriverKind::Sqlite {
+                            "-- Connected to real SQLite database.\n-- You can create tables and run queries:\nCREATE TABLE IF NOT EXISTS notes (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    title TEXT NOT NULL,\n    content TEXT,\n    created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n);\nINSERT INTO notes (title, content) VALUES ('Welcome', 'Connected to real SQLite database via FastDB pure Rust engine');\nSELECT * FROM notes;".to_string()
+                        } else {
+                            "SELECT 1;".to_string()
+                        };
+
+                        if !this.tabs.is_empty() {
+                            let tab = &mut this.tabs[this.active_tab];
+                            tab.editor = SqlEditorView::new(&starter_sql, this.theme.clone(), Some(this.schema_cache.clone()));
+                            tab.grid = VirtualDataGrid::new(None, this.theme.clone());
+                        }
+
+                        if !this.tables.is_empty() {
+                            this.run_active_query();
+                        }
+                    }
+                    Err(e) => {
+                        this.test_result = Some(Err(e.clone()));
+                        this.status_message = format!("❌ Connection failed: {}", e);
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
     }
 
     pub fn disconnect(&mut self) {
@@ -417,8 +482,7 @@ impl Render for Workspace {
                         return;
                     }
                     if event.keystroke.key == "enter" || event.keystroke.key == "return" {
-                        this.connect_to_database();
-                        cx.notify();
+                        this.connect_to_database(cx);
                         return;
                     }
                     if event.keystroke.key == "tab" {
@@ -1113,45 +1177,6 @@ impl Render for Workspace {
                                                         }))
                                                         .child(format!("{}{}", self.form_host, if is_host_active { "|" } else { "" }))
                                                 )
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .gap_1()
-                                                        .child(
-                                                            div()
-                                                                .id("chip-host-local")
-                                                                .px_1p5()
-                                                                .py_0p5()
-                                                                .rounded_sm()
-                                                                .bg(theme.bg_surface)
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme.text_muted)
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                                    this.form_host = "localhost".to_string();
-                                                                    window.focus(&this.focus_handle);
-                                                                    cx.notify();
-                                                                }))
-                                                                .child("localhost")
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .id("chip-host-ip")
-                                                                .px_1p5()
-                                                                .py_0p5()
-                                                                .rounded_sm()
-                                                                .bg(theme.bg_surface)
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme.text_muted)
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                                    this.form_host = "127.0.0.1".to_string();
-                                                                    window.focus(&this.focus_handle);
-                                                                    cx.notify();
-                                                                }))
-                                                                .child("127.0.0.1")
-                                                        )
-                                                )
                                         )
                                         .child(
                                             div()
@@ -1176,43 +1201,6 @@ impl Render for Workspace {
                                                             cx.notify();
                                                         }))
                                                         .child(format!("{}{}", self.form_port, if is_port_active { "|" } else { "" }))
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .gap_1()
-                                                        .child(
-                                                            div()
-                                                                .id("chip-port-pg")
-                                                                .px_1p5()
-                                                                .py_0p5()
-                                                                .rounded_sm()
-                                                                .bg(theme.bg_surface)
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme.text_muted)
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                                    this.form_port = "5432".to_string();
-                                                                    cx.notify();
-                                                                }))
-                                                                .child("5432")
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .id("chip-port-mysql")
-                                                                .px_1p5()
-                                                                .py_0p5()
-                                                                .rounded_sm()
-                                                                .bg(theme.bg_surface)
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme.text_muted)
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                                    this.form_port = "3306".to_string();
-                                                                    cx.notify();
-                                                                }))
-                                                                .child("3306")
-                                                        )
                                                 )
                                         )
                                 } else {
@@ -1249,83 +1237,6 @@ impl Render for Workspace {
                                                         }))
                                                         .child(format!("{}{}", self.form_database, if is_db_active { "|" } else { "" }))
                                                 )
-                                                .child({
-                                                    let mut chips = div().flex().gap_1();
-                                                    if is_sqlite {
-                                                        chips = chips
-                                                            .child(
-                                                                div()
-                                                                    .id("chip-sqlite-file")
-                                                                    .px_1p5()
-                                                                    .py_0p5()
-                                                                    .rounded_sm()
-                                                                    .bg(theme.bg_surface)
-                                                                    .text_size(px(10.0))
-                                                                    .text_color(theme.text_muted)
-                                                                    .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                                        this.form_database = "fastdb.sqlite".to_string();
-                                                                        window.focus(&this.focus_handle);
-                                                                        cx.notify();
-                                                                    }))
-                                                                    .child("fastdb.sqlite")
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .id("chip-sqlite-mem")
-                                                                    .px_1p5()
-                                                                    .py_0p5()
-                                                                    .rounded_sm()
-                                                                    .bg(theme.bg_surface)
-                                                                    .text_size(px(10.0))
-                                                                    .text_color(theme.text_muted)
-                                                                    .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                                        this.form_database = ":memory:".to_string();
-                                                                        window.focus(&this.focus_handle);
-                                                                        cx.notify();
-                                                                    }))
-                                                                    .child(":memory:")
-                                                            );
-                                                    } else {
-                                                        chips = chips
-                                                            .child(
-                                                                div()
-                                                                    .id("chip-db-postgres")
-                                                                    .px_1p5()
-                                                                    .py_0p5()
-                                                                    .rounded_sm()
-                                                                    .bg(theme.bg_surface)
-                                                                    .text_size(px(10.0))
-                                                                    .text_color(theme.text_muted)
-                                                                    .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                                        this.form_database = "postgres".to_string();
-                                                                        window.focus(&this.focus_handle);
-                                                                        cx.notify();
-                                                                    }))
-                                                                    .child("postgres")
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .id("chip-db-mysql")
-                                                                    .px_1p5()
-                                                                    .py_0p5()
-                                                                    .rounded_sm()
-                                                                    .bg(theme.bg_surface)
-                                                                    .text_size(px(10.0))
-                                                                    .text_color(theme.text_muted)
-                                                                    .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                                        this.form_database = "mysql".to_string();
-                                                                        window.focus(&this.focus_handle);
-                                                                        cx.notify();
-                                                                    }))
-                                                                    .child("mysql")
-                                                            );
-                                                    }
-                                                    chips
-                                                })
                                         )
                                         .child(if !is_sqlite {
                                             div()
@@ -1350,45 +1261,6 @@ impl Render for Workspace {
                                                             cx.notify();
                                                         }))
                                                         .child(format!("{}{}", self.form_user, if is_user_active { "|" } else { "" }))
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .gap_1()
-                                                        .child(
-                                                            div()
-                                                                .id("chip-user-pg")
-                                                                .px_1p5()
-                                                                .py_0p5()
-                                                                .rounded_sm()
-                                                                .bg(theme.bg_surface)
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme.text_muted)
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                                    this.form_user = "postgres".to_string();
-                                                                    window.focus(&this.focus_handle);
-                                                                    cx.notify();
-                                                                }))
-                                                                .child("postgres")
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .id("chip-user-root")
-                                                                .px_1p5()
-                                                                .py_0p5()
-                                                                .rounded_sm()
-                                                                .bg(theme.bg_surface)
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme.text_muted)
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                                    this.form_user = "root".to_string();
-                                                                    window.focus(&this.focus_handle);
-                                                                    cx.notify();
-                                                                }))
-                                                                .child("root")
-                                                        )
                                                 )
                                         } else {
                                             div()
@@ -1445,175 +1317,9 @@ impl Render for Workspace {
                                                     format!("{}{}", "•".repeat(self.form_password.chars().count()), if is_pass_active { "|" } else { "" })
                                                 })
                                         )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1()
-                                                .child(
-                                                    div()
-                                                        .id("chip-pass-paste")
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(theme.bg_surface)
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_accent)
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            if let Some(item) = cx.read_from_clipboard() {
-                                                                if let Some(pasted) = item.text() {
-                                                                    this.form_password = pasted.trim_matches(|c| c == '\r' || c == '\n').to_string();
-                                                                    this.active_field = Some(FormField::Password);
-                                                                    window.focus(&this.focus_handle);
-                                                                    cx.notify();
-                                                                }
-                                                            }
-                                                        }))
-                                                        .child("📋 Paste")
-                                                )
-                                                .child(
-                                                    div()
-                                                        .id("chip-pass-clear")
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(theme.bg_surface)
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.form_password.clear();
-                                                            this.active_field = Some(FormField::Password);
-                                                            window.focus(&this.focus_handle);
-                                                            cx.notify();
-                                                        }))
-                                                        .child("Clear")
-                                                )
-                                                .child(
-                                                    div()
-                                                        .id("chip-pass-pg")
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(theme.bg_surface)
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.form_password = "postgres".to_string();
-                                                            this.active_field = Some(FormField::Password);
-                                                            window.focus(&this.focus_handle);
-                                                            cx.notify();
-                                                        }))
-                                                        .child("postgres")
-                                                )
-                                                .child(
-                                                    div()
-                                                        .id("chip-pass-root")
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(theme.bg_surface)
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.form_password = "root".to_string();
-                                                            this.active_field = Some(FormField::Password);
-                                                            window.focus(&this.focus_handle);
-                                                            cx.notify();
-                                                        }))
-                                                        .child("root")
-                                                )
-                                                .child(
-                                                    div()
-                                                        .id("chip-pass-admin")
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(theme.bg_surface)
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.form_password = "admin".to_string();
-                                                            this.active_field = Some(FormField::Password);
-                                                            window.focus(&this.focus_handle);
-                                                            cx.notify();
-                                                        }))
-                                                        .child("admin")
-                                                )
-                                                .child(
-                                                    div()
-                                                        .id("chip-pass-pwd")
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(theme.bg_surface)
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.form_password = "password".to_string();
-                                                            this.active_field = Some(FormField::Password);
-                                                            window.focus(&this.focus_handle);
-                                                            cx.notify();
-                                                        }))
-                                                        .child("password")
-                                                )
-                                                .child(
-                                                    div()
-                                                        .id("chip-pass-123")
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .bg(theme.bg_surface)
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.form_password = "123456".to_string();
-                                                            this.active_field = Some(FormField::Password);
-                                                            window.focus(&this.focus_handle);
-                                                            cx.notify();
-                                                        }))
-                                                        .child("123456")
-                                                )
-                                        )
                                 } else {
                                     div()
                                 })
-                                // Auto Unix Domain Socket indicator (only for PG/MySQL)
-                                .child(if !is_sqlite {
-                                    div()
-                                        .id("btn-toggle-unix-socket")
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .text_size(px(11.0))
-                                        .text_color(theme.text_muted)
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.form_use_unix_socket = !this.form_use_unix_socket;
-                                            cx.notify();
-                                        }))
-                                        .child(if self.form_use_unix_socket {
-                                            "⚡ [x] Auto-detect local Unix Domain Socket (/tmp, /var/run) enabled for zero latency"
-                                        } else {
-                                            "⚡ [ ] Auto-detect local Unix Domain Socket disabled (use standard TCP)"
-                                        })
-                                        .into_any_element()
-                                } else {
-                                    div().into_any_element()
-                                })
-                        )
-                        // Active Field Edit Hint
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(theme.text_muted)
-                                .child("💡 Click field to edit (Type / ⌘V paste, Backspace delete, ⌘⌫ clear, Tab next, Enter connect)")
                         )
                         // Test Result Notification Banner
                         .child({
@@ -1652,16 +1358,17 @@ impl Render for Workspace {
                                         .px_3()
                                         .py_1p5()
                                         .rounded_md()
-                                        .bg(theme.bg_surface_hover)
+                                        .bg(if self.is_connecting { theme.bg_app } else { theme.bg_surface_hover })
                                         .border_1()
                                         .border_color(theme.border)
                                         .text_size(px(12.0))
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.test_connection();
-                                            cx.notify();
+                                            if !this.is_connecting {
+                                                this.test_connection(cx);
+                                            }
                                         }))
-                                        .child("🔍 Test Connection")
+                                        .child(if self.is_connecting { "⏳ Testing..." } else { "🔍 Test Connection" })
                                 )
                                 .child(
                                     div()
@@ -1695,16 +1402,17 @@ impl Render for Workspace {
                                                 .px_4()
                                                 .py_1p5()
                                                 .rounded_md()
-                                                .bg(theme.text_accent)
-                                                .text_color(theme.bg_app)
+                                                .bg(if self.is_connecting { theme.bg_surface_hover } else { theme.text_accent })
+                                                .text_color(if self.is_connecting { theme.text_muted } else { theme.bg_app })
                                                 .font_weight(FontWeight::BOLD)
                                                 .text_size(px(12.0))
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.connect_to_database();
-                                                    cx.notify();
+                                                    if !this.is_connecting {
+                                                        this.connect_to_database(cx);
+                                                    }
                                                 }))
-                                                .child("🔌 Connect Database")
+                                                .child(if self.is_connecting { "⏳ Connecting..." } else { "🔌 Connect Database" })
                                         )
                                 )
                         )
