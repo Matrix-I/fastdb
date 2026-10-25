@@ -12,6 +12,27 @@ pub const MAX_AUTO_COL_WIDTH: f32 = 1200.0;
 pub const MAX_EXPANDED_COL_WIDTH: f32 = 2500.0;
 pub const GUTTER_WIDTH: f32 = 52.0;
 
+pub fn dbeaver_type_badge(data_type: mem_engine::DataType) -> &'static str {
+    match data_type {
+        mem_engine::DataType::Text | mem_engine::DataType::Varchar => "AZ",
+        mem_engine::DataType::Json => "{ }",
+        mem_engine::DataType::Int2
+        | mem_engine::DataType::Int4
+        | mem_engine::DataType::Int8
+        | mem_engine::DataType::Float4
+        | mem_engine::DataType::Float8
+        | mem_engine::DataType::Numeric => "123",
+        mem_engine::DataType::Date
+        | mem_engine::DataType::Time
+        | mem_engine::DataType::Timestamp
+        | mem_engine::DataType::TimestampTz => "📅",
+        mem_engine::DataType::Bool => "0/1",
+        mem_engine::DataType::Uuid => "#",
+        mem_engine::DataType::Bytea => "0x",
+        mem_engine::DataType::Unknown => "?",
+    }
+}
+
 pub struct VirtualDataGrid {
     pub pager: Option<Arc<QueryResultPager>>,
     pub theme: Theme,
@@ -99,10 +120,11 @@ impl VirtualDataGrid {
         let sample_rows = pager.total_rows().min(100);
 
         for (col_idx, col) in pager.columns.iter().enumerate() {
-            // 1. Column header width: name + data type badge + padding + resizer leeway
+            // 1. Column header width: name + DBeaver data type badge + key icon + dropdown arrow + padding
             let name_w = Self::estimate_text_width(&col.name, 12.0);
-            let type_w = Self::estimate_text_width(col.data_type.display_name(), 9.0);
-            let header_w = name_w + type_w + 40.0;
+            let badge_str = dbeaver_type_badge(col.data_type);
+            let badge_w = Self::estimate_text_width(badge_str, 10.0);
+            let header_w = name_w + badge_w + 50.0;
 
             // 2. Data sample width across up to 100 rows
             let mut max_cell_w = 0.0f32;
@@ -322,6 +344,8 @@ impl VirtualDataGrid {
                 let width = self.column_widths.get(col_idx).copied().unwrap_or(MIN_COL_WIDTH);
                 let is_resizing = resizing_col == Some(col_idx);
                 let resizer = make_resizer(col_idx, width);
+                let badge_str = dbeaver_type_badge(col.data_type);
+                let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
 
                 header_row = header_row.child(
                     div()
@@ -339,23 +363,46 @@ impl VirtualDataGrid {
                                 .flex()
                                 .flex_1()
                                 .items_center()
-                                .gap_1_5()
+                                .justify_between()
                                 .h_full()
                                 .px_2()
                                 .overflow_hidden()
                                 .child(
                                     div()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_size(px(12.0))
+                                        .flex()
+                                        .items_center()
+                                        .gap_1_5()
                                         .truncate()
-                                        .child(col.name.clone())
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_size(px(10.0))
+                                                .text_color(rgb(0x58a6ff))
+                                                .child(badge_str)
+                                        )
+                                        .child(if is_pk {
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .child(img("icons/key.svg").w(px(11.0)).h(px(11.0)))
+                                                .into_any_element()
+                                        } else {
+                                            div().into_any_element()
+                                        })
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_size(px(12.0))
+                                                .text_color(theme.text_primary)
+                                                .truncate()
+                                                .child(col.name.clone())
+                                        )
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(9.0))
-                                        .text_color(theme.text_muted)
-                                        .whitespace_nowrap()
-                                        .child(col.data_type.display_name())
+                                        .text_size(px(8.5))
+                                        .text_color(rgb(0x58a6ff))
+                                        .child("▼")
                                 )
                         )
                         .child(resizer)
