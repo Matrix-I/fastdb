@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use mem_engine::{ColumnMeta, DataType, QueryResultPager};
 use mysql_async::prelude::*;
-use mysql_async::{Opts, OptsBuilder, Pool, Value};
+use mysql_async::{Opts, OptsBuilder, Params, Pool, Value};
 use parking_lot::Mutex;
 use platform_hal::socket::{detect_local_unix_socket, DbKind};
 
@@ -47,7 +47,7 @@ impl MySqlDriver {
         builder.into()
     }
 
-    async fn get_pool(&self) -> Result<Pool> {
+    fn get_pool(&self) -> Result<Pool> {
         let mut guard = self.pool.lock();
         if let Some(ref p) = *guard {
             return Ok(p.clone());
@@ -58,32 +58,36 @@ impl MySqlDriver {
         *guard = Some(pool.clone());
         Ok(pool)
     }
-}
 
-#[async_trait]
-impl DatabaseDriver for MySqlDriver {
-    async fn ping(&self) -> Result<()> {
-        let pool = self.get_pool().await?;
-        let mut conn = pool.get_conn().await?;
-        conn.query_drop("SELECT 1;").await?;
-        Ok(())
+    /// Runs a metadata query with bound parameters on the shared runtime
+    async fn query_rows<T, P>(&self, sql: String, params: P) -> Result<Vec<T>>
+    where
+        T: FromRow + Send + 'static,
+        P: Into<Params> + Send + 'static,
+    {
+        let pool = self.get_pool()?;
+        crate::run_on_shared_runtime(async move {
+            let mut conn = pool.get_conn().await?;
+            Ok(conn.exec(sql, params).await?)
+        })
+        .await
     }
 
-    async fn execute_streaming(
-        &self,
-        sql: &str,
-        pager: Arc<QueryResultPager>,
-        event_tx: flume::Sender<StreamEvent>,
-    ) -> Result<()> {
-        let start_time = Instant::now();
-        let pool = self.get_pool().await?;
+    /// Streams a query's rows into the pager; runs on the shared runtime via the caller
+    async fn stream_query(
+        pool: Pool,
+        sql: String,
+        pager: Option<Arc<QueryResultPager>>,
+        event_tx: Option<flume::Sender<StreamEvent>>,
+    ) -> Result<(Arc<QueryResultPager>, u64)> {
         let mut conn = pool.get_conn().await?;
-
         let mut query_result = match conn.query_iter(sql).await {
             Ok(qr) => qr,
             Err(e) => {
                 let msg = format!("MySQL query execution error: {e}");
-                let _ = event_tx.send(StreamEvent::Error(msg.clone()));
+                if let Some(ref tx) = event_tx {
+                    let _ = tx.send(StreamEvent::Error(msg.clone()));
+                }
                 bail!(msg);
             }
         };
@@ -99,53 +103,94 @@ impl DatabaseDriver for MySqlDriver {
             .unwrap_or_default();
 
         let num_cols = columns.len();
-        let _ = event_tx.send(StreamEvent::SchemaReady(columns));
+        let pager = match pager {
+            Some(p) => p,
+            None => Arc::new(QueryResultPager::new(columns.clone())?),
+        };
+        if let Some(ref tx) = event_tx {
+            let _ = tx.send(StreamEvent::SchemaReady(columns));
+        }
 
         let mut total_rows = 0u64;
         let mut last_event_instant = Instant::now();
         let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
 
-        let stream_opt = query_result.stream::<mysql_async::Row>().await?;
-        if let Some(mut stream) = stream_opt {
+        if let Some(mut stream) = query_result.stream::<mysql_async::Row>().await? {
             while let Some(row_res) = stream.next().await {
                 let row = match row_res {
                     Ok(r) => r,
                     Err(e) => {
                         let msg = format!("MySQL row stream error: {e}");
-                        let _ = event_tx.send(StreamEvent::Error(msg.clone()));
+                        if let Some(ref tx) = event_tx {
+                            let _ = tx.send(StreamEvent::Error(msg.clone()));
+                        }
                         bail!(msg);
                     }
                 };
 
-                for i in 0..num_cols {
-                    let val: Option<Value> = row.get(i);
-                    cell_buffers[i] = match val {
-                        None | Some(Value::NULL) => None,
-                        Some(Value::Bytes(b)) => Some(b),
-                        Some(Value::Int(n)) => Some(n.to_string().into_bytes()),
-                        Some(Value::UInt(u)) => Some(u.to_string().into_bytes()),
-                        Some(Value::Float(f)) => Some(f.to_string().into_bytes()),
-                        Some(Value::Double(d)) => Some(d.to_string().into_bytes()),
-                        Some(Value::Date(y, m, d, h, min, s, _)) => {
-                            Some(format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}").into_bytes())
-                        }
-                        Some(Value::Time(neg, d, h, min, s, _)) => {
-                            let sign = if neg { "-" } else { "" };
-                            Some(format!("{sign}{d}d {h:02}:{min:02}:{s:02}").into_bytes())
-                        }
-                    };
+                for (i, buf) in cell_buffers.iter_mut().enumerate() {
+                    *buf = mysql_value_to_bytes(row.get(i));
                 }
 
                 let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
                 let (rows, rollover) = pager.append_row(cell_slices)?;
                 total_rows = rows;
 
-                if rollover || last_event_instant.elapsed().as_millis() >= 16 {
-                    let _ = event_tx.send(StreamEvent::PageAppended { total_rows });
-                    last_event_instant = Instant::now();
+                if let Some(ref tx) = event_tx {
+                    if rollover || last_event_instant.elapsed().as_millis() >= 16 {
+                        let _ = tx.send(StreamEvent::PageAppended { total_rows });
+                        last_event_instant = Instant::now();
+                    }
                 }
             }
         }
+
+        Ok((pager, total_rows))
+    }
+}
+
+fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
+    match val {
+        None | Some(Value::NULL) => None,
+        Some(Value::Bytes(b)) => Some(b),
+        Some(Value::Int(n)) => Some(n.to_string().into_bytes()),
+        Some(Value::UInt(u)) => Some(u.to_string().into_bytes()),
+        Some(Value::Float(f)) => Some(f.to_string().into_bytes()),
+        Some(Value::Double(d)) => Some(d.to_string().into_bytes()),
+        Some(Value::Date(y, m, d, h, min, s, _)) => {
+            Some(format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}").into_bytes())
+        }
+        Some(Value::Time(neg, d, h, min, s, _)) => {
+            let sign = if neg { "-" } else { "" };
+            Some(format!("{sign}{d}d {h:02}:{min:02}:{s:02}").into_bytes())
+        }
+    }
+}
+
+#[async_trait]
+impl DatabaseDriver for MySqlDriver {
+    async fn ping(&self) -> Result<()> {
+        let pool = self.get_pool()?;
+        crate::run_on_shared_runtime(async move {
+            let mut conn = pool.get_conn().await?;
+            conn.query_drop("SELECT 1;").await?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn execute_streaming(
+        &self,
+        sql: &str,
+        pager: Arc<QueryResultPager>,
+        event_tx: flume::Sender<StreamEvent>,
+    ) -> Result<()> {
+        let start_time = Instant::now();
+        let pool = self.get_pool()?;
+        let sql = sql.to_string();
+        let tx = event_tx.clone();
+        let (_, total_rows) =
+            crate::run_on_shared_runtime(Self::stream_query(pool, sql, Some(pager), Some(tx))).await?;
 
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
         let _ = event_tx.send(StreamEvent::Completed {
@@ -158,56 +203,10 @@ impl DatabaseDriver for MySqlDriver {
 
     async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
         let start_time = Instant::now();
-        let pool = self.get_pool().await?;
-        let mut conn = pool.get_conn().await?;
-
-        let clean_sql = sql.trim().trim_end_matches(';');
-        let mut query_result = conn.query_iter(clean_sql).await
-            .map_err(|e| anyhow::anyhow!("MySQL query execution error: {e}"))?;
-
-        let columns: Vec<ColumnMeta> = query_result
-            .columns()
-            .as_ref()
-            .map(|cols| {
-                cols.iter()
-                    .map(|c| ColumnMeta::new(c.name_str().to_string(), DataType::Text))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let num_cols = columns.len();
-        let pager = Arc::new(QueryResultPager::new(columns)?);
-
-        let mut total_rows = 0u64;
-        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
-
-        let stream_opt = query_result.stream::<mysql_async::Row>().await?;
-        if let Some(mut stream) = stream_opt {
-            while let Some(row_res) = stream.next().await {
-                let row = row_res?;
-                for i in 0..num_cols {
-                    let val: Option<Value> = row.get(i);
-                    cell_buffers[i] = match val {
-                        None | Some(Value::NULL) => None,
-                        Some(Value::Bytes(b)) => Some(b),
-                        Some(Value::Int(n)) => Some(n.to_string().into_bytes()),
-                        Some(Value::UInt(u)) => Some(u.to_string().into_bytes()),
-                        Some(Value::Float(f)) => Some(f.to_string().into_bytes()),
-                        Some(Value::Double(d)) => Some(d.to_string().into_bytes()),
-                        Some(Value::Date(y, m, d, h, min, s, _)) => {
-                            Some(format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}").into_bytes())
-                        }
-                        Some(Value::Time(neg, d, h, min, s, _)) => {
-                            let sign = if neg { "-" } else { "" };
-                            Some(format!("{sign}{d}d {h:02}:{min:02}:{s:02}").into_bytes())
-                        }
-                    };
-                }
-                let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-                let (rows, _) = pager.append_row(cell_slices)?;
-                total_rows = rows;
-            }
-        }
+        let pool = self.get_pool()?;
+        let clean_sql = sql.trim().trim_end_matches(';').to_string();
+        let (pager, total_rows) =
+            crate::run_on_shared_runtime(Self::stream_query(pool, clean_sql, None, None)).await?;
 
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
         Ok((pager, total_rows, elapsed_ms))
@@ -219,8 +218,6 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn list_tables(&self) -> Result<Vec<TableSummary>> {
-        let pool = self.get_pool().await?;
-        let mut conn = pool.get_conn().await?;
         let sql = r#"
             SELECT table_schema, table_name, table_type, table_rows
             FROM information_schema.tables
@@ -228,7 +225,7 @@ impl DatabaseDriver for MySqlDriver {
             ORDER BY table_schema, table_name;
         "#;
 
-        let rows: Vec<(String, String, String, Option<u64>)> = conn.query(sql).await?;
+        let rows: Vec<(String, String, String, Option<u64>)> = self.query_rows(sql.to_string(), ()).await?;
         let tables = rows
             .into_iter()
             .map(|(schema, name, table_type, estimated_rows)| TableSummary {
@@ -243,13 +240,10 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
-        let pool = self.get_pool().await?;
-        let mut conn = pool.get_conn().await?;
-        let sql = format!(
-            "SELECT column_name, data_type, is_nullable, column_key FROM information_schema.columns WHERE table_schema = '{schema}' AND table_name = '{table}' ORDER BY ordinal_position;"
-        );
+        let sql = "SELECT column_name, data_type, is_nullable, column_key FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position;";
 
-        let rows: Vec<(String, String, String, String)> = conn.query(sql).await?;
+        let rows: Vec<(String, String, String, String)> =
+            self.query_rows(sql.to_string(), (schema.to_string(), table.to_string())).await?;
         let cols = rows
             .into_iter()
             .map(|(name, dtype, is_null, col_key)| {
@@ -273,8 +267,6 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn list_all_columns(&self) -> Result<Vec<(String, String, Vec<ColumnMeta>)>> {
-        let pool = self.get_pool().await?;
-        let mut conn = pool.get_conn().await?;
         let sql = r#"
             SELECT table_schema, table_name, column_name, data_type, is_nullable, column_key
             FROM information_schema.columns
@@ -282,7 +274,7 @@ impl DatabaseDriver for MySqlDriver {
             ORDER BY table_schema, table_name, ordinal_position;
         "#;
 
-        let rows: Vec<(String, String, String, String, String, String)> = conn.query(sql).await?;
+        let rows: Vec<(String, String, String, String, String, String)> = self.query_rows(sql.to_string(), ()).await?;
         let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> = std::collections::BTreeMap::new();
         for (schema, table, name, dtype, is_null, col_key) in rows {
             let data_type = match dtype.to_lowercase().as_str() {
@@ -305,28 +297,25 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
-        let pool = self.get_pool().await?;
-        let mut conn = pool.get_conn().await?;
         let sql = r#"
             SELECT table_schema, table_name, constraint_name, constraint_type
             FROM information_schema.table_constraints
             WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             ORDER BY table_schema, table_name, constraint_name;
         "#;
-        let rows: Vec<(String, String, String, String)> = conn.query(sql).await?;
+        let rows: Vec<(String, String, String, String)> = self.query_rows(sql.to_string(), ()).await?;
         Ok(rows)
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
-        let pool = self.get_pool().await?;
-        let mut conn = pool.get_conn().await?;
         let sql = r#"
             SELECT DISTINCT table_schema, table_name, index_name
             FROM information_schema.statistics
             WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             ORDER BY table_schema, table_name, index_name;
         "#;
-        let rows: Vec<(String, String, String)> = conn.query(sql).await?;
+        let rows: Vec<(String, String, String)> = self.query_rows(sql.to_string(), ()).await?;
         Ok(rows)
     }
 }
+

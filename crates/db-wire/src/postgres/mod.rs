@@ -37,24 +37,25 @@ impl PostgresDriver {
             }
         }
 
-        let client = Arc::new(self.connect_raw().await?);
+        // Connect on the shared runtime so the socket outlives the caller's runtime
+        let client = Arc::new(crate::run_on_shared_runtime(Self::connect_raw(self.config.clone())).await?);
         *self.cancel_token.lock() = Some(client.cancel_token());
         *guard = Some(Arc::clone(&client));
         Ok(client)
     }
 
-    async fn connect_raw(&self) -> Result<Client> {
+    async fn connect_raw(config: ConnectionConfig) -> Result<Client> {
         let mut pg_config = tokio_postgres::Config::new();
-        pg_config.user(&self.config.user);
-        if let Some(ref pw) = self.config.password {
+        pg_config.user(&config.user);
+        if let Some(ref pw) = config.password {
             pg_config.password(pw);
         }
-        pg_config.dbname(&self.config.database);
-        pg_config.connect_timeout(self.config.connect_timeout);
+        pg_config.dbname(&config.database);
+        pg_config.connect_timeout(config.connect_timeout);
 
         // Check for local Unix Domain Socket if enabled
-        let unix_socket = if self.config.use_unix_socket {
-            detect_local_unix_socket(DbKind::Postgres, &self.config.host, self.config.port)
+        let unix_socket = if config.use_unix_socket {
+            detect_local_unix_socket(DbKind::Postgres, &config.host, config.port)
         } else {
             None
         };
@@ -63,15 +64,15 @@ impl PostgresDriver {
             info!("Connecting to PostgreSQL via Unix Domain Socket: {}", socket_path.display());
             pg_config.host_path(socket_path);
         } else {
-            info!("Connecting to PostgreSQL via TCP {}:{}", self.config.host, self.config.port);
-            pg_config.host(&self.config.host);
-            pg_config.port(self.config.port);
+            info!("Connecting to PostgreSQL via TCP {}:{}", config.host, config.port);
+            pg_config.host(&config.host);
+            pg_config.port(config.port);
         }
 
         let (client, connection) = pg_config
             .connect(NoTls)
             .await
-            .with_context(|| format!("Failed to connect to PostgreSQL ({}:{})", self.config.host, self.config.port))?;
+            .with_context(|| format!("Failed to connect to PostgreSQL ({}:{})", config.host, config.port))?;
 
         crate::get_runtime().spawn(async move {
             if let Err(e) = connection.await {

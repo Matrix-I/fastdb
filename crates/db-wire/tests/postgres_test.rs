@@ -1,6 +1,7 @@
 //! Integration tests against a live PostgreSQL server.
 //! Set FASTDB_TEST_PG_PORT (and optionally FASTDB_TEST_PG_HOST / FASTDB_TEST_PG_USER) to run them.
 
+use std::sync::Arc;
 use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, PostgresDriver};
 
 fn test_config() -> Option<ConnectionConfig> {
@@ -75,4 +76,28 @@ fn test_postgres_binary_decoding_matches_server_text_output() {
     assert_eq!(cell_text(&pager, 0, 1).as_deref(), Some("12.50"));
     assert_eq!(cell_text(&pager, 0, 2).as_deref(), Some("192.168.1.10"));
     assert_eq!(cell_text(&pager, 0, 3).as_deref(), Some("::1"));
+}
+
+#[test]
+fn test_postgres_connection_survives_short_lived_caller_runtime() {
+    let Some(config) = test_config() else {
+        eprintln!("skipped: FASTDB_TEST_PG_PORT not set");
+        return;
+    };
+    let driver = Arc::new(PostgresDriver::new(config));
+
+    // Connect from a throwaway runtime, as the UI used to do
+    let temp_rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (pager, _, _) = temp_rt.block_on(driver.execute_query("SELECT pg_backend_pid()")).unwrap();
+    let first_pid = cell_text(&pager, 0, 0).unwrap();
+    drop(temp_rt);
+
+    // The same backend connection must still be usable from the shared runtime
+    let (pager, _, _) = db_wire::get_runtime()
+        .block_on(driver.execute_query("SELECT pg_backend_pid()"))
+        .unwrap();
+    assert_eq!(cell_text(&pager, 0, 0).unwrap(), first_pid, "connection was lost and silently reopened");
 }

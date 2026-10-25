@@ -555,13 +555,8 @@ impl Workspace {
 
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(r) => r,
-                    Err(e) => return Err(format!("Failed to create runtime: {}", e)),
-                };
+                // Drivers must live on the shared runtime: pools and sockets outlive this call
+                let rt = db_wire::get_runtime();
 
                 let timeout_duration = std::time::Duration::from_millis(10000);
                 let outcome = rt.block_on(async {
@@ -612,13 +607,8 @@ impl Workspace {
 
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(r) => r,
-                    Err(e) => return Err(format!("Failed to create runtime: {}", e)),
-                };
+                // Drivers must live on the shared runtime: pools and sockets outlive this call
+                let rt = db_wire::get_runtime();
 
                 let timeout_duration = std::time::Duration::from_millis(15000);
                 let outcome = rt.block_on(async {
