@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const TOP_BAR_HEIGHT: f32 = 38.0;
+
 impl Workspace {
     /// Window title bar with connection actions and toolbar
     pub(super) fn render_top_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -14,7 +16,7 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(38.0))
+            .h(px(TOP_BAR_HEIGHT))
             .bg(theme.bg_surface)
             .border_b_1()
             .border_color(theme.border)

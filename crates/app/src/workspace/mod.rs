@@ -20,6 +20,7 @@ mod keyboard;
 mod nav_context_menu;
 mod navigator;
 mod panel_resize;
+mod panes;
 mod properties_panel;
 mod query;
 mod status_bar;
@@ -33,6 +34,7 @@ mod widgets;
 
 pub use column_menu::ColumnMenu;
 pub use filter_suggest::FilterSuggest;
+pub use panes::Panes;
 pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
 pub use tab_context_menu::TabContextMenu;
@@ -172,6 +174,8 @@ pub struct Workspace {
     pub tab_context_menu: Option<TabContextMenu>,
     /// Dropdown of a result grid column header, if open
     pub column_menu: Option<ColumnMenu>,
+    /// Cached views of the window regions, created on the first render
+    pub panes: Option<Panes>,
 }
 
 impl Workspace {
@@ -301,6 +305,7 @@ impl Workspace {
             nav_context_menu: None,
             tab_context_menu: None,
             column_menu: None,
+            panes: None,
         };
 
         cx.spawn(async move |this, cx| {
@@ -322,6 +327,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &self.theme;
+        let panes = self.panes.get_or_insert_with(|| Panes::new(cx)).clone();
 
         if self.show_connection_modal {
             window.focus(&self.focus_handle);
@@ -384,7 +390,7 @@ impl Render for Workspace {
         }
 
         // 1. Top Bar / Tabs & Toolbar
-        root = root.child(self.render_top_bar(cx));
+        root = root.child(panes.top_bar());
 
         // 2. Main Body: Left Sidebar + Center Workspace
         root = root.child(
@@ -393,8 +399,8 @@ impl Render for Workspace {
                 .flex_1()
                 .w_full()
                 .overflow_hidden()
-                .child(self.render_navigator(cx))
-                .child(self.render_table_view(window, cx)),
+                .child(panes.navigator(self.navigator_width))
+                .child(panes.table_view()),
         );
 
         // 3. Bottom Status Bar

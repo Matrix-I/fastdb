@@ -784,11 +784,14 @@ impl VirtualDataGrid {
         // The header scrolls horizontally in one element and the rows vertically in another,
         // so each would take its own axis from a diagonal swipe. Intercept the wheel for the
         // whole grid instead and move along the dominant axis only.
+        // A scroll redraws only the view the grid is rendered in, not the whole window, so
+        // views around it that cache their frame are reused.
         let h_handle = self.horizontal_scroll_handle.clone();
         let v_handle = self.vertical_scroll_handle.clone();
         let wheel_router = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
+                let view = window.current_view();
                 window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                     if phase != DispatchPhase::Capture || !bounds.contains(&event.position) {
                         return;
@@ -806,7 +809,7 @@ impl VirtualDataGrid {
                         state.base_handle.set_offset(point(cur.x, px((f32::from(cur.y) + dy).clamp(-max_y, 0.0))));
                     }
                     cx.stop_propagation();
-                    window.refresh();
+                    cx.notify(view);
                 });
             },
         )
