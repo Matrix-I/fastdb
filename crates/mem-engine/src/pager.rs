@@ -20,8 +20,9 @@ pub struct QueryResultPager {
     cache: Mutex<LruCache<u32, Arc<SlottedPage>>>,
     /// Disk spiller for offloading cold pages
     spiller: Mutex<DiskSpiller>,
-    /// The current active page receiving incoming rows
-    active_page: Mutex<SlottedPage>,
+    /// The current active page receiving incoming rows. Readers share the Arc;
+    /// the writer copies on write only while a reader still holds a snapshot.
+    active_page: Mutex<Arc<SlottedPage>>,
     /// Global row start index for each page: page_id -> starting global row
     page_row_starts: RwLock<Vec<u64>>,
 }
@@ -31,7 +32,7 @@ impl QueryResultPager {
         let num_cols = columns.len() as u16;
         let spiller = DiskSpiller::new()?;
         let cap = NonZeroUsize::new(DEFAULT_MAX_RESIDENT_PAGES).unwrap();
-        let active_page = SlottedPage::with_capacity(0, num_cols);
+        let active_page = Arc::new(SlottedPage::with_capacity(0, num_cols));
 
         Ok(Self {
             columns,
@@ -73,24 +74,23 @@ impl QueryResultPager {
         let mut rollover = false;
 
         let row_slices: Vec<Option<&[u8]>> = cells_vec.iter().map(|c| c.as_ref().map(|b| b.as_ref())).collect();
-        if !active.try_append_row(row_slices.iter().copied()) {
+        if !Arc::make_mut(&mut *active).try_append_row(row_slices.iter().copied()) {
             // Active page is full. Seal it and start a new page.
             rollover = true;
             let current_id = active.page_id;
             let sealed_page = std::mem::replace(
                 &mut *active,
-                SlottedPage::with_capacity(current_id + 1, self.num_cols),
+                Arc::new(SlottedPage::with_capacity(current_id + 1, self.num_cols)),
             );
 
-            let sealed_arc = Arc::new(sealed_page);
-            self.insert_sealed_page(current_id, sealed_arc)?;
+            self.insert_sealed_page(current_id, sealed_page)?;
 
             // Register start of new page
             let current_total = self.total_rows.load(Ordering::Relaxed);
             self.page_row_starts.write().push(current_total);
 
             // Now append into the new active page
-            let ok = active.try_append_row(row_slices);
+            let ok = Arc::make_mut(&mut *active).try_append_row(row_slices);
             if !ok {
                 bail!("Row is larger than maximum page capacity (64KB)");
             }
@@ -124,7 +124,7 @@ impl QueryResultPager {
         {
             let active = self.active_page.lock();
             if active.page_id == page_id {
-                return Ok(Arc::new(active.clone()));
+                return Ok(Arc::clone(&active));
             }
         }
 
@@ -202,6 +202,25 @@ impl QueryResultPager {
 mod tests {
     use super::*;
     use crate::types::DataType;
+
+    #[test]
+    fn test_active_page_reads_share_one_allocation() {
+        let pager = QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int8)]).unwrap();
+        for i in 0..10u32 {
+            pager.append_row(vec![Some(i.to_string().into_bytes())]).unwrap();
+        }
+
+        // Repeated reads of the active page must not copy the 64KB page
+        let first = pager.get_page(0).unwrap();
+        let second = pager.get_page(0).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        // A reader's snapshot stays stable while the writer keeps appending (copy-on-write)
+        pager.append_row(vec![Some(b"10".to_vec())]).unwrap();
+        assert_eq!(first.row_count, 10);
+        assert_eq!(pager.get_page(0).unwrap().row_count, 11);
+        assert_eq!(pager.get_cell(10, 0).unwrap(), b"10");
+    }
 
     #[test]
     fn test_pager_spill_and_random_access() {
