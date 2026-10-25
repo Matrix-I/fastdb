@@ -13,6 +13,27 @@ pub struct SavedConnection {
     pub use_unix_socket: bool,
 }
 
+/// Navigator metadata of one connection
+pub(super) struct SchemaMetadata {
+    tables: Vec<TableSummary>,
+    columns: Vec<(String, String, Vec<ColumnMeta>)>,
+    constraints: Vec<(String, String, String, String)>,
+    indexes: Vec<(String, String, String)>,
+}
+
+/// Loads tables, then columns, constraints and indexes in batch; only a failed
+/// table listing is an error, the rest fall back to empty
+async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMetadata, String> {
+    let tables = driver.list_tables().await
+        .map_err(|e| format!("Connected but failed to list tables: {}", e))?;
+    Ok(SchemaMetadata {
+        tables,
+        columns: driver.list_all_columns().await.unwrap_or_default(),
+        constraints: driver.list_all_constraints().await.unwrap_or_default(),
+        indexes: driver.list_all_indexes().await.unwrap_or_default(),
+    })
+}
+
 impl Workspace {
     pub fn load_saved_connections_from_str(content: &str) -> (Vec<SavedConnection>, Option<String>) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
@@ -317,15 +338,9 @@ impl Workspace {
                         driver.ping().await
                             .map_err(|e| format!("Connection refused: {}", e))?;
 
-                        let tables = driver.list_tables().await
-                            .map_err(|e| format!("Connected but failed to list tables: {}", e))?;
+                        let metadata = fetch_schema_metadata(driver.as_ref()).await?;
 
-                        // Fast batch fetch all columns in 1 single query; fall back gracefully if schema discovery fails
-                        let columns_info = driver.list_all_columns().await.unwrap_or_default();
-                        let constraints_info = driver.list_all_constraints().await.unwrap_or_default();
-                        let indexes_info = driver.list_all_indexes().await.unwrap_or_default();
-
-                        Ok::<_, String>((driver, tables, columns_info, constraints_info, indexes_info, config))
+                        Ok::<_, String>((driver, metadata, config))
                     }).await
                 });
 
@@ -339,34 +354,8 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 this.is_connecting = false;
                 match result {
-                    Ok((driver, tables, columns_info, constraints_info, indexes_info, config)) => {
-                        let _ = this.schema_cache.clear();
-                        for t in &tables {
-                            let _ = this.schema_cache.add_table(&t.schema, &t.name, &t.table_type);
-                        }
-
-                        let mut col_map = HashMap::new();
-                        for (schema, table, cols) in columns_info {
-                            for c in &cols {
-                                let _ = this.schema_cache.add_column(&schema, &table, &c.name, c.data_type.display_name(), c.is_primary_key);
-                            }
-                            col_map.insert((schema, table), cols);
-                        }
-                        this.table_columns = col_map;
-
-                        let mut constr_map = HashMap::new();
-                        for (schema, table, cname, ctype) in constraints_info {
-                            constr_map.entry((schema, table)).or_insert_with(Vec::new).push((cname, ctype));
-                        }
-                        this.table_constraints = constr_map;
-
-                        let mut idx_map = HashMap::new();
-                        for (schema, table, iname) in indexes_info {
-                            idx_map.entry((schema, table)).or_insert_with(Vec::new).push(iname);
-                        }
-                        this.table_indexes = idx_map;
-
-                        this.tables = tables;
+                    Ok((driver, metadata, config)) => {
+                        this.apply_schema_metadata(metadata);
                         this.driver = Some(driver);
                         this.is_connected = true;
                         this.show_connection_modal = false;
@@ -484,6 +473,79 @@ impl Workspace {
             tab.execution_time_ms = None;
             tab.fetch.reset_result();
         }
+    }
+
+    /// Reloads the navigator metadata of the open connection without reconnecting
+    pub fn refresh_connection(&mut self, cx: &mut Context<Self>) {
+        if self.is_connecting {
+            return;
+        }
+        let Some(driver) = self.driver.clone() else {
+            return;
+        };
+        self.status_message = "Refreshing database metadata...".to_string();
+        cx.notify();
+
+        let fetch_driver = driver.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                let rt = db_wire::get_runtime();
+                let timeout_duration = std::time::Duration::from_millis(15000);
+                rt.block_on(async {
+                    tokio::time::timeout(timeout_duration, fetch_schema_metadata(fetch_driver.as_ref()))
+                        .await
+                        .unwrap_or_else(|_| Err("Refresh timed out".to_string()))
+                })
+            }).await;
+
+            let _ = this.update(cx, |this, cx| {
+                // Ignore a result that arrives after a disconnect or a switch to another connection
+                if !this.driver.as_ref().is_some_and(|d| Arc::ptr_eq(d, &driver)) {
+                    return;
+                }
+                match result {
+                    Ok(metadata) => {
+                        this.apply_schema_metadata(metadata);
+                        this.status_message = format!("🟢 Refreshed — {} tables found", this.tables.len());
+                    }
+                    Err(e) => {
+                        this.status_message = format!("❌ Refresh failed: {}", e);
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    /// Replaces the cached tables, columns, constraints and indexes of the open connection
+    fn apply_schema_metadata(&mut self, metadata: SchemaMetadata) {
+        let _ = self.schema_cache.clear();
+        for t in &metadata.tables {
+            let _ = self.schema_cache.add_table(&t.schema, &t.name, &t.table_type);
+        }
+
+        let mut col_map = HashMap::new();
+        for (schema, table, cols) in metadata.columns {
+            for c in &cols {
+                let _ = self.schema_cache.add_column(&schema, &table, &c.name, c.data_type.display_name(), c.is_primary_key);
+            }
+            col_map.insert((schema, table), cols);
+        }
+        self.table_columns = col_map;
+
+        let mut constr_map = HashMap::new();
+        for (schema, table, cname, ctype) in metadata.constraints {
+            constr_map.entry((schema, table)).or_insert_with(Vec::new).push((cname, ctype));
+        }
+        self.table_constraints = constr_map;
+
+        let mut idx_map = HashMap::new();
+        for (schema, table, iname) in metadata.indexes {
+            idx_map.entry((schema, table)).or_insert_with(Vec::new).push(iname);
+        }
+        self.table_indexes = idx_map;
+
+        self.tables = metadata.tables;
     }
 
     pub fn open_new_connection_dialog(&mut self) {

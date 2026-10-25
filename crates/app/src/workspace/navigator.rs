@@ -68,30 +68,6 @@ impl Workspace {
                                     )
                                     .child(img("icons/connect.svg").w(px(12.0)).h(px(12.0)))
                             )
-                            .child(if self.is_connected {
-                                div()
-                                    .id("btn-disconnect")
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.bg_surface)
-                                    .hover(|s| s.bg(theme.bg_surface_hover))
-                                    .text_size(px(10.0))
-                                    .text_color(theme.text_error)
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.disconnect();
-                                        cx.notify();
-                                    }))
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(img("icons/disconnect.svg").w(px(11.0)).h(px(11.0)))
-                                    .child("Disconnect")
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            })
                     )
             )
             // Tree View Container with vertical scroll
@@ -155,8 +131,7 @@ impl Workspace {
 
                         let conn_id_for_click = conn_id.clone();
                         let conn_id_for_chev = conn_id.clone();
-                        let conn_id_for_edit = conn_id.clone();
-                        let conn_id_for_del = conn_id.clone();
+                        let conn_id_for_menu = conn_id.clone();
 
                         nav_tree = nav_tree.child(
                             div()
@@ -175,6 +150,11 @@ impl Workspace {
                                     if event.click_count() >= 2 {
                                         this.toggle_or_connect(&conn_id_for_click, cx);
                                     }
+                                }))
+                                .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.open_nav_context_menu(&conn_id_for_menu, event.position);
+                                    cx.notify();
                                 }))
                                 .child(
                                     div()
@@ -219,41 +199,6 @@ impl Workspace {
                                             } else {
                                                 div()
                                             }
-                                        )
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .id(ElementId::Name(format!("btn-edit-{}", conn_id).into()))
-                                                .hover(|s| s.bg(theme.bg_surface).text_color(theme.text_accent))
-                                                .p_0p5()
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.edit_saved_connection(Some(&conn_id_for_edit));
-                                                    cx.notify();
-                                                }))
-                                                .child(img("icons/configuration.svg").w(px(13.0)).h(px(13.0)))
-                                        )
-                                        .child(
-                                            div()
-                                                .id(ElementId::Name(format!("btn-del-{}", conn_id).into()))
-                                                .hover(|s| s.bg(theme.bg_surface).text_color(theme.text_error))
-                                                .px_1()
-                                                .py_0p5()
-                                                .rounded_sm()
-                                                .text_size(px(11.0))
-                                                .text_color(theme.text_muted)
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.delete_saved_connection(&conn_id_for_del);
-                                                    cx.notify();
-                                                }))
-                                                .child("✕")
                                         )
                                 )
                         );

@@ -15,6 +15,7 @@ mod data_panel;
 mod ddl;
 mod diagram_panel;
 mod keyboard;
+mod nav_context_menu;
 mod navigator;
 mod panel_resize;
 mod properties_panel;
@@ -28,6 +29,7 @@ mod value_panel;
 mod widgets;
 
 pub use connections::SavedConnection;
+pub use nav_context_menu::NavContextMenu;
 pub use ddl::generate_table_ddl;
 pub use query::{group_thousands, TabState};
 #[cfg(test)]
@@ -148,6 +150,8 @@ pub struct Workspace {
     pub fetch_size_selected_all: bool,
     /// Caret of the fetch size box, as a char index (clamped; `usize::MAX` = end)
     pub fetch_size_cursor: usize,
+    /// Right-click menu of a navigator connection, if open
+    pub nav_context_menu: Option<NavContextMenu>,
 }
 
 impl Workspace {
@@ -273,6 +277,7 @@ impl Workspace {
             is_fetch_size_focused: false,
             fetch_size_selected_all: false,
             fetch_size_cursor: usize::MAX,
+            nav_context_menu: None,
         };
 
         cx.spawn(async move |this, cx| {
@@ -376,6 +381,10 @@ impl Render for Workspace {
 
         // 3. Bottom Status Bar
         root = root.child(self.render_status_bar());
+
+        if let Some(menu) = self.nav_context_menu.clone() {
+            root = root.child(self.render_nav_context_menu(menu, cx));
+        }
 
         // 4. Modal Dialog: Database Connection Setup
         if self.show_connection_modal {

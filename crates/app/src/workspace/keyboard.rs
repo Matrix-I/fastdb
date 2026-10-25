@@ -26,6 +26,14 @@ impl Workspace {
             return;
         }
 
+        if self.nav_context_menu.is_some() {
+            if event.keystroke.key == "escape" {
+                self.nav_context_menu = None;
+                cx.notify();
+            }
+            return;
+        }
+
         if self.show_connection_modal {
             if event.keystroke.key == "escape" {
                 self.show_connection_modal = false;
