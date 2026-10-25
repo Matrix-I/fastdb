@@ -2745,32 +2745,6 @@ impl Render for Workspace {
                                         }
                                     }
                                 }
-                                nav_tree = nav_tree.child(
-                                    div()
-                                        .id("btn-tree-new-connection")
-                                        .flex()
-                                        .items_center()
-                                        .gap_1p5()
-                                        .h(px(22.0))
-                                        .mt_1()
-                                        .pl_2()
-                                        .rounded_sm()
-                                        .text_size(px(11.0))
-                                        .text_color(theme.text_muted)
-                                        .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_accent))
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.open_new_connection_dialog();
-                                            cx.notify();
-                                        }))
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(theme.text_accent)
-                                                .child("+")
-                                        )
-                                        .child("New Connection...")
-                                );
                             }
                         }
 
