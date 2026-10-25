@@ -564,19 +564,57 @@ impl VirtualDataGrid {
 
         scroller = scroller.child(body);
 
+        // The header scrolls horizontally in one element and the rows vertically in another,
+        // so each would take its own axis from a diagonal swipe. Intercept the wheel for the
+        // whole grid instead and move along the dominant axis only.
+        let h_handle = self.horizontal_scroll_handle.clone();
+        let v_handle = self.vertical_scroll_handle.clone();
+        let wheel_router = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture || !bounds.contains(&event.position) {
+                        return;
+                    }
+                    let delta = event.delta.pixel_delta(window.line_height());
+                    let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+                    if dx.abs() > dy.abs() {
+                        let max_x = f32::from(h_handle.max_offset().width);
+                        let cur = h_handle.offset();
+                        h_handle.set_offset(point(px((f32::from(cur.x) + dx).clamp(-max_x, 0.0)), cur.y));
+                    } else if dy != 0.0 {
+                        let state = v_handle.0.borrow();
+                        let max_y = f32::from(state.base_handle.max_offset().height);
+                        let cur = state.base_handle.offset();
+                        state.base_handle.set_offset(point(cur.x, px((f32::from(cur.y) + dy).clamp(-max_y, 0.0))));
+                    }
+                    cx.stop_propagation();
+                    window.refresh();
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
         let mut main_area = div()
             .flex()
             .flex_row()
             .flex_1()
             .size_full()
+            .relative()
             .overflow_hidden()
-            .child(scroller);
+            .child(scroller)
+            .child(wheel_router);
 
         // Vertical scrollbar indicator when content exceeds viewport
         if has_vertical_overflow {
-            let scroll_y = -f32::from(self.vertical_scroll_handle.0.borrow().base_handle.offset().y).max(0.0);
+            let scroll_y = (-f32::from(self.vertical_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
             let max_scroll_y = (total_content_height - self.viewport_height).max(1.0);
-            let scroll_ratio = (scroll_y / max_scroll_y).clamp(0.0, 1.0);
+            let laid_out_max_y = f32::from(self.vertical_scroll_handle.0.borrow().base_handle.max_offset().height);
+            let ratio_max_y = if laid_out_max_y > 0.0 { laid_out_max_y } else { max_scroll_y };
+            let scroll_ratio = (scroll_y / ratio_max_y).clamp(0.0, 1.0);
 
             let scrollbar_w = 14.0f32;
             let btn_h = 16.0f32;
@@ -685,9 +723,11 @@ impl VirtualDataGrid {
 
         // 3. Horizontal Scrollbar indicator when content exceeds viewport
         if has_horizontal_overflow {
-            let scroll_x = -f32::from(self.horizontal_scroll_handle.offset().x).max(0.0);
+            let scroll_x = (-f32::from(self.horizontal_scroll_handle.offset().x)).max(0.0);
             let max_scroll_x = (content_total_width - self.viewport_width).max(1.0);
-            let scroll_ratio = (scroll_x / max_scroll_x).clamp(0.0, 1.0);
+            let laid_out_max_x = f32::from(self.horizontal_scroll_handle.max_offset().width);
+            let ratio_max_x = if laid_out_max_x > 0.0 { laid_out_max_x } else { max_scroll_x };
+            let scroll_ratio = (scroll_x / ratio_max_x).clamp(0.0, 1.0);
 
             let scrollbar_h = 14.0f32;
             let btn_w = 20.0f32;
