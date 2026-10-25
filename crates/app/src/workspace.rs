@@ -7,8 +7,28 @@ use ui_core::theme::Theme;
 use ui_editor::SqlEditorView;
 use ui_grid::VirtualDataGrid;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableSubTab {
+    Properties,
+    Data,
+    Diagram,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataViewMode {
+    Grid,
+    Text,
+}
+
 pub struct TabState {
     pub title: String,
+    pub schema_name: Option<String>,
+    pub table_name: Option<String>,
+    pub filter_sql: String,
+    pub active_subtab: TableSubTab,
+    pub view_mode: DataViewMode,
+    pub show_sql_dialog: bool,
+    pub limit: usize,
     pub editor: SqlEditorView,
     pub grid: VirtualDataGrid,
     pub execution_time_ms: Option<u64>,
@@ -16,6 +36,7 @@ pub struct TabState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormField {
+    Name,
     Host,
     Port,
     Database,
@@ -23,8 +44,10 @@ pub enum FormField {
     Password,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedConnection {
+    pub id: String,
+    pub name: String,
     pub driver: String,
     pub host: String,
     pub port: u16,
@@ -47,12 +70,14 @@ pub struct Workspace {
     pub status_message: String,
 
     // Real Database Connection Setup State
-    pub has_saved_connection: bool,
-    pub saved_connection: Option<SavedConnection>,
+    pub saved_connections: Vec<SavedConnection>,
+    pub active_connection_id: Option<String>,
+    pub editing_connection_id: Option<String>,
     pub is_connected: bool,
     pub is_connecting: bool,
     pub show_connection_modal: bool,
     pub selected_driver_kind: DbDriverKind,
+    pub form_name: String,
     pub form_host: String,
     pub form_port: String,
     pub form_database: String,
@@ -77,6 +102,82 @@ pub struct Workspace {
     pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
     pub table_indexes: HashMap<(String, String), Vec<String>>,
     pub resizing_column: Option<(usize, usize, f32, f32)>, // (tab_idx, col_idx, start_mouse_x, start_col_width)
+    pub is_filter_focused: bool,
+    pub show_right_panels: bool,
+    pub cursor_visible: bool,
+    pub field_selected_all: bool,
+    pub filter_selected_all: bool,
+}
+
+fn render_field_content(
+    value: &str,
+    placeholder: &str,
+    is_active: bool,
+    is_selected_all: bool,
+    cursor_visible: bool,
+    theme: &Theme,
+) -> Div {
+    let mut row = div().flex().items_center().h(px(18.0)).w_full().overflow_hidden();
+
+    if value.is_empty() {
+        if is_active {
+            row = row
+                .child(
+                    div()
+                        .w(px(1.5))
+                        .h(px(14.0))
+                        .rounded_xs()
+                        .bg(if cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                )
+                .child(
+                    div()
+                        .pl_1()
+                        .text_color(theme.text_muted)
+                        .child(placeholder.to_string())
+                );
+        } else {
+            row = row.child(
+                div()
+                    .text_color(theme.text_muted)
+                    .child(placeholder.to_string())
+            );
+        }
+    } else {
+        if is_active && is_selected_all {
+            row = row.child(
+                div()
+                    .px_1()
+                    .py_0p5()
+                    .rounded_xs()
+                    .bg(rgb(0x264f78))
+                    .text_color(rgb(0xffffff))
+                    .child(value.to_string())
+            );
+        } else if is_active {
+            row = row
+                .child(
+                    div()
+                        .text_color(theme.text_primary)
+                        .child(value.to_string())
+                )
+                .child(
+                    div()
+                        .pl(px(1.0))
+                        .w(px(1.5))
+                        .h(px(14.0))
+                        .rounded_xs()
+                        .bg(if cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                );
+        } else {
+            row = row.child(
+                div()
+                    .text_color(theme.text_primary)
+                    .child(value.to_string())
+            );
+        }
+    }
+
+    row
 }
 
 fn dbeaver_driver_icon(driver: &str, is_connected: bool) -> Div {
@@ -122,73 +223,78 @@ impl Workspace {
         let focus_handle = cx.focus_handle();
         let schema_cache = Arc::new(SchemaCache::new().expect("Failed to initialize SchemaCache"));
 
-        let initial_sql = "-- Welcome to FastDB — Pure Rust Database Client\n-- Connect to a real database (PostgreSQL, MySQL, SQLite) to start querying.\n";
-        let initial_editor = SqlEditorView::new(initial_sql, theme.clone(), Some(schema_cache.clone()));
-        let initial_grid = VirtualDataGrid::new(None, theme.clone());
-
-        let initial_tab = TabState {
-            title: "Query 1".to_string(),
-            editor: initial_editor,
-            grid: initial_grid,
-            execution_time_ms: None,
+        let (saved_connections, active_connection_id) = Self::load_saved_connections();
+        let initial_active_conn = if let Some(ref id) = active_connection_id {
+            saved_connections.iter().find(|c| &c.id == id).cloned()
+        } else {
+            saved_connections.first().cloned()
         };
 
-        let mut saved_connection: Option<SavedConnection> = None;
+        let status_message = if saved_connections.is_empty() {
+            "⚪ Disconnected — Click ➕ to connect to a database.".to_string()
+        } else if let Some(ref saved) = initial_active_conn {
+            format!("⚪ Saved connection: {} — Click in navigator to connect.", saved.name)
+        } else {
+            format!("⚪ {} saved connection(s) — Click in navigator to connect.", saved_connections.len())
+        };
 
-        if let Ok(content) = std::fs::read_to_string(".fastdb_config.json") {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-                let h = v["host"].as_str().unwrap_or("localhost").to_string();
-                let p = v["port"].as_str().and_then(|s| s.parse::<u16>().ok()).unwrap_or(5432);
-                let d = v["database"].as_str().unwrap_or("").to_string();
-                let u = v["user"].as_str().unwrap_or("postgres").to_string();
-                let pw = v["password"].as_str().map(|s| s.to_string());
-                let sock = v["use_unix_socket"].as_bool().unwrap_or(false);
-                let drv_str = v["driver"].as_str().unwrap_or("Postgres").to_string();
-                let has = v["has_saved_connection"].as_bool().unwrap_or(!d.is_empty());
-                if has && !d.is_empty() {
-                    saved_connection = Some(SavedConnection {
-                        driver: drv_str,
-                        host: h,
-                        port: p,
-                        database: d,
-                        user: u,
-                        password: pw,
-                        use_unix_socket: sock,
-                    });
-                }
-            }
-        }
-        let has_saved_connection = saved_connection.is_some();
+        let (form_name, form_driver, form_host, form_port, form_database, form_user, form_password, form_sock) =
+            if let Some(ref saved) = initial_active_conn {
+                let drv = match saved.driver.as_str() {
+                    "MySql" => DbDriverKind::MySql,
+                    "Sqlite" => DbDriverKind::Sqlite,
+                    _ => DbDriverKind::Postgres,
+                };
+                (
+                    saved.name.clone(),
+                    drv,
+                    saved.host.clone(),
+                    saved.port.to_string(),
+                    saved.database.clone(),
+                    saved.user.clone(),
+                    saved.password.clone().unwrap_or_default(),
+                    saved.use_unix_socket,
+                )
+            } else {
+                (
+                    "".to_string(),
+                    DbDriverKind::Postgres,
+                    "localhost".to_string(),
+                    "5432".to_string(),
+                    "".to_string(),
+                    "postgres".to_string(),
+                    "".to_string(),
+                    false,
+                )
+            };
 
-        Self {
+        let workspace = Self {
             theme,
             focus_handle,
             active_tab: 0,
-            tabs: vec![initial_tab],
+            tabs: Vec::new(),
             driver: None,
             schema_cache,
             tables: Vec::new(),
             is_running_query: false,
-            status_message: if let Some(ref saved) = saved_connection {
-                format!("⚪ Saved connection: {} — Click dropdown in navigator to connect.", saved.database)
-            } else {
-                "⚪ Disconnected — Click ➕ to connect to a database.".to_string()
-            },
+            status_message,
 
-            // Connection Setup Form Defaults - Start completely clean to prevent data leakage
-            has_saved_connection,
-            saved_connection,
+            // Connection Setup Form Defaults
+            saved_connections,
+            active_connection_id,
+            editing_connection_id: None,
             is_connected: false,
             is_connecting: false,
             show_connection_modal: false,
-            selected_driver_kind: DbDriverKind::Postgres,
-            form_host: "localhost".to_string(),
-            form_port: "5432".to_string(),
-            form_database: "".to_string(),
-            form_user: "postgres".to_string(),
-            form_password: "".to_string(),
-            form_use_unix_socket: false,
-            active_field: Some(FormField::Host),
+            selected_driver_kind: form_driver,
+            form_name,
+            form_host,
+            form_port,
+            form_database,
+            form_user,
+            form_password,
+            form_use_unix_socket: form_sock,
+            active_field: Some(FormField::Name),
             show_password: false,
             test_result: None,
 
@@ -214,6 +320,179 @@ impl Workspace {
             table_constraints: HashMap::new(),
             table_indexes: HashMap::new(),
             resizing_column: None,
+            is_filter_focused: false,
+            show_right_panels: false,
+            cursor_visible: true,
+            field_selected_all: false,
+            filter_selected_all: false,
+        };
+
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(530)).await;
+                if this.update(cx, |this, cx| {
+                    this.cursor_visible = !this.cursor_visible;
+                    cx.notify();
+                }).is_err() {
+                    break;
+                }
+            }
+        }).detach();
+
+        workspace
+    }
+
+    pub fn load_saved_connections_from_str(content: &str) -> (Vec<SavedConnection>, Option<String>) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
+            return (Vec::new(), None);
+        };
+
+        let mut connections = Vec::new();
+
+        if let Some(arr) = v["connections"].as_array() {
+            for (idx, item) in arr.iter().enumerate() {
+                let id = item["id"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("conn_{}", idx + 1));
+                let d = item["database"].as_str().unwrap_or("").to_string();
+                let drv_str = item["driver"].as_str().unwrap_or("Postgres").to_string();
+                let default_name = if drv_str == "Sqlite" {
+                    std::path::Path::new(&d)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&d)
+                        .to_string()
+                } else if !d.is_empty() {
+                    format!("{}-local", d)
+                } else {
+                    format!("{}-conn", drv_str)
+                };
+                let name = item["name"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(&default_name)
+                    .to_string();
+                let h = item["host"].as_str().unwrap_or("localhost").to_string();
+                let p = if let Some(n) = item["port"].as_u64() {
+                    n as u16
+                } else if let Some(s) = item["port"].as_str() {
+                    s.parse::<u16>().unwrap_or(5432)
+                } else {
+                    5432
+                };
+                let u = item["user"].as_str().unwrap_or("postgres").to_string();
+                let pw = item["password"].as_str().map(|s| s.to_string());
+                let sock = item["use_unix_socket"].as_bool().unwrap_or(false);
+
+                if !d.is_empty() || drv_str == "Sqlite" {
+                    connections.push(SavedConnection {
+                        id,
+                        name,
+                        driver: drv_str,
+                        host: h,
+                        port: p,
+                        database: d,
+                        user: u,
+                        password: pw,
+                        use_unix_socket: sock,
+                    });
+                }
+            }
+        } else {
+            // Legacy single connection format migration
+            let d = v["database"].as_str().unwrap_or("").to_string();
+            let has = v["has_saved_connection"].as_bool().unwrap_or(!d.is_empty());
+            if has && !d.is_empty() {
+                let drv_str = v["driver"].as_str().unwrap_or("Postgres").to_string();
+                let h = v["host"].as_str().unwrap_or("localhost").to_string();
+                let p = if let Some(n) = v["port"].as_u64() {
+                    n as u16
+                } else if let Some(s) = v["port"].as_str() {
+                    s.parse::<u16>().unwrap_or(5432)
+                } else {
+                    5432
+                };
+                let u = v["user"].as_str().unwrap_or("postgres").to_string();
+                let pw = v["password"].as_str().map(|s| s.to_string());
+                let sock = v["use_unix_socket"].as_bool().unwrap_or(false);
+                let name = if drv_str == "Sqlite" {
+                    std::path::Path::new(&d)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&d)
+                        .to_string()
+                } else {
+                    format!("{}-local", d)
+                };
+
+                connections.push(SavedConnection {
+                    id: "conn_1".to_string(),
+                    name,
+                    driver: drv_str,
+                    host: h,
+                    port: p,
+                    database: d,
+                    user: u,
+                    password: pw,
+                    use_unix_socket: sock,
+                });
+            }
+        }
+
+        let active_id = v["active_connection_id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .or_else(|| connections.first().map(|c| c.id.clone()));
+
+        (connections, active_id)
+    }
+
+    pub fn load_saved_connections() -> (Vec<SavedConnection>, Option<String>) {
+        if let Ok(content) = std::fs::read_to_string(".fastdb_config.json") {
+            Self::load_saved_connections_from_str(&content)
+        } else {
+            (Vec::new(), None)
+        }
+    }
+
+    pub fn serialize_connections_config(connections: &[SavedConnection], active_id: Option<&str>) -> String {
+        let connections_json: Vec<serde_json::Value> = connections
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "driver": c.driver,
+                    "host": c.host,
+                    "port": c.port.to_string(),
+                    "database": c.database,
+                    "user": c.user,
+                    "password": c.password.clone().unwrap_or_default(),
+                    "use_unix_socket": c.use_unix_socket,
+                })
+            })
+            .collect();
+
+        let save_data = serde_json::json!({
+            "has_saved_connection": !connections.is_empty(),
+            "active_connection_id": active_id,
+            "connections": connections_json,
+        });
+
+        serde_json::to_string_pretty(&save_data).unwrap_or_else(|_| save_data.to_string())
+    }
+
+    pub fn save_config(&self) {
+        let content = Self::serialize_connections_config(&self.saved_connections, self.active_connection_id.as_deref());
+        let _ = std::fs::write(".fastdb_config.json", content);
+    }
+
+    pub fn active_saved_connection(&self) -> Option<&SavedConnection> {
+        if let Some(ref id) = self.active_connection_id {
+            self.saved_connections.iter().find(|c| &c.id == id)
+        } else {
+            self.saved_connections.first()
         }
     }
 
@@ -309,7 +588,6 @@ impl Workspace {
         cx.notify();
 
         let config = self.build_current_config();
-        let selected_driver_kind = self.selected_driver_kind;
 
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
@@ -385,7 +663,32 @@ impl Workspace {
                         this.show_connection_modal = false;
                         this.test_result = None;
 
+                        let conn_id = this.editing_connection_id.clone().unwrap_or_else(|| {
+                            format!("conn_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0))
+                        });
+
+                        let conn_name = if !this.form_name.trim().is_empty() {
+                            this.form_name.trim().to_string()
+                        } else {
+                            match config.driver {
+                                DbDriverKind::Sqlite => {
+                                    std::path::Path::new(&config.database)
+                                        .file_name()
+                                        .and_then(|f| f.to_str())
+                                        .unwrap_or(&config.database)
+                                        .to_string()
+                                }
+                                _ => if !config.database.is_empty() {
+                                    format!("{}-local", config.database)
+                                } else {
+                                    format!("{:?}-conn", config.driver)
+                                },
+                            }
+                        };
+
                         let saved = SavedConnection {
+                            id: conn_id.clone(),
+                            name: conn_name.clone(),
                             driver: match config.driver {
                                 DbDriverKind::Postgres => "Postgres".to_string(),
                                 DbDriverKind::MySql => "MySql".to_string(),
@@ -399,19 +702,22 @@ impl Workspace {
                             use_unix_socket: config.use_unix_socket,
                         };
 
-                        let save_data = serde_json::json!({
-                            "has_saved_connection": true,
-                            "driver": saved.driver,
-                            "host": saved.host,
-                            "port": saved.port.to_string(),
-                            "database": saved.database,
-                            "user": saved.user,
-                            "password": saved.password.clone().unwrap_or_default(),
-                            "use_unix_socket": saved.use_unix_socket,
-                        });
-                        let _ = std::fs::write(".fastdb_config.json", save_data.to_string());
-                        this.saved_connection = Some(saved);
-                        this.has_saved_connection = true;
+                        if let Some(pos) = this.saved_connections.iter().position(|c| c.id == conn_id) {
+                            this.saved_connections[pos] = saved.clone();
+                        } else {
+                            this.saved_connections.push(saved.clone());
+                        }
+                        this.active_connection_id = Some(conn_id.clone());
+                        this.editing_connection_id = Some(conn_id);
+                        this.save_config();
+
+                        this.nav_connection_expanded = true;
+                        this.nav_databases_expanded = true;
+                        this.nav_database_expanded = true;
+                        this.nav_schemas_expanded = true;
+                        this.nav_table_expanded.clear();
+                        this.nav_subfolder_expanded.clear();
+                        this.selected_table_name = None;
 
                         for t in &this.tables {
                             this.nav_schema_expanded.insert(t.schema.clone());
@@ -419,33 +725,24 @@ impl Workspace {
                         }
 
                         let db_label = format!("{:?} ({}:{})", config.driver, config.host, config.port);
-                        this.status_message = format!("🟢 Connected to real database: {} — {} tables found", db_label, this.tables.len());
+                        this.status_message = format!("🟢 Connected to: {} ({}) — {} tables found", conn_name, db_label, this.tables.len());
 
-                        let starter_sql = if let Some(first_table) = this.tables.first() {
-                            this.selected_table_name = Some(first_table.name.clone());
-                            let t_key = format!("{}.{}", first_table.schema, first_table.name);
-                            this.nav_table_expanded.insert(t_key.clone());
-                            this.nav_subfolder_expanded.insert(format!("{}.columns", t_key));
-                            match selected_driver_kind {
-                                DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", first_table.schema, first_table.name),
-                                DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", first_table.schema, first_table.name),
-                                DbDriverKind::Sqlite => format!("SELECT * FROM \"{}\" LIMIT 100;", first_table.name),
-                            }
-                        } else if selected_driver_kind == DbDriverKind::Sqlite {
-                            "-- Connected to real SQLite database.\n-- You can create tables and run queries:\nCREATE TABLE IF NOT EXISTS notes (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    title TEXT NOT NULL,\n    content TEXT,\n    created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n);\nINSERT INTO notes (title, content) VALUES ('Welcome', 'Connected to real SQLite database via FastDB pure Rust engine');\nSELECT * FROM notes;".to_string()
-                        } else {
-                            "SELECT 1;".to_string()
-                        };
+                        for tab in &mut this.tabs {
+                            tab.editor.schema_cache = Some(this.schema_cache.clone());
+                        }
 
                         if !this.tabs.is_empty() {
                             let tab = &mut this.tabs[this.active_tab];
-                            tab.editor = SqlEditorView::new(&starter_sql, this.theme.clone(), Some(this.schema_cache.clone()));
-                            tab.editor.buffer.set_cursor_offset(0);
+                            let current_text = tab.editor.buffer.text();
+                            if current_text.trim().is_empty() || current_text.starts_with("-- Welcome to FastDB") {
+                                let welcome_conn = format!(
+                                    "-- Connected to {}.\n-- Select a table from the navigator or write a query to execute.\n",
+                                    conn_name
+                                );
+                                tab.editor = SqlEditorView::new(&welcome_conn, this.theme.clone(), Some(this.schema_cache.clone()));
+                                tab.editor.buffer.set_cursor_offset(0);
+                            }
                             tab.grid = VirtualDataGrid::new(None, this.theme.clone());
-                        }
-
-                        if !this.tables.is_empty() {
-                            this.run_active_query(cx);
                         }
                     }
                     Err(e) => {
@@ -467,6 +764,8 @@ impl Workspace {
         self.table_columns.clear();
         self.table_constraints.clear();
         self.table_indexes.clear();
+        self.nav_table_expanded.clear();
+        self.nav_subfolder_expanded.clear();
         self.nav_connection_expanded = false;
         self.status_message = "⚪ Disconnected from database — Click connection in navigator to reconnect.".to_string();
         if !self.tabs.is_empty() {
@@ -477,6 +776,8 @@ impl Workspace {
     }
 
     pub fn open_new_connection_dialog(&mut self) {
+        self.editing_connection_id = None;
+        self.form_name = "".to_string();
         self.selected_driver_kind = DbDriverKind::Postgres;
         self.form_host = "localhost".to_string();
         self.form_port = "5432".to_string();
@@ -484,27 +785,41 @@ impl Workspace {
         self.form_user = "postgres".to_string();
         self.form_password = "".to_string();
         self.form_use_unix_socket = false;
-        self.active_field = Some(FormField::Host);
+        self.active_field = Some(FormField::Name);
+        self.field_selected_all = false;
+        self.cursor_visible = true;
         self.show_password = false;
         self.test_result = None;
         self.show_connection_modal = true;
     }
 
-    pub fn edit_saved_connection(&mut self) {
-        if let Some(ref saved) = self.saved_connection {
+    pub fn edit_saved_connection(&mut self, conn_id: Option<&str>) {
+        let target_conn = if let Some(id) = conn_id {
+            self.saved_connections.iter().find(|c| c.id == id).cloned()
+        } else if let Some(ref id) = self.active_connection_id {
+            self.saved_connections.iter().find(|c| &c.id == id).cloned()
+        } else {
+            self.saved_connections.first().cloned()
+        };
+
+        if let Some(saved) = target_conn {
             self.selected_driver_kind = match saved.driver.as_str() {
                 "MySql" => DbDriverKind::MySql,
                 "Sqlite" => DbDriverKind::Sqlite,
                 _ => DbDriverKind::Postgres,
             };
+            self.form_name = saved.name.clone();
             self.form_host = saved.host.clone();
             self.form_port = saved.port.to_string();
             self.form_database = saved.database.clone();
             self.form_user = saved.user.clone();
             self.form_password = saved.password.clone().unwrap_or_default();
             self.form_use_unix_socket = saved.use_unix_socket;
+            self.editing_connection_id = Some(saved.id.clone());
             self.test_result = None;
-            self.active_field = Some(FormField::Password);
+            self.active_field = Some(FormField::Database);
+            self.field_selected_all = false;
+            self.cursor_visible = true;
             self.show_password = false;
             self.show_connection_modal = true;
         } else {
@@ -512,12 +827,11 @@ impl Workspace {
         }
     }
 
-    pub fn connect_saved(&mut self, cx: &mut Context<Self>) {
+    pub fn connect_saved_by_id(&mut self, conn_id: &str, cx: &mut Context<Self>) {
         if self.is_connecting {
             return;
         }
-        let Some(ref saved) = self.saved_connection else {
-            self.open_new_connection_dialog();
+        let Some(saved) = self.saved_connections.iter().find(|c| c.id == conn_id).cloned() else {
             return;
         };
 
@@ -526,14 +840,92 @@ impl Workspace {
             "Sqlite" => DbDriverKind::Sqlite,
             _ => DbDriverKind::Postgres,
         };
+        self.form_name = saved.name.clone();
         self.form_host = saved.host.clone();
         self.form_port = saved.port.to_string();
         self.form_database = saved.database.clone();
         self.form_user = saved.user.clone();
         self.form_password = saved.password.clone().unwrap_or_default();
         self.form_use_unix_socket = saved.use_unix_socket;
+        self.editing_connection_id = Some(saved.id.clone());
+        self.active_connection_id = Some(saved.id.clone());
         self.nav_connection_expanded = true;
         self.connect_to_database(cx);
+    }
+
+    pub fn connect_saved(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref id) = self.active_connection_id.clone() {
+            self.connect_saved_by_id(id, cx);
+        } else if let Some(first) = self.saved_connections.first().map(|c| c.id.clone()) {
+            self.connect_saved_by_id(&first, cx);
+        } else {
+            self.open_new_connection_dialog();
+        }
+    }
+
+    pub fn delete_saved_connection(&mut self, conn_id: &str) {
+        self.saved_connections.retain(|c| c.id != conn_id);
+        if self.active_connection_id.as_deref() == Some(conn_id) {
+            if self.is_connected {
+                self.disconnect();
+            }
+            self.active_connection_id = self.saved_connections.first().map(|c| c.id.clone());
+        }
+        self.save_config();
+        self.status_message = "Removed connection from list.".to_string();
+    }
+
+    pub fn save_connection_form(&mut self) {
+        let conn_id = self.editing_connection_id.clone().unwrap_or_else(|| {
+            format!("conn_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0))
+        });
+
+        let config = self.build_current_config();
+
+        let conn_name = if !self.form_name.trim().is_empty() {
+            self.form_name.trim().to_string()
+        } else {
+            match config.driver {
+                DbDriverKind::Sqlite => {
+                    std::path::Path::new(&config.database)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&config.database)
+                        .to_string()
+                }
+                _ => if !config.database.is_empty() {
+                    format!("{}-local", config.database)
+                } else {
+                    format!("{:?}-conn", config.driver)
+                },
+            }
+        };
+
+        let saved = SavedConnection {
+            id: conn_id.clone(),
+            name: conn_name,
+            driver: match config.driver {
+                DbDriverKind::Postgres => "Postgres".to_string(),
+                DbDriverKind::MySql => "MySql".to_string(),
+                DbDriverKind::Sqlite => "Sqlite".to_string(),
+            },
+            host: config.host.clone(),
+            port: config.port,
+            database: config.database.clone(),
+            user: config.user.clone(),
+            password: config.password.clone(),
+            use_unix_socket: config.use_unix_socket,
+        };
+
+        if let Some(pos) = self.saved_connections.iter().position(|c| c.id == conn_id) {
+            self.saved_connections[pos] = saved;
+        } else {
+            self.saved_connections.push(saved);
+        }
+        self.active_connection_id = Some(conn_id);
+        self.save_config();
+        self.show_connection_modal = false;
+        self.status_message = "✓ Saved connection to list.".to_string();
     }
 
     pub fn select_preset_postgres(&mut self) {
@@ -572,25 +964,94 @@ impl Workspace {
         self.test_result = None;
     }
 
-    pub fn query_table(&mut self, schema: &str, table: &str, cx: &mut Context<Self>) {
-        self.selected_table_name = Some(table.to_string());
-        let t_key = format!("{}.{}", schema, table);
-        if !self.nav_table_expanded.contains(&t_key) {
-            self.nav_table_expanded.insert(t_key.clone());
-            self.nav_subfolder_expanded.insert(format!("{}.columns", t_key));
-        }
-        let sql = match self.selected_driver_kind {
-            DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", schema, table),
-            DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", schema, table),
-            DbDriverKind::Sqlite => format!("SELECT * FROM \"{}\" LIMIT 100;", table),
+    pub fn build_query_for_tab(&self, tab_idx: usize) -> String {
+        let tab = match self.tabs.get(tab_idx) {
+            Some(t) => t,
+            None => return "SELECT 1;".to_string(),
         };
 
-        if !self.tabs.is_empty() {
-            let tab = &mut self.tabs[self.active_tab];
-            tab.editor = SqlEditorView::new(&sql, self.theme.clone(), Some(self.schema_cache.clone()));
-            tab.editor.buffer.set_cursor_offset(0);
+        let schema = tab.schema_name.as_deref().unwrap_or("public");
+        let table = match tab.table_name.as_deref() {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                if !tab.title.is_empty() && !tab.title.starts_with("Query ") {
+                    &tab.title
+                } else {
+                    let full_text = tab.editor.buffer.text();
+                    let non_comments: Vec<&str> = full_text
+                        .lines()
+                        .filter(|l| !l.trim().starts_with("--") && !l.trim().trim_matches(';').trim().is_empty())
+                        .collect();
+                    if !non_comments.is_empty() {
+                        return non_comments.join("\n");
+                    }
+                    return "SELECT 1;".to_string();
+                }
+            }
+        };
+
+        let target = match self.selected_driver_kind {
+            DbDriverKind::Postgres => format!("\"{}\".\"{}\"", schema, table),
+            DbDriverKind::MySql => format!("`{}`.`{}`", schema, table),
+            DbDriverKind::Sqlite => format!("\"{}\"", table),
+        };
+
+        let filter = tab.filter_sql.trim();
+        let limit = tab.limit;
+
+        if filter.is_empty() {
+            format!("SELECT * FROM {} LIMIT {};", target, limit)
+        } else {
+            let f_upper = filter.to_uppercase();
+            let has_limit = f_upper.contains("LIMIT");
+            let limit_suffix = if has_limit {
+                "".to_string()
+            } else {
+                format!(" LIMIT {}", limit)
+            };
+
+            if f_upper.starts_with("WHERE")
+                || f_upper.starts_with("ORDER BY")
+                || f_upper.starts_with("GROUP BY")
+                || f_upper.starts_with("HAVING")
+                || f_upper.starts_with("LIMIT")
+            {
+                format!("SELECT * FROM {} {}{};", target, filter, limit_suffix)
+            } else {
+                format!("SELECT * FROM {} WHERE {}{};", target, filter, limit_suffix)
+            }
+        }
+    }
+
+    pub fn query_table(&mut self, schema: &str, table: &str, cx: &mut Context<Self>) {
+        self.selected_table_name = Some(table.to_string());
+
+        let existing_tab_idx = self.tabs.iter().position(|t| {
+            t.table_name.as_deref() == Some(table) && t.schema_name.as_deref() == Some(schema)
+        });
+
+        if let Some(idx) = existing_tab_idx {
+            self.active_tab = idx;
+        } else {
+            let mut grid = VirtualDataGrid::new(None, self.theme.clone());
+            grid.set_table_name(table);
+            self.tabs.push(TabState {
+                title: table.to_string(),
+                schema_name: Some(schema.to_string()),
+                table_name: Some(table.to_string()),
+                filter_sql: String::new(),
+                active_subtab: TableSubTab::Data,
+                view_mode: DataViewMode::Grid,
+                show_sql_dialog: false,
+                limit: 200,
+                editor: SqlEditorView::new("SELECT 1;", self.theme.clone(), Some(self.schema_cache.clone())),
+                grid,
+                execution_time_ms: None,
+            });
+            self.active_tab = self.tabs.len() - 1;
         }
 
+        self.is_filter_focused = false;
         self.run_active_query(cx);
     }
 
@@ -606,19 +1067,7 @@ impl Workspace {
             return;
         }
 
-        let tab = &mut self.tabs[self.active_tab];
-        let mut sql = tab.editor.active_statement();
-        let is_empty_or_semicolon = sql.trim().trim_matches(';').trim().is_empty();
-        if is_empty_or_semicolon || sql.trim().starts_with("--") {
-            let full_text = tab.editor.buffer.text();
-            let non_comments: Vec<&str> = full_text
-                .lines()
-                .filter(|l| !l.trim().starts_with("--") && !l.trim().trim_matches(';').trim().is_empty())
-                .collect();
-            if !non_comments.is_empty() {
-                sql = non_comments.join("\n");
-            }
-        }
+        let sql = self.build_query_for_tab(self.active_tab);
 
         if sql.trim().trim_matches(';').trim().is_empty() {
             self.status_message = "No SQL statement to execute.".to_string();
@@ -651,7 +1100,9 @@ impl Workspace {
                             let tab = &mut this.tabs[active_tab_idx];
                             tab.execution_time_ms = Some(elapsed_ms);
                             tab.grid.set_pager(pager);
-                            tab.grid.set_table_name("result");
+                            if let Some(ref t_name) = tab.table_name {
+                                tab.grid.set_table_name(t_name.clone());
+                            }
                         }
                     }
                     Err(e) => {
@@ -663,6 +1114,7 @@ impl Workspace {
         }).detach();
     }
 
+    #[allow(dead_code)]
     pub fn new_tab(&mut self) {
         let count = self.tabs.len() + 1;
         let title = format!("Query {}", count);
@@ -675,21 +1127,31 @@ impl Workspace {
 
         self.tabs.push(TabState {
             title,
+            schema_name: None,
+            table_name: None,
+            filter_sql: String::new(),
+            active_subtab: TableSubTab::Data,
+            view_mode: DataViewMode::Grid,
+            show_sql_dialog: false,
+            limit: 200,
             editor,
             grid,
             execution_time_ms: None,
         });
         self.active_tab = self.tabs.len() - 1;
+        self.is_filter_focused = false;
     }
 
-    #[allow(dead_code)]
     pub fn close_tab(&mut self, index: usize) {
-        if self.tabs.len() <= 1 {
-            return;
-        }
-        self.tabs.remove(index);
-        if self.active_tab >= self.tabs.len() {
-            self.active_tab = self.tabs.len() - 1;
+        if index < self.tabs.len() {
+            self.tabs.remove(index);
+            if self.tabs.is_empty() {
+                self.active_tab = 0;
+                self.is_filter_focused = false;
+            } else if self.active_tab >= self.tabs.len() {
+                self.active_tab = self.tabs.len() - 1;
+                self.is_filter_focused = false;
+            }
         }
     }
 }
@@ -716,9 +1178,32 @@ impl Render for Workspace {
             .text_color(theme.text_primary)
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                // Intercept Cmd+Q (macOS) / Ctrl+Q (Linux/Windows) unconditionally to close the app
+                if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                    && event.keystroke.key.eq_ignore_ascii_case("q")
+                {
+                    cx.quit();
+                    return;
+                }
+
+                // Intercept Cmd+W (macOS) / Ctrl+W (Linux/Windows) to close active tab
+                if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                    && event.keystroke.key.eq_ignore_ascii_case("w")
+                {
+                    if this.show_connection_modal {
+                        this.show_connection_modal = false;
+                        this.field_selected_all = false;
+                    } else if !this.tabs.is_empty() {
+                        this.close_tab(this.active_tab);
+                    }
+                    cx.notify();
+                    return;
+                }
+
                 if this.show_connection_modal {
                     if event.keystroke.key == "escape" {
                         this.show_connection_modal = false;
+                        this.field_selected_all = false;
                         cx.notify();
                         return;
                     }
@@ -727,16 +1212,72 @@ impl Render for Workspace {
                         return;
                     }
                     if event.keystroke.key == "tab" {
-                        this.active_field = match this.active_field {
-                            None => Some(FormField::Host),
-                            Some(FormField::Host) => Some(FormField::Port),
-                            Some(FormField::Port) => Some(FormField::Database),
-                            Some(FormField::Database) => Some(FormField::User),
-                            Some(FormField::User) => Some(FormField::Password),
-                            Some(FormField::Password) => Some(FormField::Host),
+                        this.field_selected_all = false;
+                        this.cursor_visible = true;
+                        this.active_field = match (this.selected_driver_kind, this.active_field) {
+                            (DbDriverKind::Sqlite, None) => Some(FormField::Name),
+                            (DbDriverKind::Sqlite, Some(FormField::Name)) => Some(FormField::Database),
+                            (DbDriverKind::Sqlite, Some(FormField::Database)) => Some(FormField::Name),
+                            (DbDriverKind::Sqlite, _) => Some(FormField::Database),
+                            (_, None) => Some(FormField::Name),
+                            (_, Some(FormField::Name)) => Some(FormField::Host),
+                            (_, Some(FormField::Host)) => Some(FormField::Port),
+                            (_, Some(FormField::Port)) => Some(FormField::Database),
+                            (_, Some(FormField::Database)) => Some(FormField::User),
+                            (_, Some(FormField::User)) => Some(FormField::Password),
+                            (_, Some(FormField::Password)) => Some(FormField::Name),
                         };
                         cx.notify();
                         return;
+                    }
+                    // Select All (Cmd+A / Ctrl+A)
+                    if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                        && event.keystroke.key.eq_ignore_ascii_case("a")
+                    {
+                        if this.active_field.is_some() {
+                            this.field_selected_all = true;
+                            this.cursor_visible = true;
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    // Copy (Cmd+C / Ctrl+C)
+                    if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                        && event.keystroke.key.eq_ignore_ascii_case("c")
+                    {
+                        if let Some(field) = this.active_field {
+                            let text = match field {
+                                FormField::Name => &this.form_name,
+                                FormField::Host => &this.form_host,
+                                FormField::Port => &this.form_port,
+                                FormField::Database => &this.form_database,
+                                FormField::User => &this.form_user,
+                                FormField::Password => &this.form_password,
+                            };
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                            return;
+                        }
+                    }
+                    // Cut (Cmd+X / Ctrl+X)
+                    if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                        && event.keystroke.key.eq_ignore_ascii_case("x")
+                    {
+                        if let Some(field) = this.active_field {
+                            let target = match field {
+                                FormField::Name => &mut this.form_name,
+                                FormField::Host => &mut this.form_host,
+                                FormField::Port => &mut this.form_port,
+                                FormField::Database => &mut this.form_database,
+                                FormField::User => &mut this.form_user,
+                                FormField::Password => &mut this.form_password,
+                            };
+                            cx.write_to_clipboard(ClipboardItem::new_string(target.clone()));
+                            target.clear();
+                            this.field_selected_all = false;
+                            this.cursor_visible = true;
+                            cx.notify();
+                            return;
+                        }
                     }
                     // Clipboard paste (Cmd+V on macOS or Ctrl+V on Linux/Windows)
                     if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
@@ -746,46 +1287,76 @@ impl Render for Workspace {
                             if let Some(pasted) = item.text() {
                                 let clean = pasted.trim_matches(|c| c == '\r' || c == '\n');
                                 if let Some(field) = this.active_field {
-                                    match field {
-                                        FormField::Host => this.form_host.push_str(clean),
-                                        FormField::Port => {
-                                            let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
-                                            this.form_port.push_str(&digits);
-                                        }
-                                        FormField::Database => this.form_database.push_str(clean),
-                                        FormField::User => this.form_user.push_str(clean),
-                                        FormField::Password => this.form_password.push_str(clean),
+                                    let target = match field {
+                                        FormField::Name => &mut this.form_name,
+                                        FormField::Host => &mut this.form_host,
+                                        FormField::Port => &mut this.form_port,
+                                        FormField::Database => &mut this.form_database,
+                                        FormField::User => &mut this.form_user,
+                                        FormField::Password => &mut this.form_password,
+                                    };
+                                    if this.field_selected_all {
+                                        target.clear();
+                                        this.field_selected_all = false;
                                     }
+                                    if field == FormField::Port {
+                                        let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
+                                        target.push_str(&digits);
+                                    } else {
+                                        target.push_str(clean);
+                                    }
+                                    this.cursor_visible = true;
                                     cx.notify();
                                 }
                             }
                         }
                         return;
                     }
+                    // Cancel selection on Left / Right / Up / Down arrow navigation
+                    if event.keystroke.key == "left" || event.keystroke.key == "right" || event.keystroke.key == "up" || event.keystroke.key == "down" {
+                        if this.field_selected_all {
+                            this.field_selected_all = false;
+                            this.cursor_visible = true;
+                            cx.notify();
+                            return;
+                        }
+                    }
                     // Cmd+Backspace = clear entire field
                     if event.keystroke.modifiers.platform && event.keystroke.key == "backspace" {
                         if let Some(field) = this.active_field {
-                            match field {
-                                FormField::Host => this.form_host.clear(),
-                                FormField::Port => this.form_port.clear(),
-                                FormField::Database => this.form_database.clear(),
-                                FormField::User => this.form_user.clear(),
-                                FormField::Password => this.form_password.clear(),
-                            }
+                            let target = match field {
+                                FormField::Name => &mut this.form_name,
+                                FormField::Host => &mut this.form_host,
+                                FormField::Port => &mut this.form_port,
+                                FormField::Database => &mut this.form_database,
+                                FormField::User => &mut this.form_user,
+                                FormField::Password => &mut this.form_password,
+                            };
+                            target.clear();
+                            this.field_selected_all = false;
+                            this.cursor_visible = true;
                             cx.notify();
                         }
                         return;
                     }
-                    // Backspace = delete single character
-                    if event.keystroke.key == "backspace" {
+                    // Backspace or Delete
+                    if event.keystroke.key == "backspace" || event.keystroke.key == "delete" {
                         if let Some(field) = this.active_field {
-                            match field {
-                                FormField::Host => { this.form_host.pop(); }
-                                FormField::Port => { this.form_port.pop(); }
-                                FormField::Database => { this.form_database.pop(); }
-                                FormField::User => { this.form_user.pop(); }
-                                FormField::Password => { this.form_password.pop(); }
+                            let target = match field {
+                                FormField::Name => &mut this.form_name,
+                                FormField::Host => &mut this.form_host,
+                                FormField::Port => &mut this.form_port,
+                                FormField::Database => &mut this.form_database,
+                                FormField::User => &mut this.form_user,
+                                FormField::Password => &mut this.form_password,
+                            };
+                            if this.field_selected_all {
+                                target.clear();
+                                this.field_selected_all = false;
+                            } else {
+                                target.pop();
                             }
+                            this.cursor_visible = true;
                             cx.notify();
                         }
                         return;
@@ -806,17 +1377,26 @@ impl Render for Workspace {
                     if let Some(char_str) = input_char {
                         if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
                             if let Some(field) = this.active_field {
-                                match field {
-                                    FormField::Host => this.form_host.push_str(char_str),
-                                    FormField::Port => {
-                                        if char_str.chars().all(|c| c.is_ascii_digit()) {
-                                            this.form_port.push_str(char_str);
-                                        }
-                                    }
-                                    FormField::Database => this.form_database.push_str(char_str),
-                                    FormField::User => this.form_user.push_str(char_str),
-                                    FormField::Password => this.form_password.push_str(char_str),
+                                let target = match field {
+                                    FormField::Name => &mut this.form_name,
+                                    FormField::Host => &mut this.form_host,
+                                    FormField::Port => &mut this.form_port,
+                                    FormField::Database => &mut this.form_database,
+                                    FormField::User => &mut this.form_user,
+                                    FormField::Password => &mut this.form_password,
+                                };
+                                if this.field_selected_all {
+                                    target.clear();
+                                    this.field_selected_all = false;
                                 }
+                                if field == FormField::Port {
+                                    if char_str.chars().all(|c| c.is_ascii_digit()) {
+                                        target.push_str(char_str);
+                                    }
+                                } else {
+                                    target.push_str(char_str);
+                                }
+                                this.cursor_visible = true;
                                 cx.notify();
                             }
                         }
@@ -827,41 +1407,136 @@ impl Render for Workspace {
                     this.run_active_query(cx);
                 } else if !this.tabs.is_empty() {
                     let tab = &mut this.tabs[this.active_tab];
-                    if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                        && event.keystroke.key.eq_ignore_ascii_case("v")
-                    {
-                        if let Some(item) = cx.read_from_clipboard() {
-                            if let Some(pasted) = item.text() {
-                                tab.editor.insert_text(&pasted);
+                    if this.is_filter_focused {
+                        if event.keystroke.key == "escape" {
+                            this.is_filter_focused = false;
+                            this.filter_selected_all = false;
+                            cx.notify();
+                        } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
+                            this.run_active_query(cx);
+                        } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                            && event.keystroke.key.eq_ignore_ascii_case("a")
+                        {
+                            this.filter_selected_all = true;
+                            this.cursor_visible = true;
+                            cx.notify();
+                        } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                            && event.keystroke.key.eq_ignore_ascii_case("c")
+                        {
+                            cx.write_to_clipboard(ClipboardItem::new_string(tab.filter_sql.clone()));
+                        } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                            && event.keystroke.key.eq_ignore_ascii_case("x")
+                        {
+                            cx.write_to_clipboard(ClipboardItem::new_string(tab.filter_sql.clone()));
+                            tab.filter_sql.clear();
+                            this.filter_selected_all = false;
+                            this.cursor_visible = true;
+                            cx.notify();
+                        } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                            && event.keystroke.key.eq_ignore_ascii_case("v")
+                        {
+                            if let Some(item) = cx.read_from_clipboard() {
+                                if let Some(pasted) = item.text() {
+                                    let clean = pasted.trim_matches(|c| c == '\r' || c == '\n');
+                                    if this.filter_selected_all {
+                                        tab.filter_sql.clear();
+                                        this.filter_selected_all = false;
+                                    }
+                                    tab.filter_sql.push_str(clean);
+                                    this.cursor_visible = true;
+                                    cx.notify();
+                                }
+                            }
+                        } else if event.keystroke.modifiers.platform && event.keystroke.key == "backspace" {
+                            tab.filter_sql.clear();
+                            this.filter_selected_all = false;
+                            this.cursor_visible = true;
+                            cx.notify();
+                        } else if event.keystroke.key == "backspace" || event.keystroke.key == "delete" {
+                            if this.filter_selected_all {
+                                tab.filter_sql.clear();
+                                this.filter_selected_all = false;
+                            } else {
+                                tab.filter_sql.pop();
+                            }
+                            this.cursor_visible = true;
+                            cx.notify();
+                        } else if event.keystroke.key == "left" || event.keystroke.key == "right" {
+                            if this.filter_selected_all {
+                                this.filter_selected_all = false;
+                                this.cursor_visible = true;
                                 cx.notify();
                             }
-                        }
-                    } else if event.keystroke.key == "backspace" {
-                        tab.editor.backspace();
-                        cx.notify();
-                    } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
-                        tab.editor.insert_text("\n");
-                        cx.notify();
-                    } else if event.keystroke.key == "space" {
-                        tab.editor.insert_text(" ");
-                        cx.notify();
-                    } else {
-                        let input_char = if let Some(ref kc) = event.keystroke.key_char {
-                            if kc.chars().count() == 1 {
-                                Some(kc.as_str())
+                        } else if event.keystroke.key == "space" {
+                            if this.filter_selected_all {
+                                tab.filter_sql.clear();
+                                this.filter_selected_all = false;
+                            }
+                            tab.filter_sql.push(' ');
+                            this.cursor_visible = true;
+                            cx.notify();
+                        } else {
+                            let input_char = if let Some(ref kc) = event.keystroke.key_char {
+                                if kc.chars().count() == 1 {
+                                    Some(kc.as_str())
+                                } else {
+                                    None
+                                }
+                            } else if event.keystroke.key.chars().count() == 1 {
+                                Some(event.keystroke.key.as_str())
                             } else {
                                 None
-                            }
-                        } else if event.keystroke.key.chars().count() == 1 {
-                            Some(event.keystroke.key.as_str())
-                        } else {
-                            None
-                        };
+                            };
 
-                        if let Some(char_str) = input_char {
-                            if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
-                                tab.editor.insert_text(char_str);
-                                cx.notify();
+                            if let Some(char_str) = input_char {
+                                if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
+                                    if this.filter_selected_all {
+                                        tab.filter_sql.clear();
+                                        this.filter_selected_all = false;
+                                    }
+                                    tab.filter_sql.push_str(char_str);
+                                    this.cursor_visible = true;
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    } else if tab.table_name.is_none() {
+                        if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                            && event.keystroke.key.eq_ignore_ascii_case("v")
+                        {
+                            if let Some(item) = cx.read_from_clipboard() {
+                                if let Some(pasted) = item.text() {
+                                    tab.editor.insert_text(&pasted);
+                                    cx.notify();
+                                }
+                            }
+                        } else if event.keystroke.key == "backspace" {
+                            tab.editor.backspace();
+                            cx.notify();
+                        } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
+                            tab.editor.insert_text("\n");
+                            cx.notify();
+                        } else if event.keystroke.key == "space" {
+                            tab.editor.insert_text(" ");
+                            cx.notify();
+                        } else {
+                            let input_char = if let Some(ref kc) = event.keystroke.key_char {
+                                if kc.chars().count() == 1 {
+                                    Some(kc.as_str())
+                                } else {
+                                    None
+                                }
+                            } else if event.keystroke.key.chars().count() == 1 {
+                                Some(event.keystroke.key.as_str())
+                            } else {
+                                None
+                            };
+
+                            if let Some(char_str) = input_char {
+                                if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
+                                    tab.editor.insert_text(char_str);
+                                    cx.notify();
+                                }
                             }
                         }
                     }
@@ -938,44 +1613,55 @@ impl Render for Workspace {
                             for (i, tab) in self.tabs.iter().enumerate() {
                                 let is_active = i == active_tab_idx;
                                 let bg = if is_active { theme.bg_surface_selected } else { theme.bg_surface };
+                                let border_color = if is_active { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() };
                                 let tab_id = format!("tab-select-{}", i);
+                                let close_id = format!("tab-close-{}", i);
+
                                 tabs_bar = tabs_bar.child(
                                     div()
                                         .id(ElementId::Name(tab_id.into()))
                                         .flex()
                                         .items_center()
-                                        .gap_1p5()
+                                        .gap_2()
                                         .px_3()
                                         .py_1()
                                         .rounded_t_md()
                                         .bg(bg)
+                                        .border_t_2()
+                                        .border_color(border_color)
                                         .text_size(px(12.0))
+                                        .text_color(if is_active { theme.text_primary } else { theme.text_secondary })
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.active_tab = i;
+                                            this.is_filter_focused = false;
                                             cx.notify();
                                         }))
-                                        .child(img("icons/sql_script.svg").w(px(13.0)).h(px(13.0)))
+                                        .child(img("icons/table.svg").w(px(13.0)).h(px(13.0)))
                                         .child(tab.title.clone())
+                                        .child(
+                                            div()
+                                                .id(ElementId::Name(close_id.into()))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .w(px(16.0))
+                                                .h(px(16.0))
+                                                .rounded_xs()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.text_muted)
+                                                .hover(|s| s.text_color(rgb(0xff7b72)).bg(theme.bg_surface_hover))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.close_tab(i);
+                                                    cx.notify();
+                                                }))
+                                                .child("✕")
+                                        )
                                 );
                             }
-                            tabs_bar.child(
-                                div()
-                                    .id("btn-new-tab")
-                                    .flex()
-                                    .items_center()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.text_muted)
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.new_tab();
-                                        cx.notify();
-                                    }))
-                                    .child("+ Tab")
-                            )
+                            tabs_bar
                         })
                 )
                 // Top Right Connection Status Badge
@@ -998,12 +1684,18 @@ impl Render for Workspace {
                                 .text_size(px(11.0))
                                 .cursor_pointer()
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.show_connection_modal = true;
+                                    if !this.is_connected && !this.saved_connections.is_empty() {
+                                        this.connect_saved(cx);
+                                    } else if let Some(active_id) = this.active_connection_id.clone() {
+                                        this.edit_saved_connection(Some(&active_id));
+                                    } else {
+                                        this.open_new_connection_dialog();
+                                    }
                                     cx.notify();
                                 }))
                                 .child(
                                     if self.is_connected {
-                                        let drv = self.saved_connection.as_ref().map(|s| s.driver.as_str()).unwrap_or(match self.selected_driver_kind {
+                                        let drv = self.active_saved_connection().map(|s| s.driver.as_str()).unwrap_or(match self.selected_driver_kind {
                                             DbDriverKind::Postgres => "Postgres",
                                             DbDriverKind::MySql => "MySql",
                                             DbDriverKind::Sqlite => "Sqlite",
@@ -1014,7 +1706,10 @@ impl Render for Workspace {
                                     }
                                 )
                                 .child(if self.is_connected {
-                                    format!("{} ({})", self.form_database, self.form_user)
+                                    let name = self.active_saved_connection().map(|s| s.name.as_str()).unwrap_or(&self.form_database);
+                                    format!("{} ({})", name, self.form_user)
+                                } else if let Some(first) = self.saved_connections.first() {
+                                    format!("Connect: {}", first.name)
                                 } else {
                                     "Connect DB".to_string()
                                 })
@@ -1071,6 +1766,9 @@ impl Render for Workspace {
                                         .child(
                                             div()
                                                 .id("btn-open-connect-dialog")
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
                                                 .px_1p5()
                                                 .py_0p5()
                                                 .rounded_sm()
@@ -1081,7 +1779,14 @@ impl Render for Workspace {
                                                     this.open_new_connection_dialog();
                                                     cx.notify();
                                                 }))
-                                                .child(img("icons/connect.svg").w(px(13.0)).h(px(13.0)))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(13.0))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(theme.text_accent)
+                                                        .child("+")
+                                                )
+                                                .child(img("icons/connect.svg").w(px(12.0)).h(px(12.0)))
                                         )
                                         .child(if self.is_connected {
                                             div()
@@ -1119,7 +1824,7 @@ impl Render for Workspace {
                                 .overflow_y_scroll()
                                 .gap_0p5();
 
-                            if !self.is_connected && !self.has_saved_connection {
+                            if self.saved_connections.is_empty() && !self.is_connected {
                                 nav_tree = nav_tree.child(
                                     div()
                                         .p_4()
@@ -1130,7 +1835,7 @@ impl Render for Workspace {
                                         .gap_2()
                                         .text_size(px(11.0))
                                         .text_color(theme.text_muted)
-                                        .child("No database connected")
+                                        .child("No database connections")
                                         .child(
                                             div()
                                                 .id("btn-sidebar-connect-prompt")
@@ -1149,118 +1854,130 @@ impl Render for Workspace {
                                                 .items_center()
                                                 .gap_1p5()
                                                 .child(img("icons/connect.svg").w(px(14.0)).h(px(14.0)))
-                                                .child("Connect to Database")
+                                                .child("Add Connection")
                                         )
                                 );
                             } else {
-                                // Level 0: Connection Node
-                                let is_conn_exp = self.nav_connection_expanded;
-                                let is_connected = self.is_connected;
-                                let is_connecting = self.is_connecting;
+                                for conn in &self.saved_connections {
+                                    let conn_id = conn.id.clone();
+                                    let is_this_active = self.active_connection_id.as_deref() == Some(&conn_id);
+                                    let is_this_connected = self.is_connected && is_this_active;
+                                    let is_this_connecting = self.is_connecting && is_this_active;
+                                    let is_conn_exp = self.nav_connection_expanded && is_this_connected;
 
-                                let (drv_name, conn_name, conn_addr) = if let Some(ref saved) = self.saved_connection {
-                                    let name = format!("{}-local", saved.database);
-                                    let addr = if saved.driver == "Sqlite" {
-                                        saved.database.clone()
+                                    let drv_name = conn.driver.clone();
+                                    let conn_name = conn.name.clone();
+                                    let conn_addr = if conn.driver == "Sqlite" {
+                                        conn.database.clone()
                                     } else {
-                                        format!("{}:{}", saved.host, saved.port)
+                                        format!("{}:{}", conn.host, conn.port)
                                     };
-                                    (saved.driver.clone(), name, addr)
-                                } else {
-                                    let drv = match self.selected_driver_kind {
-                                        DbDriverKind::Postgres => "Postgres",
-                                        DbDriverKind::MySql => "MySql",
-                                        DbDriverKind::Sqlite => "Sqlite",
-                                    }.to_string();
-                                    let name = format!("{}-local", self.form_database);
-                                    let addr = if self.selected_driver_kind == DbDriverKind::Sqlite {
-                                        self.form_database.clone()
-                                    } else {
-                                        format!("{}:{}", self.form_host, self.form_port)
-                                    };
-                                    (drv, name, addr)
-                                };
 
-                                nav_tree = nav_tree.child(
-                                    div()
-                                        .id("nav-connection-node")
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .h(px(24.0))
-                                        .pl_1()
-                                        .pr_2()
-                                        .rounded_sm()
-                                        .hover(|s| s.bg(theme.bg_surface_hover))
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            if !this.is_connected {
-                                                if !this.is_connecting {
-                                                    this.connect_saved(cx);
+                                    let conn_id_for_click = conn_id.clone();
+                                    let conn_id_for_edit = conn_id.clone();
+                                    let conn_id_for_del = conn_id.clone();
+
+                                    nav_tree = nav_tree.child(
+                                        div()
+                                            .id(ElementId::Name(format!("nav-conn-{}", conn_id).into()))
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .h(px(24.0))
+                                            .pl_1()
+                                            .pr_2()
+                                            .rounded_sm()
+                                            .bg(if is_this_connected { theme.bg_surface_selected } else { rgba(0x00000000) })
+                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if is_this_connected {
+                                                    this.nav_connection_expanded = !this.nav_connection_expanded;
+                                                } else if !this.is_connecting {
+                                                    this.connect_saved_by_id(&conn_id_for_click, cx);
                                                 }
-                                            } else {
-                                                this.nav_connection_expanded = !this.nav_connection_expanded;
-                                            }
-                                            cx.notify();
-                                        }))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1p5()
-                                                .text_size(px(12.0))
-                                                .child(
-                                                    div()
-                                                        .w(px(12.0))
-                                                        .text_size(px(10.0))
-                                                        .text_color(if is_connecting { theme.text_warning } else { theme.text_muted })
-                                                        .child(if is_connecting { "⏳" } else if is_conn_exp && is_connected { "▾" } else { "▸" })
-                                                )
-                                                .child(dbeaver_driver_icon(&drv_name, is_connected))
-                                                .child(
-                                                    div()
-                                                        .font_weight(FontWeight::BOLD)
-                                                        .text_color(theme.text_primary)
-                                                        .child(conn_name)
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(10.5))
-                                                        .text_color(theme.text_muted)
-                                                        .child(format!(" {}", conn_addr))
-                                                )
-                                                .child(
-                                                    if is_connecting {
+                                                cx.notify();
+                                            }))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .text_size(px(12.0))
+                                                    .child(
                                                         div()
+                                                            .w(px(12.0))
                                                             .text_size(px(10.0))
-                                                            .text_color(theme.text_warning)
-                                                            .child("(Connecting...)")
-                                                    } else if !is_connected {
+                                                            .text_color(if is_this_connecting { theme.text_warning } else { theme.text_muted })
+                                                            .child(if is_this_connecting { "⏳" } else if is_conn_exp { "▾" } else { "▸" })
+                                                    )
+                                                    .child(dbeaver_driver_icon(&drv_name, is_this_connected))
+                                                    .child(
                                                         div()
-                                                            .text_size(px(10.0))
+                                                            .font_weight(if is_this_connected { FontWeight::BOLD } else { FontWeight::NORMAL })
+                                                            .text_color(if is_this_connected { theme.text_accent } else { theme.text_primary })
+                                                            .child(conn_name)
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(10.5))
                                                             .text_color(theme.text_muted)
-                                                            .child("(Click to connect)")
-                                                    } else {
+                                                            .child(format!(" {}", conn_addr))
+                                                    )
+                                                    .child(
+                                                        if is_this_connecting {
+                                                            div()
+                                                                .text_size(px(10.0))
+                                                                .text_color(theme.text_warning)
+                                                                .child("(Connecting...)")
+                                                        } else if !is_this_connected {
+                                                            div()
+                                                                .text_size(px(10.0))
+                                                                .text_color(theme.text_muted)
+                                                                .child("(Click to connect)")
+                                                        } else {
+                                                            div()
+                                                        }
+                                                    )
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .child(
                                                         div()
-                                                    }
-                                                )
-                                        )
-                                        .child(
-                                            div()
-                                                .id("btn-edit-saved-conn")
-                                                .hover(|s| s.bg(theme.bg_surface).text_color(theme.text_accent))
-                                                .p_0p5()
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.edit_saved_connection();
-                                                    cx.notify();
-                                                }))
-                                                .child(img("icons/configuration.svg").w(px(13.0)).h(px(13.0)))
-                                        )
-                                );
+                                                            .id(ElementId::Name(format!("btn-edit-{}", conn_id).into()))
+                                                            .hover(|s| s.bg(theme.bg_surface).text_color(theme.text_accent))
+                                                            .p_0p5()
+                                                            .rounded_sm()
+                                                            .cursor_pointer()
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.edit_saved_connection(Some(&conn_id_for_edit));
+                                                                cx.notify();
+                                                            }))
+                                                            .child(img("icons/configuration.svg").w(px(13.0)).h(px(13.0)))
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id(ElementId::Name(format!("btn-del-{}", conn_id).into()))
+                                                            .hover(|s| s.bg(theme.bg_surface).text_color(theme.text_error))
+                                                            .px_1()
+                                                            .py_0p5()
+                                                            .rounded_sm()
+                                                            .text_size(px(11.0))
+                                                            .text_color(theme.text_muted)
+                                                            .cursor_pointer()
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.delete_saved_connection(&conn_id_for_del);
+                                                                cx.notify();
+                                                            }))
+                                                            .child("✕")
+                                                    )
+                                            )
+                                    );
 
-                                if is_connected && is_conn_exp {
+                                    if is_this_connected && is_conn_exp {
                                     // Level 1: "Databases" Folder
                                     let is_dbs_exp = self.nav_databases_expanded;
                                     nav_tree = nav_tree.child(
@@ -1502,6 +2219,7 @@ impl Render for Workspace {
                                                                     .hover(|s| s.bg(theme.bg_surface_hover))
                                                                     .cursor_pointer()
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
+                                                                        this.selected_table_name = Some(t_name_for_click.clone());
                                                                         if !this.nav_table_expanded.contains(&t_key_for_click) {
                                                                             this.nav_table_expanded.insert(t_key_for_click.clone());
                                                                             this.nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_click));
@@ -1531,10 +2249,12 @@ impl Render for Workspace {
                                                                                         .hover(|s| s.text_color(theme.text_primary))
                                                                                         .cursor_pointer()
                                                                                         .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                            cx.stop_propagation();
                                                                                             if this.nav_table_expanded.contains(&t_key_for_chev) {
                                                                                                 this.nav_table_expanded.remove(&t_key_for_chev);
                                                                                             } else {
                                                                                                 this.nav_table_expanded.insert(t_key_for_chev.clone());
+                                                                                                this.nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_chev));
                                                                                             }
                                                                                             cx.notify();
                                                                                         }))
@@ -2025,12 +2745,39 @@ impl Render for Workspace {
                                         }
                                     }
                                 }
+                                nav_tree = nav_tree.child(
+                                    div()
+                                        .id("btn-tree-new-connection")
+                                        .flex()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .h(px(22.0))
+                                        .mt_1()
+                                        .pl_2()
+                                        .rounded_sm()
+                                        .text_size(px(11.0))
+                                        .text_color(theme.text_muted)
+                                        .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_accent))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.open_new_connection_dialog();
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(theme.text_accent)
+                                                .child("+")
+                                        )
+                                        .child("New Connection...")
+                                );
                             }
+                        }
 
-                            nav_tree
-                        })
+                        nav_tree
+                    })
                 )
-                // Main Split: Top SQL Editor + Bottom 2D Virtual Data Grid
+                // Main Center Workspace: DBeaver-style Data & Table Viewer
                 .child(
                     div()
                         .flex()
@@ -2038,112 +2785,943 @@ impl Render for Workspace {
                         .flex_1()
                         .h_full()
                         .overflow_hidden()
-                        // Top: SQL Editor View (Takes 40% height)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .h(px(240.0))
-                                .w_full()
-                                .border_b_1()
-                                .border_color(theme.border)
-                                .overflow_hidden()
-                                .child(
+                        .bg(theme.bg_grid)
+                        .child({
+                            if self.tabs.is_empty() || active_tab_idx >= self.tabs.len() {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .size_full()
+                                    .gap_3()
+                                    .bg(theme.bg_grid)
+                                    .child(
+                                        img("icons/table.svg")
+                                            .w(px(52.0))
+                                            .h(px(52.0))
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(15.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.text_secondary)
+                                            .child("No Table Opened")
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.0))
+                                            .text_color(theme.text_muted)
+                                            .child("Click a table in the Database Navigator on the left to open and view data.")
+                                    )
+                                    .into_any_element()
+                            } else {
+                                let active_subtab = self.tabs[active_tab_idx].active_subtab;
+                                let view_mode = self.tabs[active_tab_idx].view_mode;
+                                let show_sql_dialog = self.tabs[active_tab_idx].show_sql_dialog;
+                                let filter_sql = self.tabs[active_tab_idx].filter_sql.clone();
+                                let table_name_opt = self.tabs[active_tab_idx].table_name.clone();
+                                let schema_name_opt = self.tabs[active_tab_idx].schema_name.clone();
+                                let current_limit = self.tabs[active_tab_idx].limit;
+                                let total_rows = self.tabs[active_tab_idx].grid.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
+                                let exec_ms = self.tabs[active_tab_idx].execution_time_ms;
+                                let is_filter_focused = self.is_filter_focused;
+                                let is_running_query = self.is_running_query;
+                                let show_right_panels = self.show_right_panels;
+
+                                let mut center_col = div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .h_full()
+                                    .overflow_hidden();
+
+                            // A. DBeaver Sub-tabs Bar: Properties | Data | Diagram
+                            center_col = center_col.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .h(px(28.0))
+                                    .bg(theme.bg_surface)
+                                    .border_b_1()
+                                    .border_color(theme.border)
+                                    .px_2()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            // 1. Properties
+                                            .child({
+                                                let is_prop = active_subtab == TableSubTab::Properties;
+                                                div()
+                                                    .id("subtab-properties")
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .px_2p5()
+                                                    .py_1()
+                                                    .rounded_sm()
+                                                    .bg(if is_prop { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .border_b_2()
+                                                    .border_color(if is_prop { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .text_color(if is_prop { theme.text_primary } else { theme.text_muted })
+                                                    .text_size(px(11.5))
+                                                    .font_weight(if is_prop { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.bg_surface_hover))
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                            t.active_subtab = TableSubTab::Properties;
+                                                            this.is_filter_focused = false;
+                                                            cx.notify();
+                                                        }
+                                                    }))
+                                                    .child(img("icons/folder_table.svg").w(px(13.0)).h(px(13.0)))
+                                                    .child("Properties")
+                                            })
+                                            // 2. Data
+                                            .child({
+                                                let is_data = active_subtab == TableSubTab::Data;
+                                                div()
+                                                    .id("subtab-data")
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .px_2p5()
+                                                    .py_1()
+                                                    .rounded_sm()
+                                                    .bg(if is_data { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .border_b_2()
+                                                    .border_color(if is_data { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .text_color(if is_data { theme.text_primary } else { theme.text_muted })
+                                                    .text_size(px(11.5))
+                                                    .font_weight(if is_data { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.bg_surface_hover))
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                            t.active_subtab = TableSubTab::Data;
+                                                            cx.notify();
+                                                        }
+                                                    }))
+                                                    .child(img("icons/grid.svg").w(px(13.0)).h(px(13.0)))
+                                                    .child("Data")
+                                            })
+                                            // 3. Diagram
+                                            .child({
+                                                let is_diag = active_subtab == TableSubTab::Diagram;
+                                                div()
+                                                    .id("subtab-diagram")
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .px_2p5()
+                                                    .py_1()
+                                                    .rounded_sm()
+                                                    .bg(if is_diag { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .border_b_2()
+                                                    .border_color(if is_diag { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .text_color(if is_diag { theme.text_primary } else { theme.text_muted })
+                                                    .text_size(px(11.5))
+                                                    .font_weight(if is_diag { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.bg_surface_hover))
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                            t.active_subtab = TableSubTab::Diagram;
+                                                            this.is_filter_focused = false;
+                                                            cx.notify();
+                                                        }
+                                                    }))
+                                                    .child(img("icons/schema.svg").w(px(13.0)).h(px(13.0)))
+                                                    .child("Diagram")
+                                            })
+                                    )
+                            );
+
+                            // B. Filter Toolbar (when in Data subtab)
+                            if active_subtab == TableSubTab::Data {
+                                center_col = center_col.child(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .justify_between()
+                                        .gap_2()
                                         .h(px(32.0))
                                         .bg(theme.bg_surface)
                                         .border_b_1()
                                         .border_color(theme.border)
-                                        .px_3()
+                                        .px_2()
+                                        // Show SQL Button
                                         .child(
                                             div()
+                                                .id("btn-show-sql")
                                                 .flex()
                                                 .items_center()
-                                                .gap_2()
+                                                .gap_1()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .bg(if show_sql_dialog { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                .hover(|s| s.bg(theme.bg_surface_hover))
+                                                .cursor_pointer()
+                                                .text_size(px(11.0))
+                                                .text_color(rgb(0x3fb950))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                        t.show_sql_dialog = !t.show_sql_dialog;
+                                                        cx.notify();
+                                                    }
+                                                }))
+                                                .child(img("icons/sql.svg").w(px(12.0)).h(px(12.0)))
+                                                .child("Show SQL")
+                                        )
+                                        .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
+                                        .child(
+                                            div()
+                                                .px_1()
+                                                .py_0p5()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.text_muted)
+                                                .hover(|s| s.text_color(theme.text_primary))
+                                                .cursor_pointer()
+                                                .child("⛶")
+                                        )
+                                        // Filter Expression Input Box ("khung để nối thêm sql như dbeaver")
+                                        .child(
+                                            div()
+                                                .id("filter-sql-input-box")
+                                                .flex()
+                                                .flex_1()
+                                                .items_center()
+                                                .h(px(24.0))
+                                                .bg(theme.bg_editor)
+                                                .border_1()
+                                                .border_color(if is_filter_focused { rgb(0x388bfd) } else { theme.border })
+                                                .rounded_xs()
+                                                .px_2()
+                                                .cursor_text()
+                                                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                                    this.is_filter_focused = true;
+                                                    this.filter_selected_all = event.click_count() >= 2;
+                                                    this.cursor_visible = true;
+                                                    cx.notify();
+                                                }))
+                                                .child({
+                                                    let mut filter_row = div().flex().items_center().h(px(18.0)).w_full().overflow_hidden();
+                                                    if filter_sql.is_empty() {
+                                                        if is_filter_focused {
+                                                            filter_row = filter_row
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(1.5))
+                                                                        .h(px(13.0))
+                                                                        .rounded_xs()
+                                                                        .bg(if self.cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .pl_1()
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(theme.text_muted)
+                                                                        .child("Enter a SQL expression to filter results (use Ctrl+Space)")
+                                                                );
+                                                        } else {
+                                                            filter_row = filter_row.child(
+                                                                div()
+                                                                    .text_size(px(11.0))
+                                                                    .text_color(theme.text_muted)
+                                                                    .child("Enter a SQL expression to filter results (use Ctrl+Space)")
+                                                            );
+                                                        }
+                                                    } else {
+                                                        if is_filter_focused && self.filter_selected_all {
+                                                            filter_row = filter_row.child(
+                                                                div()
+                                                                    .px_1()
+                                                                    .py_0p5()
+                                                                    .rounded_xs()
+                                                                    .bg(rgb(0x264f78))
+                                                                    .text_color(rgb(0xffffff))
+                                                                    .text_size(px(11.5))
+                                                                    .child(filter_sql.clone())
+                                                            );
+                                                        } else if is_filter_focused {
+                                                            filter_row = filter_row
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(11.5))
+                                                                        .text_color(theme.text_primary)
+                                                                        .child(filter_sql.clone())
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .pl(px(1.0))
+                                                                        .w(px(1.5))
+                                                                        .h(px(13.0))
+                                                                        .rounded_xs()
+                                                                        .bg(if self.cursor_visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                                );
+                                                        } else {
+                                                            filter_row = filter_row.child(
+                                                                div()
+                                                                    .text_size(px(11.5))
+                                                                    .text_color(theme.text_primary)
+                                                                    .child(filter_sql.clone())
+                                                            );
+                                                        }
+                                                    }
+                                                    filter_row
+                                                })
+                                        )
+                                        // Execute Query Button ▶ (Green play arrow)
+                                        .child(
+                                            div()
+                                                .id("btn-execute-filtered-query")
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .w(px(24.0))
+                                                .h(px(24.0))
+                                                .rounded_xs()
+                                                .bg(if is_running_query { theme.bg_surface_hover } else { rgb(0x238636) })
+                                                .hover(|s| s.bg(rgb(0x2ea043)))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.run_active_query(cx);
+                                                    cx.notify();
+                                                }))
                                                 .child(
-                                                    div()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_size(px(12.0))
-                                                        .text_color(theme.text_primary)
-                                                        .child("SQL Editor")
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .child("Tree-sitter Syntax Highlighting")
+                                                    if is_running_query {
+                                                        div().text_size(px(11.0)).child("⏳").into_any_element()
+                                                    } else {
+                                                        img("icons/sql_exec.svg").w(px(13.0)).h(px(13.0)).into_any_element()
+                                                    }
                                                 )
                                         )
+                                        .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
+                                        // Clear filter button ✕
+                                        .child(
+                                            div()
+                                                .id("btn-clear-filter")
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .px_1p5()
+                                                .py_1()
+                                                .rounded_xs()
+                                                .cursor_pointer()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.text_muted)
+                                                .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_primary))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                        t.filter_sql.clear();
+                                                        this.run_active_query(cx);
+                                                        cx.notify();
+                                                    }
+                                                }))
+                                                .child("✕")
+                                        )
+                                        // Filter criteria funnel ∇
+                                        .child(
+                                            div()
+                                                .px_1()
+                                                .py_0p5()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.text_muted)
+                                                .hover(|s| s.text_color(theme.text_primary))
+                                                .cursor_pointer()
+                                                .child("∇")
+                                        )
+                                        // History Back ◀
+                                        .child(
+                                            div()
+                                                .px_1()
+                                                .py_0p5()
+                                                .text_size(px(10.0))
+                                                .text_color(theme.text_muted)
+                                                .hover(|s| s.text_color(theme.text_primary))
+                                                .cursor_pointer()
+                                                .child("◀")
+                                        )
+                                        // History Forward ▶
+                                        .child(
+                                            div()
+                                                .px_1()
+                                                .py_0p5()
+                                                .text_size(px(10.0))
+                                                .text_color(theme.text_muted)
+                                                .hover(|s| s.text_color(theme.text_primary))
+                                                .cursor_pointer()
+                                                .child("▶")
+                                        )
+                                        // Refresh ↻
+                                        .child(
+                                            div()
+                                                .id("btn-refresh-data")
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .px_1p5()
+                                                .py_1()
+                                                .rounded_xs()
+                                                .text_size(px(12.0))
+                                                .text_color(rgb(0x58a6ff))
+                                                .hover(|s| s.bg(theme.bg_surface_hover))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.run_active_query(cx);
+                                                    cx.notify();
+                                                }))
+                                                .child("↻")
+                                        )
+                                );
+                            }
+
+                            // C. Optional Show SQL preview dialog
+                            if show_sql_dialog {
+                                let cur_sql = self.build_query_for_tab(active_tab_idx);
+                                let sql_clone = cur_sql.clone();
+                                center_col = center_col.child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1p5()
+                                        .bg(theme.bg_editor)
+                                        .border_b_1()
+                                        .border_color(theme.border)
+                                        .p_2p5()
                                         .child(
                                             div()
                                                 .flex()
                                                 .items_center()
-                                                .gap_3()
+                                                .justify_between()
                                                 .child(
                                                     div()
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .child("Press ⌘↵ to Execute")
+                                                        .text_size(px(11.0))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(theme.text_secondary)
+                                                        .child("GENERATED SQL QUERY")
                                                 )
                                                 .child(
                                                     div()
-                                                        .id("btn-run-query")
                                                         .flex()
                                                         .items_center()
-                                                        .gap_1()
-                                                        .px_3()
-                                                        .py_1()
-                                                        .rounded_md()
-                                                        .bg(if self.is_running_query { theme.bg_surface_hover } else { rgb(0x238636) })
-                                                        .text_color(rgb(0xffffff))
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_size(px(12.0))
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.run_active_query(cx);
-                                                            cx.notify();
-                                                        }))
+                                                        .gap_2()
                                                         .child(
                                                             div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_1p5()
-                                                                .child(
-                                                                    if self.is_running_query {
-                                                                        div().child("⏳")
-                                                                    } else {
-                                                                        div().child(img("icons/sql_exec.svg").w(px(14.0)).h(px(14.0)))
+                                                                .id("btn-copy-generated-sql")
+                                                                .px_2()
+                                                                .py_0p5()
+                                                                .rounded_xs()
+                                                                .bg(theme.bg_surface)
+                                                                .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                .text_size(px(10.5))
+                                                                .text_color(theme.text_primary)
+                                                                .cursor_pointer()
+                                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                                    cx.write_to_clipboard(ClipboardItem::new_string(sql_clone.clone()));
+                                                                }))
+                                                                .child("📋 Copy")
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id("btn-close-sql-preview")
+                                                                .px_1p5()
+                                                                .rounded_xs()
+                                                                .text_size(px(11.0))
+                                                                .text_color(theme.text_muted)
+                                                                .hover(|s| s.text_color(theme.text_primary))
+                                                                .cursor_pointer()
+                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                    if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                                        t.show_sql_dialog = false;
+                                                                        cx.notify();
                                                                     }
-                                                                )
-                                                                .child(if self.is_running_query { "Executing..." } else { "Run Query (⌘↵)" })
+                                                                }))
+                                                                .child("✕")
                                                         )
                                                 )
                                         )
-                                )
-                                .child({
-                                    let tab = &mut self.tabs[active_tab_idx];
-                                    tab.editor.render_editor()
-                                })
-                        )
-                        // Bottom: 2D Virtual Data Grid (Takes remaining height)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .w_full()
-                                .overflow_hidden()
-                                .child(
+                                        .child(
+                                            div()
+                                                .p_2()
+                                                .rounded_xs()
+                                                .bg(theme.bg_surface)
+                                                .text_size(px(11.5))
+                                                .text_color(theme.text_accent)
+                                                .child(cur_sql)
+                                        )
+                                );
+                            }
+
+                            // D. Main View Body depending on active_subtab
+                            match active_subtab {
+                                TableSubTab::Data => {
+                                    let mut data_row = div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_1()
+                                        .w_full()
+                                        .overflow_hidden();
+
+                                    // Left vertical toolstrip (Grid / Text)
+                                    data_row = data_row.child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .items_center()
+                                            .w(px(26.0))
+                                            .h_full()
+                                            .bg(theme.bg_surface)
+                                            .border_r_1()
+                                            .border_color(theme.border)
+                                            .py_2()
+                                            .gap_2()
+                                            .child({
+                                                let is_grid = view_mode == DataViewMode::Grid;
+                                                div()
+                                                    .id("toolstrip-grid")
+                                                    .flex()
+                                                    .flex_col()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .w(px(22.0))
+                                                    .py_2()
+                                                    .rounded_xs()
+                                                    .bg(if is_grid { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .border_l_2()
+                                                    .border_color(if is_grid { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                            t.view_mode = DataViewMode::Grid;
+                                                            cx.notify();
+                                                        }
+                                                    }))
+                                                    .child(img("icons/grid.svg").w(px(14.0)).h(px(14.0)))
+                                            })
+                                            .child({
+                                                let is_text = view_mode == DataViewMode::Text;
+                                                div()
+                                                    .id("toolstrip-text")
+                                                    .flex()
+                                                    .flex_col()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .w(px(22.0))
+                                                    .py_2()
+                                                    .rounded_xs()
+                                                    .bg(if is_text { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .border_l_2()
+                                                    .border_color(if is_text { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                                            t.view_mode = DataViewMode::Text;
+                                                            cx.notify();
+                                                        }
+                                                    }))
+                                                    .child(img("icons/sql_script.svg").w(px(14.0)).h(px(14.0)))
+                                            })
+                                    );
+
+                                    // Center Grid / Text
+                                    data_row = data_row.child(
+                                        div()
+                                            .id("center-data-container")
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .h_full()
+                                            .overflow_hidden()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.is_filter_focused = false;
+                                                cx.notify();
+                                            }))
+                                            .child({
+                                                match view_mode {
+                                                    DataViewMode::Grid => {
+                                                        let sidebar_w = theme.sidebar_width.max(280.0);
+                                                        let panels_w = if show_right_panels { 240.0 } else { 0.0 };
+                                                        let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w - 26.0 - 22.0 - panels_w).max(200.0);
+                                                        let tab = &mut self.tabs[active_tab_idx];
+                                                        tab.grid.update_viewport_width(available_viewport_w);
+
+                                                        let active_resizing_col = self.resizing_column.and_then(|(t, c, _, _)| {
+                                                            if t == active_tab_idx { Some(c) } else { None }
+                                                        });
+
+                                                        let theme_border_focused = theme.border_focused;
+                                                        let theme_border = theme.border;
+                                                        let view = cx.entity().downgrade();
+
+                                                        tab.grid.render_grid_interactive(active_resizing_col, move |col_idx, cur_width| {
+                                                            let is_active = active_resizing_col == Some(col_idx);
+                                                            let bg_color = if is_active {
+                                                                Rgba { a: 0.85, ..theme_border_focused }
+                                                            } else {
+                                                                Rgba { a: 0.0, ..theme_border_focused }
+                                                            };
+                                                            let hover_bg = Rgba { a: 0.35, ..theme_border_focused };
+                                                            let grip_color = if is_active {
+                                                                theme_border_focused
+                                                            } else {
+                                                                Rgba { a: 0.7, ..theme_border }
+                                                            };
+
+                                                            let view_clone = view.clone();
+
+                                                            div()
+                                                                .id(("col-resizer", col_idx))
+                                                                .w(px(8.0))
+                                                                .h_full()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .cursor_col_resize()
+                                                                .bg(bg_color)
+                                                                .hover(move |s| s.bg(hover_bg))
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(1.5))
+                                                                        .h(px(14.0))
+                                                                        .rounded_xs()
+                                                                        .bg(grip_color)
+                                                                )
+                                                                .on_mouse_down(
+                                                                    MouseButton::Left,
+                                                                    move |event: &MouseDownEvent, _window: &mut Window, app: &mut App| {
+                                                                        let _ = view_clone.update(app, |this, cx| {
+                                                                            if event.button == MouseButton::Left {
+                                                                                if event.click_count >= 2 {
+                                                                                    if let Some(tab) = this.tabs.get_mut(active_tab_idx) {
+                                                                                        tab.grid.auto_fit_single_column(col_idx);
+                                                                                        this.resizing_column = None;
+                                                                                        cx.notify();
+                                                                                    }
+                                                                                } else {
+                                                                                    this.resizing_column = Some((
+                                                                                        active_tab_idx,
+                                                                                        col_idx,
+                                                                                        f32::from(event.position.x),
+                                                                                        cur_width,
+                                                                                    ));
+                                                                                    cx.notify();
+                                                                                }
+                                                                            }
+                                                                        });
+                                                                    },
+                                                                )
+                                                                .into_any_element()
+                                                        }).into_any_element()
+                                                    }
+                                                    DataViewMode::Text => {
+                                                        let tab = &self.tabs[active_tab_idx];
+                                                        let mut text_lines = Vec::new();
+                                                        if let Some(ref pager) = tab.grid.pager {
+                                                            let col_names: Vec<String> = pager.columns.iter().map(|c| c.name.clone()).collect();
+                                                            text_lines.push(col_names.join(" | "));
+                                                            text_lines.push(col_names.iter().map(|c| "-".repeat(c.len().max(6))).collect::<Vec<_>>().join("-+-"));
+                                                            let limit_render = pager.total_rows().min(200);
+                                                            for r in 0..limit_render {
+                                                                let mut row_vals = Vec::new();
+                                                                for c in 0..pager.num_cols() as usize {
+                                                                    let val = if let Some(cell) = pager.get_cell(r, c) {
+                                                                        String::from_utf8_lossy(&cell).to_string()
+                                                                    } else {
+                                                                        "NULL".to_string()
+                                                                    };
+                                                                    row_vals.push(val);
+                                                                }
+                                                                text_lines.push(row_vals.join(" | "));
+                                                            }
+                                                        }
+
+                                                        div()
+                                                            .id("text-view-scroll")
+                                                            .flex()
+                                                            .flex_col()
+                                                            .flex_1()
+                                                            .p_3()
+                                                            .overflow_y_scroll()
+                                                            .bg(theme.bg_editor)
+                                                            .text_size(px(12.0))
+                                                            .text_color(theme.text_primary)
+                                                            .child(
+                                                                if text_lines.is_empty() {
+                                                                    "(No query result data to display in text mode)".to_string()
+                                                                } else {
+                                                                    text_lines.join("\n")
+                                                                }
+                                                            )
+                                                            .into_any_element()
+                                                    }
+                                                }
+                                            })
+                                    );
+
+                                    // Right vertical toolstrip (Panels)
+                                    data_row = data_row.child(
+                                        div()
+                                            .id("btn-toggle-panels-strip")
+                                            .flex()
+                                            .flex_col()
+                                            .items_center()
+                                            .w(px(22.0))
+                                            .h_full()
+                                            .bg(theme.bg_surface)
+                                            .border_l_1()
+                                            .border_color(theme.border)
+                                            .py_3()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.show_right_panels = !this.show_right_panels;
+                                                cx.notify();
+                                            }))
+                                            .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("P"))
+                                            .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("A"))
+                                            .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("N"))
+                                            .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("E"))
+                                            .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("L"))
+                                            .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("S"))
+                                    );
+
+                                    if show_right_panels {
+                                        data_row = data_row.child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .w(px(240.0))
+                                                .h_full()
+                                                .bg(theme.bg_surface)
+                                                .border_l_1()
+                                                .border_color(theme.border)
+                                                .p_3()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(div().font_weight(FontWeight::BOLD).text_size(px(11.0)).text_color(theme.text_secondary).child("RECORD VALUE"))
+                                                        .child(
+                                                            div()
+                                                                .id("btn-close-right-panels")
+                                                                .px_1()
+                                                                .text_size(px(11.0))
+                                                                .text_color(theme.text_muted)
+                                                                .cursor_pointer()
+                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                    this.show_right_panels = false;
+                                                                    cx.notify();
+                                                                }))
+                                                                .child("✕")
+                                                        )
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .p_2()
+                                                        .rounded_xs()
+                                                        .bg(theme.bg_editor)
+                                                        .border_1()
+                                                        .border_color(theme.border)
+                                                        .text_size(px(11.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child("Select a cell or record in the data grid to view full content, formatting, and metadata.")
+                                                )
+                                        );
+                                    }
+
+                                    center_col = center_col.child(data_row);
+                                }
+                                TableSubTab::Properties => {
+                                    // Properties View
+                                    let mut prop_view = div()
+                                        .id("prop-view-scroll")
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .p_4()
+                                        .gap_3()
+                                        .overflow_y_scroll();
+
+                                    let t_name = table_name_opt.as_deref().unwrap_or("Table");
+                                    let s_name = schema_name_opt.as_deref().unwrap_or("public");
+
+                                    prop_view = prop_view.child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(img("icons/table.svg").w(px(18.0)).h(px(18.0)))
+                                            .child(
+                                                div()
+                                                    .text_size(px(14.0))
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(theme.text_primary)
+                                                    .child(format!("{}.{}", s_name, t_name))
+                                            )
+                                    );
+
+                                    // Columns Table
+                                    let columns_opt = self.table_columns.get(&(s_name.to_string(), t_name.to_string()));
+                                    prop_view = prop_view.child(
+                                        div()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_size(px(12.0))
+                                            .text_color(theme.text_secondary)
+                                            .child("COLUMNS")
+                                    );
+
+                                    let mut col_table = div()
+                                        .flex()
+                                        .flex_col()
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .rounded_xs()
+                                        .bg(theme.bg_surface);
+
+                                    // Header
+                                    col_table = col_table.child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .h(px(24.0))
+                                            .bg(theme.bg_grid_header)
+                                            .border_b_1()
+                                            .border_color(theme.border)
+                                            .px_2()
+                                            .text_size(px(11.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.text_secondary)
+                                            .child(div().w(px(40.0)).child("#"))
+                                            .child(div().w(px(180.0)).child("Name"))
+                                            .child(div().w(px(140.0)).child("Data Type"))
+                                            .child(div().w(px(90.0)).child("Nullable"))
+                                            .child(div().w(px(80.0)).child("Key"))
+                                    );
+
+                                    if let Some(cols) = columns_opt {
+                                        for (idx, c) in cols.iter().enumerate() {
+                                            col_table = col_table.child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .h(px(24.0))
+                                                    .border_b_1()
+                                                    .border_color(theme.border)
+                                                    .px_2()
+                                                    .text_size(px(11.0))
+                                                    .text_color(theme.text_primary)
+                                                    .child(div().w(px(40.0)).text_color(theme.text_muted).child(format!("{}", idx + 1)))
+                                                    .child(div().w(px(180.0)).child(c.name.clone()))
+                                                    .child(div().w(px(140.0)).text_color(theme.text_accent).child(c.data_type.to_string()))
+                                                    .child(div().w(px(90.0)).text_color(if c.nullable { theme.text_muted } else { theme.text_warning }).child(if c.nullable { "YES" } else { "NO" }))
+                                                    .child(div().w(px(80.0)).child(if c.is_primary_key { "PK 🗝" } else if c.is_foreign_key { "FK" } else { "-" }))
+                                            );
+                                        }
+                                    } else {
+                                        col_table = col_table.child(
+                                            div()
+                                                .p_2()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.text_muted)
+                                                .child("No column schema details cached yet. Expand table in navigator to fetch.")
+                                        );
+                                    }
+                                    prop_view = prop_view.child(col_table);
+
+                                    center_col = center_col.child(prop_view);
+                                }
+                                TableSubTab::Diagram => {
+                                    // Diagram View
+                                    let t_name = table_name_opt.as_deref().unwrap_or("Table");
+                                    let s_name = schema_name_opt.as_deref().unwrap_or("public");
+                                    let columns_opt = self.table_columns.get(&(s_name.to_string(), t_name.to_string()));
+
+                                    let diag_view = div()
+                                        .id("diag-view-scroll")
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .p_6()
+                                        .bg(theme.bg_editor)
+                                        .overflow_y_scroll()
+                                        .child(
+                                            div()
+                                                .w(px(280.0))
+                                                .rounded_md()
+                                                .bg(theme.bg_surface)
+                                                .border_1()
+                                                .border_color(rgb(0x388bfd))
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1p5()
+                                                        .px_3()
+                                                        .py_2()
+                                                        .bg(rgb(0x135ba2))
+                                                        .text_color(rgb(0xffffff))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_size(px(12.0))
+                                                        .child(img("icons/table.svg").w(px(14.0)).h(px(14.0)))
+                                                        .child(format!("{}.{}", s_name, t_name))
+                                                )
+                                                .child({
+                                                    let mut col_list = div().flex().flex_col().p_2().gap_1();
+                                                    if let Some(cols) = columns_opt {
+                                                        for c in cols {
+                                                            col_list = col_list.child(
+                                                                div()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .justify_between()
+                                                                    .text_size(px(11.0))
+                                                                    .child(
+                                                                        div()
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .gap_1()
+                                                                            .child(if c.is_primary_key { "🗝" } else { "•" })
+                                                                            .child(div().text_color(theme.text_primary).child(c.name.clone()))
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_color(theme.text_muted)
+                                                                            .text_size(px(9.5))
+                                                                            .child(c.data_type.to_string())
+                                                                    )
+                                                            );
+                                                        }
+                                                    } else {
+                                                        col_list = col_list.child(
+                                                            div().text_size(px(11.0)).text_color(theme.text_muted).child("Expand table in navigator to display diagram columns.")
+                                                        );
+                                                    }
+                                                    col_list
+                                                })
+                                        );
+
+                                    center_col = center_col.child(diag_view);
+                                }
+                            }
+
+                            // E. Table Bottom Pagination & Status Bar (when in Data subtab)
+                            if active_subtab == TableSubTab::Data {
+                                center_col = center_col.child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .justify_between()
                                         .h(px(24.0))
                                         .bg(theme.bg_surface)
-                                        .border_b_1()
+                                        .border_t_1()
                                         .border_color(theme.border)
                                         .px_3()
                                         .text_size(px(11.0))
@@ -2153,95 +3731,52 @@ impl Render for Workspace {
                                                 .flex()
                                                 .items_center()
                                                 .gap_1p5()
-                                                .child(img("icons/grid.svg").w(px(13.0)).h(px(13.0)))
-                                                .child("Result Set — 120 FPS 2D Viewport Culled Grid")
+                                                .child(img("icons/grid.svg").w(px(12.0)).h(px(12.0)))
+                                                .child({
+                                                    let exec_str = if let Some(ms) = exec_ms {
+                                                        format!(" | {}ms", ms)
+                                                    } else {
+                                                        "".to_string()
+                                                    };
+                                                    format!("{} rows{}", total_rows, exec_str)
+                                                })
+                                                .child(div().text_color(theme.text_muted).child(" | Zero-Copy 120 FPS Culled Grid"))
                                         )
-                                        .child({
-                                            let tab = &self.tabs[active_tab_idx];
-                                            let total = tab.grid.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
-                                            let exec_str = if let Some(ms) = tab.execution_time_ms {
-                                                format!(" | {}ms", ms)
-                                            } else {
-                                                "".to_string()
-                                            };
-                                            format!("{} rows{}", total, exec_str)
-                                        })
-                                )
-                                .child({
-                                    let sidebar_w = theme.sidebar_width.max(280.0);
-                                    let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w).max(200.0);
-                                    let tab = &mut self.tabs[active_tab_idx];
-                                    tab.grid.update_viewport_width(available_viewport_w);
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_3()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("|◀"))
+                                                        .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("◀"))
+                                                        .child(div().px_1p5().text_size(px(10.5)).text_color(theme.text_secondary).child(format!("1 - {}", current_limit)))
+                                                        .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("▶"))
+                                                        .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("▶|"))
+                                                )
+                                                .child(
+                                                    div()
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded_xs()
+                                                        .bg(theme.bg_editor)
+                                                        .border_1()
+                                                        .border_color(theme.border)
+                                                        .text_size(px(10.5))
+                                                        .text_color(theme.text_secondary)
+                                                        .child(format!("Limit: {}", current_limit))
+                                                )
+                                        )
+                                );
+                            }
 
-                                    let active_resizing_col = self.resizing_column.and_then(|(t, c, _, _)| {
-                                        if t == active_tab_idx { Some(c) } else { None }
-                                    });
-
-                                    let theme_border_focused = theme.border_focused;
-                                    let theme_border = theme.border;
-                                    let view = cx.entity().downgrade();
-
-                                    tab.grid.render_grid_interactive(active_resizing_col, move |col_idx, cur_width| {
-                                        let is_active = active_resizing_col == Some(col_idx);
-                                        let bg_color = if is_active {
-                                            Rgba { a: 0.85, ..theme_border_focused }
-                                        } else {
-                                            Rgba { a: 0.0, ..theme_border_focused }
-                                        };
-                                        let hover_bg = Rgba { a: 0.35, ..theme_border_focused };
-                                        let grip_color = if is_active {
-                                            theme_border_focused
-                                        } else {
-                                            Rgba { a: 0.7, ..theme_border }
-                                        };
-
-                                        let view_clone = view.clone();
-
-                                        div()
-                                            .id(("col-resizer", col_idx))
-                                            .w(px(8.0))
-                                            .h_full()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_col_resize()
-                                            .bg(bg_color)
-                                            .hover(move |s| s.bg(hover_bg))
-                                            .child(
-                                                div()
-                                                    .w(px(1.5))
-                                                    .h(px(14.0))
-                                                    .rounded_xs()
-                                                    .bg(grip_color)
-                                            )
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                move |event: &MouseDownEvent, _window: &mut Window, app: &mut App| {
-                                                    let _ = view_clone.update(app, |this, cx| {
-                                                        if event.button == MouseButton::Left {
-                                                            if event.click_count >= 2 {
-                                                                if let Some(tab) = this.tabs.get_mut(active_tab_idx) {
-                                                                    tab.grid.auto_fit_single_column(col_idx);
-                                                                    this.resizing_column = None;
-                                                                    cx.notify();
-                                                                }
-                                                            } else {
-                                                                this.resizing_column = Some((
-                                                                    active_tab_idx,
-                                                                    col_idx,
-                                                                    f32::from(event.position.x),
-                                                                    cur_width,
-                                                                ));
-                                                                cx.notify();
-                                                            }
-                                                        }
-                                                    });
-                                                },
-                                            )
-                                            .into_any_element()
-                                    })
-                                })
-                        )
+                                center_col.into_any_element()
+                            }
+                        })
                 )
         );
 
@@ -2281,7 +3816,8 @@ impl Render for Workspace {
                                     }
                                 )
                                 .child(if self.is_connected {
-                                    format!("Connected: {:?} ({})", self.selected_driver_kind, self.form_database)
+                                    let name = self.active_saved_connection().map(|s| s.name.as_str()).unwrap_or(&self.form_database);
+                                    format!("Connected: {:?} ({})", self.selected_driver_kind, name)
                                 } else {
                                     "Disconnected".to_string()
                                 })
@@ -2304,6 +3840,7 @@ impl Render for Workspace {
             let is_mysql = self.selected_driver_kind == DbDriverKind::MySql;
             let is_sqlite = self.selected_driver_kind == DbDriverKind::Sqlite;
 
+            let is_name_active = self.active_field == Some(FormField::Name);
             let is_host_active = self.active_field == Some(FormField::Host);
             let is_port_active = self.active_field == Some(FormField::Port);
             let is_db_active = self.active_field == Some(FormField::Database);
@@ -2351,7 +3888,11 @@ impl Render for Workspace {
                                                 .text_size(px(16.0))
                                                 .font_weight(FontWeight::BOLD)
                                                 .child(img("icons/connect.svg").w(px(18.0)).h(px(18.0)))
-                                                .child("Connect to Real Database")
+                                                .child(if self.editing_connection_id.is_some() {
+                                                    "Edit Database Connection"
+                                                } else {
+                                                    "New Database Connection"
+                                                })
                                         )
                                 )
                                 .child(
@@ -2461,6 +4002,40 @@ impl Render for Workspace {
                                 .flex()
                                 .flex_col()
                                 .gap_3()
+                                // Connection Name (Optional)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(div().text_size(px(11.0)).text_color(theme.text_muted).child("Connection Name (Optional)"))
+                                        .child(
+                                            div()
+                                                .id("input-field-name")
+                                                .p_2()
+                                                .rounded_md()
+                                                .bg(theme.bg_app)
+                                                .border_1()
+                                                .border_color(if is_name_active { theme.text_accent } else { theme.border })
+                                                .text_size(px(13.0))
+                                                .cursor_text()
+                                                .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                                                    this.active_field = Some(FormField::Name);
+                                                    this.field_selected_all = event.click_count() >= 2;
+                                                    this.cursor_visible = true;
+                                                    window.focus(&this.focus_handle);
+                                                    cx.notify();
+                                                }))
+                                                .child(render_field_content(
+                                                    &self.form_name,
+                                                    "(optional - defaults to database name)",
+                                                    is_name_active,
+                                                    if is_name_active { self.field_selected_all } else { false },
+                                                    self.cursor_visible,
+                                                    theme,
+                                                ))
+                                        )
+                                )
                                 // Host & Port row (hidden for SQLite)
                                 .child(if !is_sqlite {
                                     div()
@@ -2482,13 +4057,22 @@ impl Render for Workspace {
                                                         .border_1()
                                                         .border_color(if is_host_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                        .cursor_text()
+                                                        .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                             this.active_field = Some(FormField::Host);
+                                                            this.field_selected_all = event.click_count() >= 2;
+                                                            this.cursor_visible = true;
                                                             window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
-                                                        .child(format!("{}{}", self.form_host, if is_host_active { "|" } else { "" }))
+                                                        .child(render_field_content(
+                                                            &self.form_host,
+                                                            "localhost",
+                                                            is_host_active,
+                                                            if is_host_active { self.field_selected_all } else { false },
+                                                            self.cursor_visible,
+                                                            theme,
+                                                        ))
                                                 )
                                         )
                                         .child(
@@ -2507,13 +4091,22 @@ impl Render for Workspace {
                                                         .border_1()
                                                         .border_color(if is_port_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                        .cursor_text()
+                                                        .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                             this.active_field = Some(FormField::Port);
+                                                            this.field_selected_all = event.click_count() >= 2;
+                                                            this.cursor_visible = true;
                                                             window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
-                                                        .child(format!("{}{}", self.form_port, if is_port_active { "|" } else { "" }))
+                                                        .child(render_field_content(
+                                                            &self.form_port,
+                                                            "5432",
+                                                            is_port_active,
+                                                            if is_port_active { self.field_selected_all } else { false },
+                                                            self.cursor_visible,
+                                                            theme,
+                                                        ))
                                                 )
                                         )
                                 } else {
@@ -2542,13 +4135,22 @@ impl Render for Workspace {
                                                         .border_1()
                                                         .border_color(if is_db_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                        .cursor_text()
+                                                        .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                             this.active_field = Some(FormField::Database);
+                                                            this.field_selected_all = event.click_count() >= 2;
+                                                            this.cursor_visible = true;
                                                             window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
-                                                        .child(format!("{}{}", self.form_database, if is_db_active { "|" } else { "" }))
+                                                        .child(render_field_content(
+                                                            &self.form_database,
+                                                            if is_sqlite { "e.g. ./test.db or :memory:" } else { "database name" },
+                                                            is_db_active,
+                                                            if is_db_active { self.field_selected_all } else { false },
+                                                            self.cursor_visible,
+                                                            theme,
+                                                        ))
                                                 )
                                         )
                                         .child(if !is_sqlite {
@@ -2567,13 +4169,22 @@ impl Render for Workspace {
                                                         .border_1()
                                                         .border_color(if is_user_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                        .cursor_text()
+                                                        .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                             this.active_field = Some(FormField::User);
+                                                            this.field_selected_all = event.click_count() >= 2;
+                                                            this.cursor_visible = true;
                                                             window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
-                                                        .child(format!("{}{}", self.form_user, if is_user_active { "|" } else { "" }))
+                                                        .child(render_field_content(
+                                                            &self.form_user,
+                                                            "username",
+                                                            is_user_active,
+                                                            if is_user_active { self.field_selected_all } else { false },
+                                                            self.cursor_visible,
+                                                            theme,
+                                                        ))
                                                 )
                                         } else {
                                             div()
@@ -2604,32 +4215,37 @@ impl Render for Workspace {
                                                         .child(if self.show_password { "🙈 Hide" } else { "👁 Show" })
                                                 )
                                         )
-                                        .child(
+                                        .child({
+                                            let display_pass = if self.show_password {
+                                                self.form_password.clone()
+                                            } else {
+                                                "•".repeat(self.form_password.chars().count())
+                                            };
                                             div()
                                                 .id("input-field-pass")
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
                                                 .p_2()
                                                 .rounded_md()
                                                 .bg(theme.bg_app)
                                                 .border_1()
                                                 .border_color(if is_pass_active { theme.text_accent } else { theme.border })
                                                 .text_size(px(13.0))
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                .cursor_text()
+                                                .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                     this.active_field = Some(FormField::Password);
+                                                    this.field_selected_all = event.click_count() >= 2;
+                                                    this.cursor_visible = true;
                                                     window.focus(&this.focus_handle);
                                                     cx.notify();
                                                 }))
-                                                .child(if self.form_password.is_empty() {
-                                                    if is_pass_active { "| (type or paste password)".to_string() } else { "(empty / no password)".to_string() }
-                                                } else if self.show_password {
-                                                    format!("{}{}", self.form_password, if is_pass_active { "|" } else { "" })
-                                                } else {
-                                                    format!("{}{}", "•".repeat(self.form_password.chars().count()), if is_pass_active { "|" } else { "" })
-                                                })
-                                        )
+                                                .child(render_field_content(
+                                                    &display_pass,
+                                                    "(optional password)",
+                                                    is_pass_active,
+                                                    if is_pass_active { self.field_selected_all } else { false },
+                                                    self.cursor_visible,
+                                                    theme,
+                                                ))
+                                        })
                                 } else {
                                     div()
                                 })
@@ -2719,6 +4335,25 @@ impl Render for Workspace {
                                                     cx.notify();
                                                 }))
                                                 .child("Cancel")
+                                        )
+                                        .child(
+                                            div()
+                                                .id("btn-save-conn-only")
+                                                .flex()
+                                                .items_center()
+                                                .px_3()
+                                                .py_1p5()
+                                                .rounded_md()
+                                                .bg(theme.bg_surface_hover)
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .text_size(px(12.0))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.save_connection_form();
+                                                    cx.notify();
+                                                }))
+                                                .child("Save")
                                         )
                                         .child(
                                             div()
