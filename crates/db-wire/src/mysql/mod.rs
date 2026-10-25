@@ -156,6 +156,63 @@ impl DatabaseDriver for MySqlDriver {
         Ok(())
     }
 
+    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
+        let start_time = Instant::now();
+        let pool = self.get_pool().await?;
+        let mut conn = pool.get_conn().await?;
+
+        let clean_sql = sql.trim().trim_end_matches(';');
+        let mut query_result = conn.query_iter(clean_sql).await
+            .map_err(|e| anyhow::anyhow!("MySQL query execution error: {e}"))?;
+
+        let columns: Vec<ColumnMeta> = query_result
+            .columns()
+            .as_ref()
+            .map(|cols| {
+                cols.iter()
+                    .map(|c| ColumnMeta::new(c.name_str().to_string(), DataType::Text))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let num_cols = columns.len();
+        let pager = Arc::new(QueryResultPager::new(columns)?);
+
+        let mut total_rows = 0u64;
+        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
+
+        let stream_opt = query_result.stream::<mysql_async::Row>().await?;
+        if let Some(mut stream) = stream_opt {
+            while let Some(row_res) = stream.next().await {
+                let row = row_res?;
+                for i in 0..num_cols {
+                    let val: Option<Value> = row.get(i);
+                    cell_buffers[i] = match val {
+                        None | Some(Value::NULL) => None,
+                        Some(Value::Bytes(b)) => Some(b),
+                        Some(Value::Int(n)) => Some(n.to_string().into_bytes()),
+                        Some(Value::UInt(u)) => Some(u.to_string().into_bytes()),
+                        Some(Value::Float(f)) => Some(f.to_string().into_bytes()),
+                        Some(Value::Double(d)) => Some(d.to_string().into_bytes()),
+                        Some(Value::Date(y, m, d, h, min, s, _)) => {
+                            Some(format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}").into_bytes())
+                        }
+                        Some(Value::Time(neg, d, h, min, s, _)) => {
+                            let sign = if neg { "-" } else { "" };
+                            Some(format!("{sign}{d}d {h:02}:{min:02}:{s:02}").into_bytes())
+                        }
+                    };
+                }
+                let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
+                let (rows, _) = pager.append_row(cell_slices)?;
+                total_rows = rows;
+            }
+        }
+
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        Ok((pager, total_rows, elapsed_ms))
+    }
+
     async fn cancel_active_query(&self) -> Result<()> {
         // In MySQL, canceling is done via KILL QUERY <conn_id>
         Ok(())
@@ -212,5 +269,37 @@ impl DatabaseDriver for MySqlDriver {
             .collect();
 
         Ok(cols)
+    }
+
+    async fn list_all_columns(&self) -> Result<Vec<(String, String, Vec<ColumnMeta>)>> {
+        let pool = self.get_pool().await?;
+        let mut conn = pool.get_conn().await?;
+        let sql = r#"
+            SELECT table_schema, table_name, column_name, data_type, is_nullable, column_key
+            FROM information_schema.columns
+            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+            ORDER BY table_schema, table_name, ordinal_position;
+        "#;
+
+        let rows: Vec<(String, String, String, String, String, String)> = conn.query(sql).await?;
+        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> = std::collections::BTreeMap::new();
+        for (schema, table, name, dtype, is_null, col_key) in rows {
+            let data_type = match dtype.to_lowercase().as_str() {
+                "tinyint" | "smallint" => DataType::Int2,
+                "int" | "integer" | "mediumint" => DataType::Int4,
+                "bigint" => DataType::Int8,
+                "float" => DataType::Float4,
+                "double" => DataType::Float8,
+                "decimal" => DataType::Numeric,
+                "json" => DataType::Json,
+                _ => DataType::Text,
+            };
+            let col = ColumnMeta::new(name, data_type)
+                .with_nullable(is_null == "YES")
+                .with_pk(col_key == "PRI");
+            map.entry((schema, table)).or_default().push(col);
+        }
+
+        Ok(map.into_iter().map(|((s, t), cols)| (s, t, cols)).collect())
     }
 }

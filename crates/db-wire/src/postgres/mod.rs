@@ -73,7 +73,7 @@ impl PostgresDriver {
             .await
             .with_context(|| format!("Failed to connect to PostgreSQL ({}:{})", self.config.host, self.config.port))?;
 
-        tokio::spawn(async move {
+        crate::get_runtime().spawn(async move {
             if let Err(e) = connection.await {
                 warn!("PostgreSQL connection error: {}", e);
             }
@@ -172,6 +172,47 @@ impl DatabaseDriver for PostgresDriver {
         Ok(())
     }
 
+    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
+        let start_time = Instant::now();
+        let client = self.get_or_connect().await?;
+        *self.cancel_token.lock() = Some(client.cancel_token());
+
+        let clean_sql = sql.trim();
+        let statement = client.prepare(clean_sql).await
+            .with_context(|| format!("SQL Preparation Error: {clean_sql}"))?;
+
+        let columns: Vec<ColumnMeta> = statement
+            .columns()
+            .iter()
+            .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
+            .collect();
+
+        let num_cols = columns.len();
+        let pager = Arc::new(QueryResultPager::new(columns)?);
+
+        let row_stream = client.query_raw(&statement, std::iter::empty::<i32>()).await
+            .with_context(|| format!("Query execution error"))?;
+
+        futures::pin_mut!(row_stream);
+
+        let mut total_rows = 0u64;
+        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
+
+        while let Some(row_res) = row_stream.next().await {
+            let row = row_res.with_context(|| format!("Row stream error"))?;
+            for col_idx in 0..num_cols {
+                cell_buffers[col_idx] = decode_pg_cell(&row, col_idx);
+            }
+            let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
+            let (rows, _) = pager.append_row(cell_slices)?;
+            total_rows = rows;
+        }
+
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        debug!("Postgres execute_query completed: {} rows in {}ms", total_rows, elapsed_ms);
+        Ok((pager, total_rows, elapsed_ms))
+    }
+
     async fn cancel_active_query(&self) -> Result<()> {
         let maybe_token = self.cancel_token.lock().clone();
         if let Some(token) = maybe_token {
@@ -236,5 +277,41 @@ impl DatabaseDriver for PostgresDriver {
             .collect();
 
         Ok(cols)
+    }
+
+    async fn list_all_columns(&self) -> Result<Vec<(String, String, Vec<ColumnMeta>)>> {
+        let client = self.get_or_connect().await?;
+        let sql = r#"
+            SELECT table_schema, table_name, column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+            ORDER BY table_schema, table_name, ordinal_position;
+        "#;
+
+        let rows = client.query(sql, &[]).await?;
+        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> = std::collections::BTreeMap::new();
+        for r in rows {
+            let schema: String = r.get(0);
+            let table: String = r.get(1);
+            let name: String = r.get(2);
+            let dtype_str: String = r.get(3);
+            let is_null_str: String = r.get(4);
+            let data_type = match dtype_str.to_lowercase().as_str() {
+                "integer" | "int" => mem_engine::DataType::Int4,
+                "bigint" => mem_engine::DataType::Int8,
+                "smallint" => mem_engine::DataType::Int2,
+                "boolean" => mem_engine::DataType::Bool,
+                "numeric" | "decimal" => mem_engine::DataType::Numeric,
+                "real" => mem_engine::DataType::Float4,
+                "double precision" => mem_engine::DataType::Float8,
+                "json" | "jsonb" => mem_engine::DataType::Json,
+                "uuid" => mem_engine::DataType::Uuid,
+                _ => mem_engine::DataType::Text,
+            };
+            let col = ColumnMeta::new(name, data_type).with_nullable(is_null_str == "YES");
+            map.entry((schema, table)).or_default().push(col);
+        }
+
+        Ok(map.into_iter().map(|((s, t), cols)| (s, t, cols)).collect())
     }
 }

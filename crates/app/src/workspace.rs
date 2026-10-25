@@ -1,8 +1,7 @@
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
-use db_wire::{create_driver, ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary};
+use db_wire::{create_driver, ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
 use gpui::*;
-use mem_engine::QueryResultPager;
 use sql_intel::SchemaCache;
 use ui_core::theme::Theme;
 use ui_editor::SqlEditorView;
@@ -50,6 +49,15 @@ pub struct Workspace {
     pub active_field: Option<FormField>,
     pub show_password: bool,
     pub test_result: Option<Result<String, String>>,
+
+    // DBeaver-style Tree Navigator State
+    pub nav_connection_expanded: bool,
+    pub nav_databases_expanded: bool,
+    pub nav_database_expanded: bool,
+    pub nav_schemas_expanded: bool,
+    pub nav_schema_expanded: HashSet<String>,
+    pub nav_tables_expanded: HashSet<String>,
+    pub selected_table_name: Option<String>,
 }
 
 impl Workspace {
@@ -94,6 +102,23 @@ impl Workspace {
             active_field: Some(FormField::Host),
             show_password: false,
             test_result: None,
+
+            // DBeaver Navigation Tree Defaults
+            nav_connection_expanded: true,
+            nav_databases_expanded: true,
+            nav_database_expanded: true,
+            nav_schemas_expanded: true,
+            nav_schema_expanded: {
+                let mut s = HashSet::new();
+                s.insert("public".to_string());
+                s
+            },
+            nav_tables_expanded: {
+                let mut s = HashSet::new();
+                s.insert("public".to_string());
+                s
+            },
+            selected_table_name: None,
         }
     }
 
@@ -117,7 +142,7 @@ impl Workspace {
             },
             use_unix_socket: self.form_use_unix_socket,
             ssh_tunnel: None,
-            connect_timeout: std::time::Duration::from_millis(2500),
+            connect_timeout: std::time::Duration::from_millis(10000),
         }
     }
 
@@ -143,7 +168,7 @@ impl Workspace {
                     Err(e) => return Err(format!("Failed to create runtime: {}", e)),
                 };
 
-                let timeout_duration = std::time::Duration::from_millis(2500);
+                let timeout_duration = std::time::Duration::from_millis(10000);
                 let outcome = rt.block_on(async {
                     tokio::time::timeout(timeout_duration, async {
                         let driver = create_driver(config)
@@ -201,7 +226,7 @@ impl Workspace {
                     Err(e) => return Err(format!("Failed to create runtime: {}", e)),
                 };
 
-                let timeout_duration = std::time::Duration::from_millis(2500);
+                let timeout_duration = std::time::Duration::from_millis(15000);
                 let outcome = rt.block_on(async {
                     tokio::time::timeout(timeout_duration, async {
                         let driver = create_driver(config.clone())
@@ -213,12 +238,8 @@ impl Workspace {
                         let tables = driver.list_tables().await
                             .map_err(|e| format!("Connected but failed to list tables: {}", e))?;
 
-                        let mut columns_info = Vec::new();
-                        for t in &tables {
-                            if let Ok(cols) = driver.list_columns(&t.schema, &t.name).await {
-                                columns_info.push((t.schema.clone(), t.name.clone(), cols));
-                            }
-                        }
+                        // Fast batch fetch all columns in 1 single query; fall back gracefully if schema discovery fails
+                        let columns_info = driver.list_all_columns().await.unwrap_or_default();
 
                         Ok::<_, String>((driver, tables, columns_info, config))
                     }).await
@@ -227,7 +248,7 @@ impl Workspace {
                 match outcome {
                     Ok(Ok(val)) => Ok(val),
                     Ok(Err(e)) => Err(e),
-                    Err(_) => Err("Connection timed out (server unreachable or offline)".to_string()),
+                    Err(_) => Err("Connection timed out (server unreachable or request took too long)".to_string()),
                 }
             }).await;
 
@@ -251,10 +272,16 @@ impl Workspace {
                         this.show_connection_modal = false;
                         this.test_result = None;
 
+                        for t in &this.tables {
+                            this.nav_schema_expanded.insert(t.schema.clone());
+                            this.nav_tables_expanded.insert(t.schema.clone());
+                        }
+
                         let db_label = format!("{:?} ({}:{})", config.driver, config.host, config.port);
                         this.status_message = format!("🟢 Connected to real database: {} — {} tables found", db_label, this.tables.len());
 
                         let starter_sql = if let Some(first_table) = this.tables.first() {
+                            this.selected_table_name = Some(first_table.name.clone());
                             match selected_driver_kind {
                                 DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", first_table.schema, first_table.name),
                                 DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", first_table.schema, first_table.name),
@@ -273,7 +300,7 @@ impl Workspace {
                         }
 
                         if !this.tables.is_empty() {
-                            this.run_active_query();
+                            this.run_active_query(cx);
                         }
                     }
                     Err(e) => {
@@ -291,6 +318,7 @@ impl Workspace {
         self.tables.clear();
         let _ = self.schema_cache.clear();
         self.is_connected = false;
+        self.selected_table_name = None;
         self.status_message = "⚪ Disconnected from database.".to_string();
         if !self.tabs.is_empty() {
             let tab = &mut self.tabs[self.active_tab];
@@ -335,7 +363,8 @@ impl Workspace {
         self.test_result = None;
     }
 
-    pub fn query_table(&mut self, schema: &str, table: &str) {
+    pub fn query_table(&mut self, schema: &str, table: &str, cx: &mut Context<Self>) {
+        self.selected_table_name = Some(table.to_string());
         let sql = match self.selected_driver_kind {
             DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", schema, table),
             DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", schema, table),
@@ -347,13 +376,14 @@ impl Workspace {
             tab.editor = SqlEditorView::new(&sql, self.theme.clone(), Some(self.schema_cache.clone()));
         }
 
-        self.run_active_query();
+        self.run_active_query(cx);
     }
 
-    pub fn run_active_query(&mut self) {
+    pub fn run_active_query(&mut self, cx: &mut Context<Self>) {
         let Some(ref driver) = self.driver else {
             self.show_connection_modal = true;
             self.status_message = "Please connect to a database first.".to_string();
+            cx.notify();
             return;
         };
 
@@ -362,64 +392,59 @@ impl Workspace {
         }
 
         let tab = &mut self.tabs[self.active_tab];
-        let sql = tab.editor.active_statement();
-        if sql.is_empty() {
+        let mut sql = tab.editor.active_statement();
+        if sql.trim().is_empty() || sql.trim().starts_with("--") {
+            let full_text = tab.editor.buffer.text();
+            let non_comments: Vec<&str> = full_text
+                .lines()
+                .filter(|l| !l.trim().starts_with("--") && !l.trim().is_empty())
+                .collect();
+            if !non_comments.is_empty() {
+                sql = non_comments.join("\n");
+            }
+        }
+
+        if sql.trim().is_empty() {
+            self.status_message = "No SQL statement to execute.".to_string();
+            cx.notify();
             return;
         }
 
         self.is_running_query = true;
-        self.status_message = format!("Executing query on database: {}", sql);
+        self.status_message = format!("Executing query: {}", sql.trim().replace('\n', " "));
+        cx.notify();
 
         let driver = Arc::clone(driver);
-        let (tx, rx) = flume::unbounded();
-        let start_time = Instant::now();
+        let active_tab_idx = self.active_tab;
+        let query_sql = sql.clone();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        cx.spawn(async move |this, cx| {
+            let exec_result = cx.background_executor().spawn(async move {
+                let rt = db_wire::get_runtime();
+                rt.block_on(async {
+                    driver.execute_query(&query_sql).await
+                })
+            }).await;
 
-        // 1. Initial schema discovery
-        let dummy_pager = Arc::new(QueryResultPager::new(vec![]).unwrap());
-        let mut final_pager = dummy_pager.clone();
-
-        let exec_sql = sql.clone();
-        rt.block_on(async {
-            let p = dummy_pager.clone();
-            let _ = driver.execute_streaming(&exec_sql, p, tx).await;
-        });
-
-        while let Ok(event) = rx.try_recv() {
-            match event {
-                StreamEvent::SchemaReady(columns) => {
-                    if let Ok(new_p) = QueryResultPager::new(columns) {
-                        final_pager = Arc::new(new_p);
+            let _ = this.update(cx, |this, cx| {
+                this.is_running_query = false;
+                match exec_result {
+                    Ok((pager, total_rows, elapsed_ms)) => {
+                        this.status_message = format!("✅ Fetched {} rows in {}ms (120 FPS Zero-Copy)", total_rows, elapsed_ms);
+                        if active_tab_idx < this.tabs.len() {
+                            let tab = &mut this.tabs[active_tab_idx];
+                            tab.execution_time_ms = Some(elapsed_ms);
+                            tab.grid.set_pager(pager);
+                            tab.grid.set_table_name("result");
+                        }
+                    }
+                    Err(e) => {
+                        this.status_message = format!("❌ SQL Error: {}", e);
                     }
                 }
-                StreamEvent::Completed { total_rows, elapsed_ms } => {
-                    self.status_message = format!("Fetched {} rows in {}ms (120 FPS Zero-Copy)", total_rows, elapsed_ms);
-                }
-                StreamEvent::Error(err) => {
-                    self.status_message = format!("SQL Error: {}", err);
-                }
-                _ => {}
-            }
-        }
-
-        // 2. Stream rows into typed pager
-        let p_final = final_pager.clone();
-        let (tx2, _rx2) = flume::unbounded();
-        rt.block_on(async {
-            let _ = driver.execute_streaming(&sql, p_final, tx2).await;
-        });
-
-        let elapsed = start_time.elapsed().as_millis() as u64;
-        let tab = &mut self.tabs[self.active_tab];
-        tab.execution_time_ms = Some(elapsed);
-        tab.grid.set_pager(final_pager);
-        tab.grid.set_table_name("result");
-
-        self.is_running_query = false;
+                cx.notify();
+            });
+        }).detach();
     }
 
     pub fn new_tab(&mut self) {
@@ -583,8 +608,47 @@ impl Render for Workspace {
                 } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                     && (event.keystroke.key == "enter" || event.keystroke.key == "return")
                 {
-                    this.run_active_query();
-                    cx.notify();
+                    this.run_active_query(cx);
+                } else if !this.tabs.is_empty() {
+                    let tab = &mut this.tabs[this.active_tab];
+                    if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                        && event.keystroke.key.eq_ignore_ascii_case("v")
+                    {
+                        if let Some(item) = cx.read_from_clipboard() {
+                            if let Some(pasted) = item.text() {
+                                tab.editor.insert_text(&pasted);
+                                cx.notify();
+                            }
+                        }
+                    } else if event.keystroke.key == "backspace" {
+                        tab.editor.backspace();
+                        cx.notify();
+                    } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
+                        tab.editor.insert_text("\n");
+                        cx.notify();
+                    } else if event.keystroke.key == "space" {
+                        tab.editor.insert_text(" ");
+                        cx.notify();
+                    } else {
+                        let input_char = if let Some(ref kc) = event.keystroke.key_char {
+                            if kc.chars().count() == 1 {
+                                Some(kc.as_str())
+                            } else {
+                                None
+                            }
+                        } else if event.keystroke.key.chars().count() == 1 {
+                            Some(event.keystroke.key.as_str())
+                        } else {
+                            None
+                        };
+
+                        if let Some(char_str) = input_char {
+                            if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
+                                tab.editor.insert_text(char_str);
+                                cx.notify();
+                            }
+                        }
+                    }
                 }
             }));
 
@@ -690,7 +754,7 @@ impl Render for Workspace {
                                 .text_size(px(12.0))
                                 .cursor_pointer()
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.run_active_query();
+                                    this.run_active_query(cx);
                                     cx.notify();
                                 }))
                                 .child(if self.is_running_query { "⏳ Executing..." } else { "▶ Run Query (⌘↵)" })
@@ -705,67 +769,68 @@ impl Render for Workspace {
                 .flex_1()
                 .w_full()
                 .overflow_hidden()
-                // Left Sidebar
+                // Left Sidebar: DBeaver-style Database Navigator
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .w(px(theme.sidebar_width))
+                        .w(px(theme.sidebar_width.max(280.0)))
                         .h_full()
                         .bg(theme.bg_sidebar)
                         .border_r_1()
                         .border_color(theme.border)
-                        .p_3()
-                        .gap_3()
-                        // "New Connection" Action Button
+                        .p_2()
+                        .gap_2()
+                        // Sidebar Header
                         .child(
                             div()
-                                .id("btn-open-connect-dialog")
                                 .flex()
                                 .items_center()
-                                .justify_center()
-                                .gap_2()
-                                .py_1p5()
-                                .rounded_md()
-                                .bg(theme.bg_surface_selected)
-                                .border_1()
-                                .border_color(theme.border)
-                                .text_size(px(12.0))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text_accent)
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.show_connection_modal = true;
-                                    cx.notify();
-                                }))
-                                .child("➕ Connect to Database")
-                        )
-                        // Active Connection Status Card
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .p_2()
-                                .rounded_md()
-                                .bg(theme.bg_surface)
-                                .border_1()
+                                .justify_between()
+                                .px_2()
+                                .py_1()
+                                .border_b_1()
                                 .border_color(theme.border)
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .justify_between()
+                                        .gap_1p5()
+                                        .text_size(px(11.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(theme.text_secondary)
+                                        .child("🗄 DATABASE NAVIGATOR")
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
                                         .child(
                                             div()
-                                                .text_size(px(10.0))
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(theme.text_muted)
-                                                .child("CURRENT DATABASE")
+                                                .id("btn-open-connect-dialog")
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(theme.bg_surface)
+                                                .hover(|s| s.bg(theme.bg_surface_hover))
+                                                .text_size(px(11.0))
+                                                .text_color(theme.text_accent)
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.show_connection_modal = true;
+                                                    cx.notify();
+                                                }))
+                                                .child("➕")
                                         )
                                         .child(if self.is_connected {
                                             div()
                                                 .id("btn-disconnect")
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(theme.bg_surface)
+                                                .hover(|s| s.bg(theme.bg_surface_hover))
                                                 .text_size(px(10.0))
                                                 .text_color(theme.text_error)
                                                 .cursor_pointer()
@@ -779,116 +844,389 @@ impl Render for Workspace {
                                             div().into_any_element()
                                         })
                                 )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .text_size(px(12.0))
-                                        .child(if self.is_connected {
-                                            let icon = match self.selected_driver_kind {
-                                                DbDriverKind::Postgres => "🐘 PostgreSQL",
-                                                DbDriverKind::MySql => "🐬 MySQL",
-                                                DbDriverKind::Sqlite => "📁 SQLite",
-                                            };
-                                            format!("{} ({})", icon, self.form_database)
-                                        } else {
-                                            "⚪ No active connection".to_string()
-                                        })
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .text_color(theme.text_muted)
-                                        .child(if self.is_connected {
-                                            if self.selected_driver_kind == DbDriverKind::Sqlite {
-                                                format!("File: {}", self.form_database)
-                                            } else {
-                                                format!("{}:{}", self.form_host, self.form_port)
-                                            }
-                                        } else {
-                                            "Click Connect above to configure".to_string()
-                                        })
-                                )
                         )
-                        // Tables List (from real DB)
-                        .child(
-                            div()
+                        // Tree View Container with vertical scroll
+                        .child({
+                            let mut nav_tree = div()
+                                .id("dbeaver-nav-tree")
                                 .flex()
                                 .flex_col()
                                 .flex_1()
-                                .gap_1()
-                                .overflow_hidden()
-                                .child(
+                                .overflow_y_scroll()
+                                .gap_0p5();
+
+                            if !self.is_connected {
+                                nav_tree = nav_tree.child(
                                     div()
+                                        .p_4()
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_2()
+                                        .text_size(px(11.0))
+                                        .text_color(theme.text_muted)
+                                        .child("No database connected")
+                                        .child(
+                                            div()
+                                                .id("btn-sidebar-connect-prompt")
+                                                .px_3()
+                                                .py_1p5()
+                                                .rounded_md()
+                                                .bg(theme.bg_surface_selected)
+                                                .text_color(theme.text_accent)
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.show_connection_modal = true;
+                                                    cx.notify();
+                                                }))
+                                                .child("➕ Connect to Database")
+                                        )
+                                );
+                            } else {
+                                // Level 0: Connection Node
+                                let is_conn_exp = self.nav_connection_expanded;
+                                let db_icon = match self.selected_driver_kind {
+                                    DbDriverKind::Postgres => "🐘",
+                                    DbDriverKind::MySql => "🐬",
+                                    DbDriverKind::Sqlite => "📁",
+                                };
+                                let conn_name = format!("{}-local", self.form_database);
+                                let conn_addr = if self.selected_driver_kind == DbDriverKind::Sqlite {
+                                    self.form_database.clone()
+                                } else {
+                                    format!("{}:{}", self.form_host, self.form_port)
+                                };
+
+                                nav_tree = nav_tree.child(
+                                    div()
+                                        .id("nav-connection-node")
                                         .flex()
                                         .items_center()
                                         .justify_between()
+                                        .h(px(24.0))
+                                        .pl_1()
+                                        .pr_2()
+                                        .rounded_sm()
+                                        .hover(|s| s.bg(theme.bg_surface_hover))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.nav_connection_expanded = !this.nav_connection_expanded;
+                                            cx.notify();
+                                        }))
                                         .child(
                                             div()
-                                                .text_size(px(10.0))
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(theme.text_muted)
-                                                .child("TABLES & VIEWS")
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .text_size(px(12.0))
+                                                .child(
+                                                    div()
+                                                        .w(px(12.0))
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child(if is_conn_exp { "▾" } else { "▸" })
+                                                )
+                                                .child(db_icon)
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(theme.text_primary)
+                                                        .child(conn_name)
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child(conn_addr)
+                                                )
                                         )
-                                        .child(
-                                            div()
-                                                .text_size(px(10.0))
-                                                .text_color(theme.text_muted)
-                                                .child(format!("{} items", self.tables.len()))
-                                        )
-                                )
-                                .child({
-                                    let mut tables_scroll = div().flex().flex_col().gap_1().overflow_hidden();
-                                    if self.tables.is_empty() {
-                                        tables_scroll = tables_scroll.child(
-                                            div()
-                                                .p_3()
-                                                .text_size(px(11.0))
-                                                .text_color(theme.text_muted)
-                                                .child("No tables found. Connect to a database to load schema.")
-                                        );
-                                    } else {
-                                        for (i, t) in self.tables.iter().enumerate() {
-                                            let table_schema = t.schema.clone();
-                                            let table_name = t.name.clone();
-                                            let item_id = format!("sidebar-table-item-{}", i);
-                                            tables_scroll = tables_scroll.child(
+                                );
+
+                                if is_conn_exp {
+                                    // Level 1: "Databases" Folder
+                                    let is_dbs_exp = self.nav_databases_expanded;
+                                    nav_tree = nav_tree.child(
+                                        div()
+                                            .id("nav-databases-folder")
+                                            .flex()
+                                            .items_center()
+                                            .h(px(22.0))
+                                            .pl(px(14.0))
+                                            .rounded_sm()
+                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.nav_databases_expanded = !this.nav_databases_expanded;
+                                                cx.notify();
+                                            }))
+                                            .child(
                                                 div()
-                                                    .id(ElementId::Name(item_id.into()))
                                                     .flex()
                                                     .items_center()
-                                                    .justify_between()
-                                                    .p_1()
-                                                    .px_2()
+                                                    .gap_1p5()
+                                                    .text_size(px(11.5))
+                                                    .child(
+                                                        div()
+                                                            .w(px(12.0))
+                                                            .text_size(px(10.0))
+                                                            .text_color(theme.text_muted)
+                                                            .child(if is_dbs_exp { "▾" } else { "▸" })
+                                                    )
+                                                    .child("🗄️")
+                                                    .child("Databases")
+                                            )
+                                    );
+
+                                    if is_dbs_exp {
+                                        // Level 2: Target Database
+                                        let is_db_exp = self.nav_database_expanded;
+                                        nav_tree = nav_tree.child(
+                                            div()
+                                                .id("nav-database-node")
+                                                .flex()
+                                                .items_center()
+                                                .h(px(22.0))
+                                                .pl(px(26.0))
+                                                .rounded_sm()
+                                                .hover(|s| s.bg(theme.bg_surface_hover))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.nav_database_expanded = !this.nav_database_expanded;
+                                                    cx.notify();
+                                                }))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1p5()
+                                                        .text_size(px(11.5))
+                                                        .child(
+                                                            div()
+                                                                .w(px(12.0))
+                                                                .text_size(px(10.0))
+                                                                .text_color(theme.text_muted)
+                                                                .child(if is_db_exp { "▾" } else { "▸" })
+                                                        )
+                                                        .child("🛢️")
+                                                        .child(
+                                                            div()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .text_color(theme.text_accent)
+                                                                .child(self.form_database.clone())
+                                                        )
+                                                )
+                                        );
+
+                                        if is_db_exp {
+                                            // Level 3: "Schemas" Folder
+                                            let is_schemas_exp = self.nav_schemas_expanded;
+                                            nav_tree = nav_tree.child(
+                                                div()
+                                                    .id("nav-schemas-folder")
+                                                    .flex()
+                                                    .items_center()
+                                                    .h(px(22.0))
+                                                    .pl(px(38.0))
                                                     .rounded_sm()
-                                                    .bg(theme.bg_surface)
-                                                    .text_size(px(12.0))
+                                                    .hover(|s| s.bg(theme.bg_surface_hover))
                                                     .cursor_pointer()
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.query_table(&table_schema, &table_name);
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.nav_schemas_expanded = !this.nav_schemas_expanded;
                                                         cx.notify();
                                                     }))
                                                     .child(
                                                         div()
                                                             .flex()
                                                             .items_center()
-                                                            .gap_2()
-                                                            .child("📋")
-                                                            .child(t.name.clone())
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(9.0))
-                                                            .text_color(theme.text_muted)
-                                                            .child(t.table_type.clone())
+                                                            .gap_1p5()
+                                                            .text_size(px(11.5))
+                                                            .child(
+                                                                div()
+                                                                    .w(px(12.0))
+                                                                    .text_size(px(10.0))
+                                                                    .text_color(theme.text_muted)
+                                                                    .child(if is_schemas_exp { "▾" } else { "▸" })
+                                                            )
+                                                            .child("🗂️")
+                                                            .child("Schemas")
                                                     )
                                             );
+
+                                            if is_schemas_exp {
+                                                // Group tables by schema
+                                                let mut schema_map: BTreeMap<String, Vec<&TableSummary>> = BTreeMap::new();
+                                                for t in &self.tables {
+                                                    schema_map.entry(t.schema.clone()).or_default().push(t);
+                                                }
+
+                                                if schema_map.is_empty() {
+                                                    nav_tree = nav_tree.child(
+                                                        div()
+                                                            .pl(px(50.0))
+                                                            .py_1()
+                                                            .text_size(px(11.0))
+                                                            .text_color(theme.text_muted)
+                                                            .child("(No schemas found)")
+                                                    );
+                                                }
+
+                                                for (schema_name, s_tables) in schema_map {
+                                                    let is_schema_exp = self.nav_schema_expanded.contains(&schema_name);
+                                                    let s_name_clone = schema_name.clone();
+                                                    let schema_id = format!("nav-schema-{}", schema_name);
+
+                                                    // Level 4: Schema item (e.g. public)
+                                                    nav_tree = nav_tree.child(
+                                                        div()
+                                                            .id(ElementId::Name(schema_id.into()))
+                                                            .flex()
+                                                            .items_center()
+                                                            .h(px(22.0))
+                                                            .pl(px(50.0))
+                                                            .rounded_sm()
+                                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                                            .cursor_pointer()
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                if this.nav_schema_expanded.contains(&s_name_clone) {
+                                                                    this.nav_schema_expanded.remove(&s_name_clone);
+                                                                } else {
+                                                                    this.nav_schema_expanded.insert(s_name_clone.clone());
+                                                                }
+                                                                cx.notify();
+                                                            }))
+                                                            .child(
+                                                                div()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .gap_1p5()
+                                                                    .text_size(px(11.5))
+                                                                    .child(
+                                                                        div()
+                                                                            .w(px(12.0))
+                                                                            .text_size(px(10.0))
+                                                                            .text_color(theme.text_muted)
+                                                                            .child(if is_schema_exp { "▾" } else { "▸" })
+                                                                    )
+                                                                    .child("📑")
+                                                                    .child(
+                                                                        div()
+                                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                                            .child(schema_name.clone())
+                                                                    )
+                                                            )
+                                                    );
+
+                                                    if is_schema_exp {
+                                                        // Level 5: "Tables" Folder under this Schema
+                                                        let is_tables_exp = self.nav_tables_expanded.contains(&schema_name);
+                                                        let s_name_for_tables = schema_name.clone();
+                                                        let tables_folder_id = format!("nav-tables-folder-{}", schema_name);
+
+                                                        nav_tree = nav_tree.child(
+                                                            div()
+                                                                .id(ElementId::Name(tables_folder_id.into()))
+                                                                .flex()
+                                                                .items_center()
+                                                                .h(px(22.0))
+                                                                .pl(px(62.0))
+                                                                .rounded_sm()
+                                                                .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                .cursor_pointer()
+                                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                                    if this.nav_tables_expanded.contains(&s_name_for_tables) {
+                                                                        this.nav_tables_expanded.remove(&s_name_for_tables);
+                                                                    } else {
+                                                                        this.nav_tables_expanded.insert(s_name_for_tables.clone());
+                                                                    }
+                                                                    cx.notify();
+                                                                }))
+                                                                .child(
+                                                                    div()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap_1p5()
+                                                                        .text_size(px(11.5))
+                                                                        .child(
+                                                                            div()
+                                                                                .w(px(12.0))
+                                                                                .text_size(px(10.0))
+                                                                                .text_color(theme.text_muted)
+                                                                                .child(if is_tables_exp { "▾" } else { "▸" })
+                                                                        )
+                                                                        .child("📁")
+                                                                        .child(format!("Tables ({})", s_tables.len()))
+                                                                )
+                                                        );
+
+                                                        if is_tables_exp {
+                                                            // Level 6: Table items under this schema
+                                                            for t in s_tables {
+                                                                let table_schema = t.schema.clone();
+                                                                let table_name = t.name.clone();
+                                                                let is_selected = self.selected_table_name.as_deref() == Some(&table_name);
+                                                                let item_id = format!("nav-table-{}-{}", table_schema, table_name);
+
+                                                                let mut row_div = div()
+                                                                    .id(ElementId::Name(item_id.into()))
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .justify_between()
+                                                                    .h(px(22.0))
+                                                                    .pl(px(74.0))
+                                                                    .pr_2()
+                                                                    .rounded_sm()
+                                                                    .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                    .cursor_pointer()
+                                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                                        this.query_table(&table_schema, &table_name, cx);
+                                                                    }));
+
+                                                                if is_selected {
+                                                                    row_div = row_div.bg(theme.bg_surface_selected);
+                                                                }
+
+                                                                nav_tree = nav_tree.child(
+                                                                    row_div
+                                                                        .child(
+                                                                            div()
+                                                                                .flex()
+                                                                                .items_center()
+                                                                                .gap_1p5()
+                                                                                .text_size(px(11.5))
+                                                                                .child(
+                                                                                    div()
+                                                                                        .w(px(8.0))
+                                                                                        .text_size(px(9.0))
+                                                                                        .text_color(theme.text_muted)
+                                                                                        .child("›")
+                                                                                )
+                                                                                .child(
+                                                                                    div()
+                                                                                        .text_color(theme.text_accent)
+                                                                                        .child("⊞")
+                                                                                )
+                                                                                .child(
+                                                                                    div()
+                                                                                        .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
+                                                                                        .text_color(if is_selected { theme.text_accent } else { theme.text_primary })
+                                                                                        .child(t.name.clone())
+                                                                                )
+                                                                        )
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
-                                    tables_scroll
-                                })
-                        )
+                                }
+                            }
+
+                            nav_tree
+                        })
                 )
                 // Main Split: Top SQL Editor + Bottom 2D Virtual Data Grid
                 .child(

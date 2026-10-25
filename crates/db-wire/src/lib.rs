@@ -15,6 +15,17 @@ pub use postgres::*;
 pub use mysql::*;
 pub use sqlite::*;
 
+pub fn get_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("fastdb-worker")
+            .build()
+            .expect("Failed to initialize FastDB background tokio runtime")
+    })
+}
+
 pub fn create_driver(config: ConnectionConfig) -> Result<Arc<dyn DatabaseDriver>> {
     match config.driver {
         DbDriverKind::Postgres => Ok(Arc::new(PostgresDriver::new(config))),

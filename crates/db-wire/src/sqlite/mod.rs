@@ -118,6 +118,46 @@ impl DatabaseDriver for SqliteDriver {
         Ok(())
     }
 
+    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
+        let start_time = Instant::now();
+        let conn = self.conn.lock();
+        let clean_sql = sql.trim();
+        let mut stmt = conn.prepare(clean_sql)
+            .map_err(|e| anyhow::anyhow!("SQLite prepare error: {e}"))?;
+
+        let col_count = stmt.column_count();
+        let columns: Vec<ColumnMeta> = stmt
+            .column_names()
+            .iter()
+            .map(|name| ColumnMeta::new(*name, DataType::Text))
+            .collect();
+
+        let pager = Arc::new(QueryResultPager::new(columns)?);
+        let mut rows = stmt.query([])
+            .map_err(|e| anyhow::anyhow!("SQLite query error: {e}"))?;
+
+        let mut total_rows = 0u64;
+        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; col_count];
+
+        while let Some(row) = rows.next()? {
+            for i in 0..col_count {
+                cell_buffers[i] = match row.get_ref(i)? {
+                    ValueRef::Null => None,
+                    ValueRef::Integer(v) => Some(v.to_string().into_bytes()),
+                    ValueRef::Real(v) => Some(v.to_string().into_bytes()),
+                    ValueRef::Text(v) => Some(v.to_vec()),
+                    ValueRef::Blob(v) => Some(v.to_vec()),
+                };
+            }
+            let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
+            let (count, _) = pager.append_row(cell_slices)?;
+            total_rows = count;
+        }
+
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        Ok((pager, total_rows, elapsed_ms))
+    }
+
     async fn cancel_active_query(&self) -> Result<()> {
         self.interrupt_handle.lock().interrupt();
         Ok(())

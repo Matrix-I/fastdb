@@ -29,44 +29,57 @@ pub fn decode_pg_cell(row: &Row, col_idx: usize) -> Option<Vec<u8>> {
 
     match *col_type {
         Type::BOOL => {
-            let val: Option<bool> = row.get(col_idx);
-            val.map(|b| if b { b"true".to_vec() } else { b"false".to_vec() })
+            row.try_get::<_, Option<bool>>(col_idx).ok().flatten()
+                .map(|b| if b { b"true".to_vec() } else { b"false".to_vec() })
         }
         Type::INT2 => {
-            let val: Option<i16> = row.get(col_idx);
-            val.map(|n| n.to_string().into_bytes())
+            row.try_get::<_, Option<i16>>(col_idx).ok().flatten()
+                .map(|n| n.to_string().into_bytes())
         }
         Type::INT4 => {
-            let val: Option<i32> = row.get(col_idx);
-            val.map(|n| n.to_string().into_bytes())
+            row.try_get::<_, Option<i32>>(col_idx).ok().flatten()
+                .map(|n| n.to_string().into_bytes())
         }
         Type::INT8 => {
-            let val: Option<i64> = row.get(col_idx);
-            val.map(|n| n.to_string().into_bytes())
+            row.try_get::<_, Option<i64>>(col_idx).ok().flatten()
+                .map(|n| n.to_string().into_bytes())
         }
         Type::FLOAT4 => {
-            let val: Option<f32> = row.get(col_idx);
-            val.map(|f| f.to_string().into_bytes())
+            row.try_get::<_, Option<f32>>(col_idx).ok().flatten()
+                .map(|f| f.to_string().into_bytes())
         }
         Type::FLOAT8 => {
-            let val: Option<f64> = row.get(col_idx);
-            val.map(|f| f.to_string().into_bytes())
+            row.try_get::<_, Option<f64>>(col_idx).ok().flatten()
+                .map(|f| f.to_string().into_bytes())
         }
         Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => {
-            let val: Option<&str> = row.get(col_idx);
-            val.map(|s| s.as_bytes().to_vec())
+            row.try_get::<_, Option<&str>>(col_idx).ok().flatten()
+                .map(|s| s.as_bytes().to_vec())
         }
         Type::BYTEA => {
-            let val: Option<&[u8]> = row.get(col_idx);
-            val.map(|b| b.to_vec())
+            row.try_get::<_, Option<&[u8]>>(col_idx).ok().flatten()
+                .map(|b| b.to_vec())
         }
         _ => {
-            // For other types or custom types, try getting as &str or fallback to string representation
             if let Ok(val) = row.try_get::<_, Option<&str>>(col_idx) {
-                return val.map(|s| s.as_bytes().to_vec());
+                if let Some(s) = val {
+                    return Some(s.as_bytes().to_vec());
+                }
             }
             if let Ok(val) = row.try_get::<_, Option<String>>(col_idx) {
-                return val.map(|s| s.into_bytes());
+                if let Some(s) = val {
+                    return Some(s.into_bytes());
+                }
+            }
+            if let Ok(val) = row.try_get::<_, Option<i64>>(col_idx) {
+                if let Some(n) = val {
+                    return Some(n.to_string().into_bytes());
+                }
+            }
+            if let Ok(val) = row.try_get::<_, Option<f64>>(col_idx) {
+                if let Some(f) = val {
+                    return Some(f.to_string().into_bytes());
+                }
             }
             None
         }

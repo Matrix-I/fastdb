@@ -77,6 +77,9 @@ pub trait DatabaseDriver: Send + Sync {
         event_tx: flume::Sender<StreamEvent>,
     ) -> Result<()>;
 
+    /// Execute query and return populated QueryResultPager, total rows, and elapsed ms
+    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)>;
+
     /// Cancel actively running query out-of-band immediately
     async fn cancel_active_query(&self) -> Result<()>;
 
@@ -85,4 +88,16 @@ pub trait DatabaseDriver: Send + Sync {
 
     /// List column metadata for a specific table
     async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>>;
+
+    /// Batch list all columns for all tables across the database
+    async fn list_all_columns(&self) -> Result<Vec<(String, String, Vec<ColumnMeta>)>> {
+        let tables = self.list_tables().await?;
+        let mut results = Vec::new();
+        for t in &tables {
+            if let Ok(cols) = self.list_columns(&t.schema, &t.name).await {
+                results.push((t.schema.clone(), t.name.clone(), cols));
+            }
+        }
+        Ok(results)
+    }
 }
