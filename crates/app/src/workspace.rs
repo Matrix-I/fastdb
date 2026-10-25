@@ -76,6 +76,44 @@ pub struct Workspace {
     pub table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
     pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
     pub table_indexes: HashMap<(String, String), Vec<String>>,
+    pub resizing_column: Option<(usize, usize, f32, f32)>, // (tab_idx, col_idx, start_mouse_x, start_col_width)
+}
+
+fn dbeaver_driver_icon(driver: &str, is_connected: bool) -> Div {
+    let icon_path = match driver {
+        "MySql" | "mysql" => "icons/mysql.png",
+        "Sqlite" | "sqlite" => "icons/sqlite.png",
+        _ => "icons/postgresql.png",
+    };
+
+    div()
+        .relative()
+        .w(px(16.0))
+        .h(px(16.0))
+        .flex_shrink_0()
+        .child(
+            img(icon_path)
+                .w(px(16.0))
+                .h(px(16.0))
+        )
+        .child(
+            if is_connected {
+                div()
+                    .absolute()
+                    .bottom(px(-1.0))
+                    .left(px(-1.0))
+                    .w(px(7.0))
+                    .h(px(8.0))
+                    .child(
+                        img("icons/success_ovr.png")
+                            .w(px(7.0))
+                            .h(px(8.0))
+                    )
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            }
+        )
 }
 
 impl Workspace {
@@ -175,6 +213,7 @@ impl Workspace {
             table_columns: HashMap::new(),
             table_constraints: HashMap::new(),
             table_indexes: HashMap::new(),
+            resizing_column: None,
         }
     }
 
@@ -829,6 +868,34 @@ impl Render for Workspace {
                 }
             }));
 
+        if self.resizing_column.is_some() {
+            root = root
+                .cursor_col_resize()
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                    if let Some((tab_idx, col_idx, start_x, start_w)) = this.resizing_column {
+                        let current_x = f32::from(event.position.x);
+                        let delta = current_x - start_x;
+                        let new_w = (start_w + delta).max(ui_grid::MIN_COL_WIDTH);
+                        if let Some(tab) = this.tabs.get_mut(tab_idx) {
+                            tab.grid.set_column_width(col_idx, new_w);
+                            cx.notify();
+                        }
+                    }
+                }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    if this.resizing_column.is_some() {
+                        this.resizing_column = None;
+                        cx.notify();
+                    }
+                }))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    if this.resizing_column.is_some() {
+                        this.resizing_column = None;
+                        cx.notify();
+                    }
+                }));
+        }
+
         // 1. Top Bar / Tabs & Toolbar
         root = root.child(
             div()
@@ -877,7 +944,7 @@ impl Render for Workspace {
                                         .id(ElementId::Name(tab_id.into()))
                                         .flex()
                                         .items_center()
-                                        .gap_2()
+                                        .gap_1p5()
                                         .px_3()
                                         .py_1()
                                         .rounded_t_md()
@@ -888,6 +955,7 @@ impl Render for Workspace {
                                             this.active_tab = i;
                                             cx.notify();
                                         }))
+                                        .child(img("icons/sql_script.svg").w(px(13.0)).h(px(13.0)))
                                         .child(tab.title.clone())
                                 );
                             }
@@ -933,13 +1001,24 @@ impl Render for Workspace {
                                     this.show_connection_modal = true;
                                     cx.notify();
                                 }))
-                                .child(if self.is_connected { "🟢" } else { "⚪" })
+                                .child(
+                                    if self.is_connected {
+                                        let drv = self.saved_connection.as_ref().map(|s| s.driver.as_str()).unwrap_or(match self.selected_driver_kind {
+                                            DbDriverKind::Postgres => "Postgres",
+                                            DbDriverKind::MySql => "MySql",
+                                            DbDriverKind::Sqlite => "Sqlite",
+                                        });
+                                        dbeaver_driver_icon(drv, true).into_any_element()
+                                    } else {
+                                        img("icons/disconnect.svg").w(px(13.0)).h(px(13.0)).into_any_element()
+                                    }
+                                )
                                 .child(if self.is_connected {
                                     format!("{} ({})", self.form_database, self.form_user)
                                 } else {
                                     "Connect DB".to_string()
                                 })
-                                .child("⚙")
+                                .child(img("icons/configuration.svg").w(px(13.0)).h(px(13.0)))
                         )
                 )
         );
@@ -981,7 +1060,8 @@ impl Render for Workspace {
                                         .text_size(px(11.0))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(theme.text_secondary)
-                                        .child("🗄 DATABASE NAVIGATOR")
+                                        .child(img("icons/database_navigator.svg").w(px(14.0)).h(px(14.0)))
+                                        .child("DATABASE NAVIGATOR")
                                 )
                                 .child(
                                     div()
@@ -996,14 +1076,12 @@ impl Render for Workspace {
                                                 .rounded_sm()
                                                 .bg(theme.bg_surface)
                                                 .hover(|s| s.bg(theme.bg_surface_hover))
-                                                .text_size(px(11.0))
-                                                .text_color(theme.text_accent)
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.open_new_connection_dialog();
                                                     cx.notify();
                                                 }))
-                                                .child("➕")
+                                                .child(img("icons/connect.svg").w(px(13.0)).h(px(13.0)))
                                         )
                                         .child(if self.is_connected {
                                             div()
@@ -1020,6 +1098,10 @@ impl Render for Workspace {
                                                     this.disconnect();
                                                     cx.notify();
                                                 }))
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .child(img("icons/disconnect.svg").w(px(11.0)).h(px(11.0)))
                                                 .child("Disconnect")
                                                 .into_any_element()
                                         } else {
@@ -1063,7 +1145,11 @@ impl Render for Workspace {
                                                     this.open_new_connection_dialog();
                                                     cx.notify();
                                                 }))
-                                                .child("➕ Connect to Database")
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(img("icons/connect.svg").w(px(14.0)).h(px(14.0)))
+                                                .child("Connect to Database")
                                         )
                                 );
                             } else {
@@ -1072,32 +1158,27 @@ impl Render for Workspace {
                                 let is_connected = self.is_connected;
                                 let is_connecting = self.is_connecting;
 
-                                let (db_icon, conn_name, conn_addr) = if let Some(ref saved) = self.saved_connection {
-                                    let icon = match saved.driver.as_str() {
-                                        "MySql" => "🐬",
-                                        "Sqlite" => "📁",
-                                        _ => "🐘",
-                                    };
+                                let (drv_name, conn_name, conn_addr) = if let Some(ref saved) = self.saved_connection {
                                     let name = format!("{}-local", saved.database);
                                     let addr = if saved.driver == "Sqlite" {
                                         saved.database.clone()
                                     } else {
                                         format!("{}:{}", saved.host, saved.port)
                                     };
-                                    (icon, name, addr)
+                                    (saved.driver.clone(), name, addr)
                                 } else {
-                                    let icon = match self.selected_driver_kind {
-                                        DbDriverKind::Postgres => "🐘",
-                                        DbDriverKind::MySql => "🐬",
-                                        DbDriverKind::Sqlite => "📁",
-                                    };
+                                    let drv = match self.selected_driver_kind {
+                                        DbDriverKind::Postgres => "Postgres",
+                                        DbDriverKind::MySql => "MySql",
+                                        DbDriverKind::Sqlite => "Sqlite",
+                                    }.to_string();
                                     let name = format!("{}-local", self.form_database);
                                     let addr = if self.selected_driver_kind == DbDriverKind::Sqlite {
                                         self.form_database.clone()
                                     } else {
                                         format!("{}:{}", self.form_host, self.form_port)
                                     };
-                                    (icon, name, addr)
+                                    (drv, name, addr)
                                 };
 
                                 nav_tree = nav_tree.child(
@@ -1135,7 +1216,7 @@ impl Render for Workspace {
                                                         .text_color(if is_connecting { theme.text_warning } else { theme.text_muted })
                                                         .child(if is_connecting { "⏳" } else if is_conn_exp && is_connected { "▾" } else { "▸" })
                                                 )
-                                                .child(db_icon)
+                                                .child(dbeaver_driver_icon(&drv_name, is_connected))
                                                 .child(
                                                     div()
                                                         .font_weight(FontWeight::BOLD)
@@ -1144,9 +1225,9 @@ impl Render for Workspace {
                                                 )
                                                 .child(
                                                     div()
-                                                        .text_size(px(10.0))
+                                                        .text_size(px(10.5))
                                                         .text_color(theme.text_muted)
-                                                        .child(conn_addr)
+                                                        .child(format!(" {}", conn_addr))
                                                 )
                                                 .child(
                                                     if is_connecting {
@@ -1161,9 +1242,6 @@ impl Render for Workspace {
                                                             .child("(Click to connect)")
                                                     } else {
                                                         div()
-                                                            .text_size(px(9.0))
-                                                            .text_color(theme.text_success)
-                                                            .child("●")
                                                     }
                                                 )
                                         )
@@ -1171,14 +1249,14 @@ impl Render for Workspace {
                                             div()
                                                 .id("btn-edit-saved-conn")
                                                 .hover(|s| s.bg(theme.bg_surface).text_color(theme.text_accent))
-                                                .text_size(px(11.0))
-                                                .text_color(theme.text_muted)
+                                                .p_0p5()
+                                                .rounded_sm()
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.edit_saved_connection();
                                                     cx.notify();
                                                 }))
-                                                .child("⚙️")
+                                                .child(img("icons/configuration.svg").w(px(13.0)).h(px(13.0)))
                                         )
                                 );
 
@@ -1212,7 +1290,7 @@ impl Render for Workspace {
                                                             .text_color(theme.text_muted)
                                                             .child(if is_dbs_exp { "▾" } else { "▸" })
                                                     )
-                                                    .child("🗄️")
+                                                    .child(img("icons/folder_database.svg").w(px(16.0)).h(px(16.0)))
                                                     .child("Databases")
                                             )
                                     );
@@ -1247,7 +1325,7 @@ impl Render for Workspace {
                                                                 .text_color(theme.text_muted)
                                                                 .child(if is_db_exp { "▾" } else { "▸" })
                                                         )
-                                                        .child("🛢️")
+                                                        .child(img("icons/database.svg").w(px(16.0)).h(px(16.0)))
                                                         .child(
                                                             div()
                                                                 .font_weight(FontWeight::SEMIBOLD)
@@ -1287,7 +1365,7 @@ impl Render for Workspace {
                                                                     .text_color(theme.text_muted)
                                                                     .child(if is_schemas_exp { "▾" } else { "▸" })
                                                             )
-                                                            .child("🗂️")
+                                                            .child(img("icons/folder_schema.svg").w(px(16.0)).h(px(16.0)))
                                                             .child("Schemas")
                                                     )
                                             );
@@ -1347,7 +1425,7 @@ impl Render for Workspace {
                                                                             .text_color(theme.text_muted)
                                                                             .child(if is_schema_exp { "▾" } else { "▸" })
                                                                     )
-                                                                    .child("📑")
+                                                                    .child(img("icons/schema.svg").w(px(16.0)).h(px(16.0)))
                                                                     .child(
                                                                         div()
                                                                             .font_weight(FontWeight::SEMIBOLD)
@@ -1393,8 +1471,8 @@ impl Render for Workspace {
                                                                                 .text_color(theme.text_muted)
                                                                                 .child(if is_tables_exp { "▾" } else { "▸" })
                                                                         )
-                                                                        .child("📁")
-                                                                        .child(format!("Tables ({})", s_tables.len()))
+                                                                        .child(img("icons/folder_table.svg").w(px(16.0)).h(px(16.0)))
+                                                                        .child("Tables")
                                                                 )
                                                         );
 
@@ -1432,57 +1510,66 @@ impl Render for Workspace {
                                                                     }));
 
                                                                 if is_selected {
-                                                                    row_div = row_div.bg(theme.bg_surface_selected);
+                                                                    row_div = row_div.bg(rgb(0x135ba2));
                                                                 }
 
                                                                 let t_key_for_chev = table_key.clone();
                                                                 nav_tree = nav_tree.child(
-                                                                    row_div.child(
-                                                                        div()
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .gap_1p5()
-                                                                            .text_size(px(11.5))
-                                                                            .child(
+                                                                    row_div
+                                                                        .child(
+                                                                            div()
+                                                                                .flex()
+                                                                                .items_center()
+                                                                                .gap_1p5()
+                                                                                .text_size(px(11.5))
+                                                                                .child(
+                                                                                    div()
+                                                                                        .id(ElementId::Name(format!("nav-chev-{}-{}", table_schema, table_name).into()))
+                                                                                        .w(px(12.0))
+                                                                                        .text_size(px(10.0))
+                                                                                        .text_color(if is_selected { rgb(0xffffff) } else { theme.text_muted })
+                                                                                        .hover(|s| s.text_color(theme.text_primary))
+                                                                                        .cursor_pointer()
+                                                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                            if this.nav_table_expanded.contains(&t_key_for_chev) {
+                                                                                                this.nav_table_expanded.remove(&t_key_for_chev);
+                                                                                            } else {
+                                                                                                this.nav_table_expanded.insert(t_key_for_chev.clone());
+                                                                                            }
+                                                                                            cx.notify();
+                                                                                        }))
+                                                                                        .child(if is_table_exp { "▾" } else { "▸" })
+                                                                                )
+                                                                                .child(img("icons/table.svg").w(px(16.0)).h(px(16.0)))
+                                                                                .child(
+                                                                                    div()
+                                                                                        .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
+                                                                                        .text_color(if is_selected { rgb(0xffffff) } else { theme.text_primary })
+                                                                                        .child(t.name.clone())
+                                                                                )
+                                                                        )
+                                                                        .child(
+                                                                            if let Some(rows) = t.estimated_rows {
+                                                                                let count_str = if rows >= 1_000_000 {
+                                                                                    format!("{:.1}M", rows as f64 / 1_000_000.0)
+                                                                                } else if rows >= 1_000 {
+                                                                                    format!("{}K", rows / 1_000)
+                                                                                } else {
+                                                                                    format!("{}", rows)
+                                                                                };
                                                                                 div()
-                                                                                    .id(ElementId::Name(format!("nav-chev-{}-{}", table_schema, table_name).into()))
-                                                                                    .w(px(12.0))
+                                                                                    .px_1()
+                                                                                    .border_1()
+                                                                                    .border_color(if is_selected { rgb(0x2874ba) } else { theme.border })
+                                                                                    .rounded_xs()
                                                                                     .text_size(px(10.0))
-                                                                                    .text_color(theme.text_muted)
-                                                                                    .hover(|s| s.text_color(theme.text_primary))
-                                                                                    .cursor_pointer()
-                                                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                                                        if this.nav_table_expanded.contains(&t_key_for_chev) {
-                                                                                            this.nav_table_expanded.remove(&t_key_for_chev);
-                                                                                        } else {
-                                                                                            this.nav_table_expanded.insert(t_key_for_chev.clone());
-                                                                                        }
-                                                                                        cx.notify();
-                                                                                    }))
-                                                                                    .child(if is_table_exp { "▾" } else { "▸" })
-                                                                            )
-                                                                            .child(
-                                                                                // Blue Table Icon
-                                                                                div()
-                                                                                    .w(px(14.0))
-                                                                                    .h(px(14.0))
-                                                                                    .rounded_sm()
-                                                                                    .bg(rgb(0x1976d2))
-                                                                                    .flex()
-                                                                                    .items_center()
-                                                                                    .justify_center()
-                                                                                    .text_size(px(9.5))
-                                                                                    .text_color(rgb(0xffffff))
-                                                                                    .font_weight(FontWeight::BOLD)
-                                                                                    .child("⊞")
-                                                                            )
-                                                                            .child(
-                                                                                div()
-                                                                                    .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
-                                                                                    .text_color(if is_selected { theme.text_accent } else { theme.text_primary })
-                                                                                    .child(t.name.clone())
-                                                                            )
-                                                                    )
+                                                                                    .text_color(if is_selected { rgb(0x89c5ff) } else { theme.text_muted })
+                                                                                    .child(count_str)
+                                                                                    .into_any_element()
+                                                                            } else {
+                                                                                div().into_any_element()
+                                                                            }
+                                                                        )
                                                                 );
 
                                                                 // Level 7: Dropdown folders under table (Columns, Constraints, Foreign Keys, Indexes, Dependencies, References, Partitions, Triggers, Rules, Policies)
@@ -1525,20 +1612,7 @@ impl Render for Workspace {
                                                                                             .text_color(theme.text_muted)
                                                                                             .child(if is_col_exp { "▾" } else { "▸" })
                                                                                     )
-                                                                                    .child(
-                                                                                        // Orange Document / Columns Icon
-                                                                                        div()
-                                                                                            .w(px(14.0))
-                                                                                            .h(px(14.0))
-                                                                                            .rounded_sm()
-                                                                                            .bg(rgb(0xf57c00))
-                                                                                            .flex()
-                                                                                            .items_center()
-                                                                                            .justify_center()
-                                                                                            .text_size(px(8.5))
-                                                                                            .text_color(rgb(0xffffff))
-                                                                                            .child("▤")
-                                                                                    )
+                                                                                    .child(img("icons/columns.svg").w(px(16.0)).h(px(16.0)))
                                                                                     .child(
                                                                                         div()
                                                                                             .text_color(theme.text_primary)
@@ -1586,14 +1660,9 @@ impl Render for Workspace {
                                                                                                     .text_size(px(11.0))
                                                                                                     .child(
                                                                                                         if is_pk {
-                                                                                                            div()
-                                                                                                                .text_size(px(9.5))
-                                                                                                                .child("🔑")
+                                                                                                            img("icons/key.svg").w(px(16.0)).h(px(16.0)).into_any_element()
                                                                                                         } else {
-                                                                                                            div()
-                                                                                                                .text_size(px(9.5))
-                                                                                                                .text_color(theme.text_muted)
-                                                                                                                .child("📄")
+                                                                                                            img("icons/column.svg").w(px(16.0)).h(px(16.0)).into_any_element()
                                                                                                         }
                                                                                                     )
                                                                                                     .child(
@@ -1673,21 +1742,7 @@ impl Render for Workspace {
                                                                                             .text_color(theme.text_muted)
                                                                                             .child(if is_constr_exp { "▾" } else { "▸" })
                                                                                     )
-                                                                                    .child(
-                                                                                        // Orange [ ] Icon
-                                                                                        div()
-                                                                                            .w(px(14.0))
-                                                                                            .h(px(14.0))
-                                                                                            .rounded_sm()
-                                                                                            .bg(rgb(0xf57c00))
-                                                                                            .flex()
-                                                                                            .items_center()
-                                                                                            .justify_center()
-                                                                                            .text_size(px(8.0))
-                                                                                            .font_weight(FontWeight::BOLD)
-                                                                                            .text_color(rgb(0xffffff))
-                                                                                            .child("[ ]")
-                                                                                    )
+                                                                                    .child(img("icons/folder_constraint.svg").w(px(16.0)).h(px(16.0)))
                                                                                     .child(
                                                                                         div()
                                                                                             .text_color(theme.text_primary)
@@ -1709,7 +1764,7 @@ impl Render for Workspace {
                                                                                         .h(px(20.0))
                                                                                         .pl(px(98.0))
                                                                                         .text_size(px(11.0))
-                                                                                        .child(div().text_color(theme.text_muted).child("🔒"))
+                                                                                        .child(img("icons/constraint.svg").w(px(16.0)).h(px(16.0)))
                                                                                         .child(div().text_color(theme.text_primary).child(cname.clone()))
                                                                                         .child(div().text_color(theme.text_muted).child(format!("({})", ctype)))
                                                                                 );
@@ -1769,7 +1824,7 @@ impl Render for Workspace {
                                                                                             .text_color(theme.text_muted)
                                                                                             .child(if is_fk_exp { "▾" } else { "▸" })
                                                                                     )
-                                                                                    .child("📁")
+                                                                                    .child(img("icons/folder.svg").w(px(16.0)).h(px(16.0)))
                                                                                     .child(
                                                                                         div()
                                                                                             .text_color(theme.text_primary)
@@ -1800,7 +1855,7 @@ impl Render for Workspace {
                                                                                         .h(px(20.0))
                                                                                         .pl(px(98.0))
                                                                                         .text_size(px(11.0))
-                                                                                        .child(div().text_color(theme.text_muted).child("🔑"))
+                                                                                        .child(img("icons/foreign_key.svg").w(px(16.0)).h(px(16.0)))
                                                                                         .child(div().text_color(theme.text_primary).child(fk_name.clone()))
                                                                                 );
                                                                             }
@@ -1845,7 +1900,7 @@ impl Render for Workspace {
                                                                                             .text_color(theme.text_muted)
                                                                                             .child(if is_idx_exp { "▾" } else { "▸" })
                                                                                     )
-                                                                                    .child("📁")
+                                                                                    .child(img("icons/folder.svg").w(px(16.0)).h(px(16.0)))
                                                                                     .child(
                                                                                         div()
                                                                                             .text_color(theme.text_primary)
@@ -1867,7 +1922,7 @@ impl Render for Workspace {
                                                                                         .h(px(20.0))
                                                                                         .pl(px(98.0))
                                                                                         .text_size(px(11.0))
-                                                                                        .child(div().text_color(theme.text_muted).child("⚡"))
+                                                                                        .child(img("icons/table_index.svg").w(px(16.0)).h(px(16.0)))
                                                                                         .child(div().text_color(theme.text_primary).child(iname.clone()))
                                                                                 );
                                                                             }
@@ -1935,19 +1990,9 @@ impl Render for Workspace {
                                                                                         )
                                                                                         .child(
                                                                                             if is_partition {
-                                                                                                div()
-                                                                                                    .w(px(14.0))
-                                                                                                    .h(px(14.0))
-                                                                                                    .rounded_sm()
-                                                                                                    .bg(rgb(0xf57c00))
-                                                                                                    .flex()
-                                                                                                    .items_center()
-                                                                                                    .justify_center()
-                                                                                                    .text_size(px(8.5))
-                                                                                                    .text_color(rgb(0xffffff))
-                                                                                                    .child("☷")
+                                                                                                img("icons/folder_table.svg").w(px(16.0)).h(px(16.0))
                                                                                             } else {
-                                                                                                div().child("📁")
+                                                                                                img("icons/folder.svg").w(px(16.0)).h(px(16.0))
                                                                                             }
                                                                                         )
                                                                                         .child(
@@ -2061,7 +2106,20 @@ impl Render for Workspace {
                                                             this.run_active_query(cx);
                                                             cx.notify();
                                                         }))
-                                                        .child(if self.is_running_query { "⏳ Executing..." } else { "▶ Run Query (⌘↵)" })
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_1p5()
+                                                                .child(
+                                                                    if self.is_running_query {
+                                                                        div().child("⏳")
+                                                                    } else {
+                                                                        div().child(img("icons/sql_exec.svg").w(px(14.0)).h(px(14.0)))
+                                                                    }
+                                                                )
+                                                                .child(if self.is_running_query { "Executing..." } else { "Run Query (⌘↵)" })
+                                                        )
                                                 )
                                         )
                                 )
@@ -2090,7 +2148,14 @@ impl Render for Workspace {
                                         .px_3()
                                         .text_size(px(11.0))
                                         .text_color(theme.text_muted)
-                                        .child("Result Set — 120 FPS 2D Viewport Culled Grid")
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(img("icons/grid.svg").w(px(13.0)).h(px(13.0)))
+                                                .child("Result Set — 120 FPS 2D Viewport Culled Grid")
+                                        )
                                         .child({
                                             let tab = &self.tabs[active_tab_idx];
                                             let total = tab.grid.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
@@ -2103,8 +2168,78 @@ impl Render for Workspace {
                                         })
                                 )
                                 .child({
+                                    let sidebar_w = theme.sidebar_width.max(280.0);
+                                    let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w).max(200.0);
                                     let tab = &mut self.tabs[active_tab_idx];
-                                    tab.grid.render_grid()
+                                    tab.grid.update_viewport_width(available_viewport_w);
+
+                                    let active_resizing_col = self.resizing_column.and_then(|(t, c, _, _)| {
+                                        if t == active_tab_idx { Some(c) } else { None }
+                                    });
+
+                                    let theme_border_focused = theme.border_focused;
+                                    let theme_border = theme.border;
+                                    let view = cx.entity().downgrade();
+
+                                    tab.grid.render_grid_interactive(active_resizing_col, move |col_idx, cur_width| {
+                                        let is_active = active_resizing_col == Some(col_idx);
+                                        let bg_color = if is_active {
+                                            Rgba { a: 0.85, ..theme_border_focused }
+                                        } else {
+                                            Rgba { a: 0.0, ..theme_border_focused }
+                                        };
+                                        let hover_bg = Rgba { a: 0.35, ..theme_border_focused };
+                                        let grip_color = if is_active {
+                                            theme_border_focused
+                                        } else {
+                                            Rgba { a: 0.7, ..theme_border }
+                                        };
+
+                                        let view_clone = view.clone();
+
+                                        div()
+                                            .id(("col-resizer", col_idx))
+                                            .w(px(8.0))
+                                            .h_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_col_resize()
+                                            .bg(bg_color)
+                                            .hover(move |s| s.bg(hover_bg))
+                                            .child(
+                                                div()
+                                                    .w(px(1.5))
+                                                    .h(px(14.0))
+                                                    .rounded_xs()
+                                                    .bg(grip_color)
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |event: &MouseDownEvent, _window: &mut Window, app: &mut App| {
+                                                    let _ = view_clone.update(app, |this, cx| {
+                                                        if event.button == MouseButton::Left {
+                                                            if event.click_count >= 2 {
+                                                                if let Some(tab) = this.tabs.get_mut(active_tab_idx) {
+                                                                    tab.grid.auto_fit_single_column(col_idx);
+                                                                    this.resizing_column = None;
+                                                                    cx.notify();
+                                                                }
+                                                            } else {
+                                                                this.resizing_column = Some((
+                                                                    active_tab_idx,
+                                                                    col_idx,
+                                                                    f32::from(event.position.x),
+                                                                    cur_width,
+                                                                ));
+                                                                cx.notify();
+                                                            }
+                                                        }
+                                                    });
+                                                },
+                                            )
+                                            .into_any_element()
+                                    })
                                 })
                         )
                 )
@@ -2132,8 +2267,19 @@ impl Render for Workspace {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
-                                .child(if self.is_connected { "🟢" } else { "⚪" })
+                                .gap_1p5()
+                                .child(
+                                    if self.is_connected {
+                                        let drv = match self.selected_driver_kind {
+                                            DbDriverKind::Postgres => "postgres",
+                                            DbDriverKind::MySql => "mysql",
+                                            DbDriverKind::Sqlite => "sqlite",
+                                        };
+                                        dbeaver_driver_icon(drv, true)
+                                    } else {
+                                        div().child(img("icons/disconnect.svg").w(px(14.0)).h(px(14.0)))
+                                    }
+                                )
                                 .child(if self.is_connected {
                                     format!("Connected: {:?} ({})", self.selected_driver_kind, self.form_database)
                                 } else {
@@ -2199,9 +2345,13 @@ impl Render for Workspace {
                                         .gap_2()
                                         .child(
                                             div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
                                                 .text_size(px(16.0))
                                                 .font_weight(FontWeight::BOLD)
-                                                .child("🔌 Connect to Real Database")
+                                                .child(img("icons/connect.svg").w(px(18.0)).h(px(18.0)))
+                                                .child("Connect to Real Database")
                                         )
                                 )
                                 .child(
@@ -2241,7 +2391,14 @@ impl Render for Workspace {
                                             this.select_preset_postgres();
                                             cx.notify();
                                         }))
-                                        .child("🐘 PostgreSQL")
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(img("icons/postgresql.png").w(px(16.0)).h(px(16.0)))
+                                                .child("PostgreSQL")
+                                        )
                                 )
                                 .child(
                                     div()
@@ -2261,7 +2418,14 @@ impl Render for Workspace {
                                             this.select_preset_mysql();
                                             cx.notify();
                                         }))
-                                        .child("🐬 MySQL")
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(img("icons/mysql.png").w(px(16.0)).h(px(16.0)))
+                                                .child("MySQL")
+                                        )
                                 )
                                 .child(
                                     div()
@@ -2281,7 +2445,14 @@ impl Render for Workspace {
                                             this.select_preset_sqlite();
                                             cx.notify();
                                         }))
-                                        .child("📁 SQLite")
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(img("icons/sqlite.png").w(px(16.0)).h(px(16.0)))
+                                                .child("SQLite")
+                                        )
                                 )
                         )
                         // Form Input Fields
@@ -2510,7 +2681,20 @@ impl Render for Workspace {
                                                 this.test_connection(cx);
                                             }
                                         }))
-                                        .child(if self.is_connecting { "⏳ Testing..." } else { "🔍 Test Connection" })
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(
+                                                    if self.is_connecting {
+                                                        div().child("⏳")
+                                                    } else {
+                                                        div().child(img("icons/sql_validate.svg").w(px(14.0)).h(px(14.0)))
+                                                    }
+                                                )
+                                                .child(if self.is_connecting { "Testing..." } else { "Test Connection" })
+                                        )
                                 )
                                 .child(
                                     div()
@@ -2554,7 +2738,20 @@ impl Render for Workspace {
                                                         this.connect_to_database(cx);
                                                     }
                                                 }))
-                                                .child(if self.is_connecting { "⏳ Connecting..." } else { "🔌 Connect Database" })
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1p5()
+                                                        .child(
+                                                            if self.is_connecting {
+                                                                div().child("⏳")
+                                                            } else {
+                                                                div().child(img("icons/connect.svg").w(px(14.0)).h(px(14.0)))
+                                                            }
+                                                        )
+                                                        .child(if self.is_connecting { "Connecting..." } else { "Connect Database" })
+                                                )
                                         )
                                 )
                         )

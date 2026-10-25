@@ -174,6 +174,7 @@ impl DatabaseDriver for SqliteDriver {
                 schema: row.get(0)?,
                 name: row.get(1)?,
                 table_type: row.get(2)?,
+                estimated_rows: None,
             })
         })?;
 

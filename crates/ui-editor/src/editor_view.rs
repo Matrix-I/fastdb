@@ -212,11 +212,11 @@ impl SqlEditorView {
                 let is_sel = idx == self.selected_completion;
                 let bg = if is_sel { theme.bg_surface_selected } else { theme.bg_surface };
 
-                let icon = match item.kind {
-                    CompletionKind::Keyword => "🔑",
-                    CompletionKind::Table => "📋",
-                    CompletionKind::Column => "🔹",
-                    CompletionKind::Function => "⚡",
+                let icon_path = match item.kind {
+                    CompletionKind::Keyword => "icons/sql.svg",
+                    CompletionKind::Table => "icons/table.svg",
+                    CompletionKind::Column => "icons/column.svg",
+                    CompletionKind::Function => "icons/function.svg",
                 };
 
                 popup = popup.child(
@@ -234,7 +234,7 @@ impl SqlEditorView {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(icon)
+                                .child(img(icon_path).w(px(14.0)).h(px(14.0)))
                                 .child(
                                     div()
                                         .font_weight(if is_sel { FontWeight::BOLD } else { FontWeight::NORMAL })

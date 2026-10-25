@@ -222,19 +222,26 @@ impl DatabaseDriver for PostgresDriver {
     async fn list_tables(&self) -> Result<Vec<TableSummary>> {
         let client = self.get_or_connect().await?;
         let sql = r#"
-            SELECT table_schema, table_name, table_type
-            FROM information_schema.tables
-            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-            ORDER BY table_schema, table_name;
+            SELECT t.table_schema, t.table_name, t.table_type,
+                   CASE WHEN c.reltuples >= 0 THEN c.reltuples::bigint ELSE NULL END as est_rows
+            FROM information_schema.tables t
+            LEFT JOIN pg_namespace n ON n.nspname = t.table_schema
+            LEFT JOIN pg_class c ON c.relname = t.table_name AND c.relnamespace = n.oid
+            WHERE t.table_schema NOT IN ('information_schema', 'pg_catalog')
+            ORDER BY t.table_schema, t.table_name;
         "#;
 
         let rows = client.query(sql, &[]).await?;
         let tables = rows
             .into_iter()
-            .map(|r| TableSummary {
-                schema: r.get(0),
-                name: r.get(1),
-                table_type: r.get(2),
+            .map(|r| {
+                let est_rows: Option<i64> = r.get(3);
+                TableSummary {
+                    schema: r.get(0),
+                    name: r.get(1),
+                    table_type: r.get(2),
+                    estimated_rows: est_rows.and_then(|x| if x >= 0 { Some(x as u64) } else { None }),
+                }
             })
             .collect();
 

@@ -222,19 +222,20 @@ impl DatabaseDriver for MySqlDriver {
         let pool = self.get_pool().await?;
         let mut conn = pool.get_conn().await?;
         let sql = r#"
-            SELECT table_schema, table_name, table_type
+            SELECT table_schema, table_name, table_type, table_rows
             FROM information_schema.tables
             WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             ORDER BY table_schema, table_name;
         "#;
 
-        let rows: Vec<(String, String, String)> = conn.query(sql).await?;
+        let rows: Vec<(String, String, String, Option<u64>)> = conn.query(sql).await?;
         let tables = rows
             .into_iter()
-            .map(|(schema, name, table_type)| TableSummary {
+            .map(|(schema, name, table_type, estimated_rows)| TableSummary {
                 schema,
                 name,
                 table_type,
+                estimated_rows,
             })
             .collect();
 

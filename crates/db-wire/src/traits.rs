@@ -62,6 +62,7 @@ pub struct TableSummary {
     pub schema: String,
     pub name: String,
     pub table_type: String, // "BASE TABLE" or "VIEW"
+    pub estimated_rows: Option<u64>,
 }
 
 #[async_trait]
