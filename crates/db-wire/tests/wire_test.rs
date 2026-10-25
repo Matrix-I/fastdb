@@ -78,3 +78,9 @@ async fn test_sqlite_driver_streaming_and_cancellation() {
     assert!(received_schema);
     assert!(received_completed);
 }
+
+#[tokio::test]
+async fn test_sqlite_ping_succeeds() {
+    let driver = SqliteDriver::new_memory();
+    driver.ping().await.expect("SQLite ping must succeed on a healthy connection");
+}

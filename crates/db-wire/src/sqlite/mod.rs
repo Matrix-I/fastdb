@@ -44,7 +44,8 @@ impl SqliteDriver {
 impl DatabaseDriver for SqliteDriver {
     async fn ping(&self) -> Result<()> {
         let conn = self.conn.lock();
-        conn.execute("SELECT 1;", [])?;
+        // `execute` rejects statements that return rows, so read the row instead
+        conn.query_row("SELECT 1;", [], |_| Ok(()))?;
         Ok(())
     }
 
