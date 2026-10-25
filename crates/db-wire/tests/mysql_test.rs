@@ -52,7 +52,7 @@ fn test_mysql_streams_rows_and_survives_short_lived_caller_runtime() {
     db_wire::get_runtime()
         .block_on(driver.execute_streaming(
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) \
-             SELECT i, NULL AS empty, CAST(i * 1.5 AS DECIMAL(10, 2)) AS price FROM n",
+             SELECT i, NULL AS missing, CAST(i * 1.5 AS DECIMAL(10, 2)) AS price FROM n",
             event_tx,
         ))
         .unwrap();
