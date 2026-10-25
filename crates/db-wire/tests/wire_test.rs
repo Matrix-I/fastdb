@@ -43,6 +43,9 @@ async fn test_sqlite_driver_streaming_and_cancellation() {
 
     assert_eq!(pager.num_cols(), 3);
     assert_eq!(pager.columns[1].name, "name");
+    // Result columns carry the declared column types
+    assert_eq!(pager.columns[0].data_type, mem_engine::DataType::Int4);
+    assert_eq!(pager.columns[2].data_type, mem_engine::DataType::Float8);
     assert_eq!(pager.total_rows(), 3);
     assert_eq!(pager.get_cell(0, 0), Some(b"1".to_vec()));
     assert_eq!(pager.get_cell(0, 1), Some(b"Alice".to_vec()));

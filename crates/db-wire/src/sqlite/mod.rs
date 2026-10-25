@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use mem_engine::{ColumnMeta, DataType, QueryResultPager};
+use mem_engine::{ColumnMeta, DataType};
 use parking_lot::Mutex;
 use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 
+use crate::stream::{report_error, RowSink};
 use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
 
 pub struct SqliteDriver {
@@ -41,37 +42,26 @@ impl SqliteDriver {
 
     fn stream_blocking(conn: &Mutex<Connection>, sql: &str, event_tx: &flume::Sender<StreamEvent>) -> Result<()> {
         let start_time = Instant::now();
-        let fail = |msg: String| {
-            let _ = event_tx.send(StreamEvent::Error(msg.clone()));
-            anyhow::anyhow!(msg)
-        };
-
         let conn = conn.lock();
         let mut stmt = conn
             .prepare(sql)
-            .map_err(|e| fail(format!("SQLite prepare error: {e}")))?;
+            .map_err(|e| report_error(event_tx, format!("SQLite prepare error: {e}")))?;
 
-        let col_count = stmt.column_count();
         let columns: Vec<ColumnMeta> = stmt
-            .column_names()
+            .columns()
             .iter()
-            .map(|name| ColumnMeta::new(*name, DataType::Text))
+            .map(|c| ColumnMeta::new(c.name(), c.decl_type().map(sqlite_decl_data_type).unwrap_or(DataType::Text)))
             .collect();
-
-        let pager = Arc::new(QueryResultPager::new(columns).map_err(|e| fail(format!("{e:#}")))?);
-        let _ = event_tx.send(StreamEvent::SchemaReady(Arc::clone(&pager)));
+        let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
 
         let mut rows = stmt
             .query([])
-            .map_err(|e| fail(format!("SQLite query error: {e}")))?;
+            .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?;
 
-        let mut total_rows = 0u64;
-        let mut last_event_instant = Instant::now();
-        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; col_count];
-
-        while let Some(row) = rows.next().map_err(|e| fail(format!("SQLite query error: {e}")))? {
-            for (i, buf) in cell_buffers.iter_mut().enumerate() {
-                *buf = match row.get_ref(i).map_err(|e| fail(format!("SQLite read error: {e}")))? {
+        while let Some(row) = rows.next().map_err(|e| sink.fail(format!("SQLite query error: {e}")))? {
+            for i in 0..sink.cells_mut().len() {
+                let value = row.get_ref(i).map_err(|e| sink.fail(format!("SQLite read error: {e}")))?;
+                sink.cells_mut()[i] = match value {
                     ValueRef::Null => None,
                     ValueRef::Integer(v) => Some(v.to_string().into_bytes()),
                     ValueRef::Real(v) => Some(v.to_string().into_bytes()),
@@ -79,24 +69,22 @@ impl SqliteDriver {
                     ValueRef::Blob(v) => Some(v.to_vec()),
                 };
             }
-
-            let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-            let (count, rollover) = pager.append_row(cell_slices).map_err(|e| fail(format!("{e:#}")))?;
-            total_rows = count;
-
-            if rollover || last_event_instant.elapsed().as_millis() >= 16 {
-                let _ = event_tx.send(StreamEvent::PageAppended { total_rows });
-                last_event_instant = Instant::now();
-            }
+            sink.commit_row()?;
         }
 
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        let _ = event_tx.send(StreamEvent::Completed {
-            total_rows,
-            elapsed_ms,
-        });
-
+        sink.finish();
         Ok(())
+    }
+}
+
+/// Maps a declared column type to the engine's DataType
+fn sqlite_decl_data_type(decl_type: &str) -> DataType {
+    match decl_type.to_uppercase().as_str() {
+        "INTEGER" | "INT" => DataType::Int4,
+        "BIGINT" => DataType::Int8,
+        "REAL" | "FLOAT" | "DOUBLE" => DataType::Float8,
+        "BLOB" => DataType::Bytea,
+        _ => DataType::Text,
     }
 }
 
@@ -156,15 +144,7 @@ impl DatabaseDriver for SqliteDriver {
             let notnull: i32 = row.get(3)?;
             let pk: i32 = row.get(5)?;
 
-            let data_type = match dtype_str.to_uppercase().as_str() {
-                "INTEGER" | "INT" => DataType::Int4,
-                "BIGINT" => DataType::Int8,
-                "REAL" | "FLOAT" | "DOUBLE" => DataType::Float8,
-                "BLOB" => DataType::Bytea,
-                _ => DataType::Text,
-            };
-
-            Ok(ColumnMeta::new(name, data_type)
+            Ok(ColumnMeta::new(name, sqlite_decl_data_type(&dtype_str))
                 .with_nullable(notnull == 0)
                 .with_pk(pk > 0))
         })?;

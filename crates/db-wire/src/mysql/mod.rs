@@ -3,12 +3,13 @@ use std::time::Instant;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
-use mem_engine::{ColumnMeta, DataType, QueryResultPager};
+use mem_engine::{ColumnMeta, DataType};
 use mysql_async::prelude::*;
 use mysql_async::{Opts, OptsBuilder, Params, Pool, Value};
 use parking_lot::Mutex;
 use platform_hal::socket::{detect_local_unix_socket, DbKind};
 
+use crate::stream::{report_error, RowSink};
 use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
 
 pub struct MySqlDriver {
@@ -84,76 +85,108 @@ impl MySqlDriver {
         active_conn_id: Arc<Mutex<Option<u32>>>,
     ) -> Result<()> {
         let start_time = Instant::now();
-        let fail = |msg: String| {
-            let _ = event_tx.send(StreamEvent::Error(msg.clone()));
-            anyhow::anyhow!(msg)
-        };
-
         let mut conn = pool
             .get_conn()
             .await
-            .map_err(|e| fail(format!("MySQL connection error: {e}")))?;
+            .map_err(|e| report_error(&event_tx, format!("MySQL connection error: {e}")))?;
         *active_conn_id.lock() = Some(conn.id());
 
         let result = async {
             let mut query_result = conn
                 .query_iter(sql)
                 .await
-                .map_err(|e| fail(format!("MySQL query execution error: {e}")))?;
+                .map_err(|e| report_error(&event_tx, format!("MySQL query execution error: {e}")))?;
 
             let columns: Vec<ColumnMeta> = query_result
                 .columns()
                 .as_ref()
                 .map(|cols| {
                     cols.iter()
-                        .map(|c| ColumnMeta::new(c.name_str().to_string(), DataType::Text))
+                        .map(|c| ColumnMeta::new(c.name_str().to_string(), mysql_column_data_type(c)))
                         .collect()
                 })
                 .unwrap_or_default();
-
-            let num_cols = columns.len();
-            let pager = Arc::new(QueryResultPager::new(columns).map_err(|e| fail(format!("{e:#}")))?);
-            let _ = event_tx.send(StreamEvent::SchemaReady(Arc::clone(&pager)));
-
-            let mut total_rows = 0u64;
-            let mut last_event_instant = Instant::now();
-            let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
+            let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
 
             let stream = query_result
                 .stream::<mysql_async::Row>()
                 .await
-                .map_err(|e| fail(format!("MySQL row stream error: {e}")))?;
+                .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
             if let Some(mut stream) = stream {
                 while let Some(row_res) = stream.next().await {
-                    let row = row_res.map_err(|e| fail(format!("MySQL row stream error: {e}")))?;
-
-                    for (i, buf) in cell_buffers.iter_mut().enumerate() {
-                        *buf = mysql_value_to_bytes(row.get(i));
+                    let row = row_res.map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+                    for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
+                        *cell = mysql_value_to_bytes(row.get(i));
                     }
-
-                    let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-                    let (rows, rollover) = pager.append_row(cell_slices).map_err(|e| fail(format!("{e:#}")))?;
-                    total_rows = rows;
-
-                    if rollover || last_event_instant.elapsed().as_millis() >= 16 {
-                        let _ = event_tx.send(StreamEvent::PageAppended { total_rows });
-                        last_event_instant = Instant::now();
-                    }
+                    sink.commit_row()?;
                 }
             }
-            Ok::<u64, anyhow::Error>(total_rows)
+            Ok::<RowSink, anyhow::Error>(sink)
         }
         .await;
         *active_conn_id.lock() = None;
 
-        let total_rows = result?;
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        let _ = event_tx.send(StreamEvent::Completed {
-            total_rows,
-            elapsed_ms,
-        });
+        result?.finish();
         Ok(())
     }
+}
+
+/// Maps a result column's wire type to the engine's DataType
+fn mysql_column_data_type(column: &mysql_async::Column) -> DataType {
+    use mysql_async::consts::{ColumnFlags, ColumnType};
+    match column.column_type() {
+        ColumnType::MYSQL_TYPE_TINY | ColumnType::MYSQL_TYPE_SHORT | ColumnType::MYSQL_TYPE_YEAR => DataType::Int2,
+        ColumnType::MYSQL_TYPE_LONG | ColumnType::MYSQL_TYPE_INT24 => DataType::Int4,
+        ColumnType::MYSQL_TYPE_LONGLONG => DataType::Int8,
+        ColumnType::MYSQL_TYPE_FLOAT => DataType::Float4,
+        ColumnType::MYSQL_TYPE_DOUBLE => DataType::Float8,
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => DataType::Numeric,
+        ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => DataType::Date,
+        ColumnType::MYSQL_TYPE_TIME | ColumnType::MYSQL_TYPE_TIME2 => DataType::Time,
+        ColumnType::MYSQL_TYPE_DATETIME
+        | ColumnType::MYSQL_TYPE_DATETIME2
+        | ColumnType::MYSQL_TYPE_TIMESTAMP
+        | ColumnType::MYSQL_TYPE_TIMESTAMP2 => DataType::Timestamp,
+        ColumnType::MYSQL_TYPE_JSON => DataType::Json,
+        ColumnType::MYSQL_TYPE_VARCHAR | ColumnType::MYSQL_TYPE_VAR_STRING => DataType::Varchar,
+        ColumnType::MYSQL_TYPE_TINY_BLOB
+        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+        | ColumnType::MYSQL_TYPE_LONG_BLOB
+        | ColumnType::MYSQL_TYPE_BLOB
+            if column.flags().contains(ColumnFlags::BINARY_FLAG) && column.character_set() == 63 =>
+        {
+            // Character set 63 is "binary": BLOB rather than TEXT
+            DataType::Bytea
+        }
+        _ => DataType::Text,
+    }
+}
+
+/// Maps an information_schema.columns data_type to the engine's DataType
+fn info_schema_data_type(data_type: &str) -> DataType {
+    match data_type.to_lowercase().as_str() {
+        "tinyint" | "smallint" | "year" => DataType::Int2,
+        "int" | "integer" | "mediumint" => DataType::Int4,
+        "bigint" => DataType::Int8,
+        "float" => DataType::Float4,
+        "double" => DataType::Float8,
+        "decimal" => DataType::Numeric,
+        "json" => DataType::Json,
+        "varchar" => DataType::Varchar,
+        "date" => DataType::Date,
+        "time" => DataType::Time,
+        "datetime" | "timestamp" => DataType::Timestamp,
+        "blob" | "tinyblob" | "mediumblob" | "longblob" | "binary" | "varbinary" => DataType::Bytea,
+        _ => DataType::Text,
+    }
+}
+
+/// Builds column metadata from an information_schema.columns row
+fn info_schema_column(name: String, data_type: &str, is_nullable: &str, column_key: &str) -> ColumnMeta {
+    ColumnMeta::new(name, info_schema_data_type(data_type))
+        .with_nullable(is_nullable == "YES")
+        .with_pk(column_key == "PRI")
+        .with_raw_type(data_type)
 }
 
 fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
@@ -236,21 +269,7 @@ impl DatabaseDriver for MySqlDriver {
             self.query_rows(sql.to_string(), (schema.to_string(), table.to_string())).await?;
         let cols = rows
             .into_iter()
-            .map(|(name, dtype, is_null, col_key)| {
-                let data_type = match dtype.to_lowercase().as_str() {
-                    "tinyint" | "smallint" => DataType::Int2,
-                    "int" | "integer" | "mediumint" => DataType::Int4,
-                    "bigint" => DataType::Int8,
-                    "float" => DataType::Float4,
-                    "double" => DataType::Float8,
-                    "decimal" => DataType::Numeric,
-                    "json" => DataType::Json,
-                    _ => DataType::Text,
-                };
-                ColumnMeta::new(name, data_type)
-                    .with_nullable(is_null == "YES")
-                    .with_pk(col_key == "PRI")
-            })
+            .map(|(name, dtype, is_null, col_key)| info_schema_column(name, &dtype, &is_null, &col_key))
             .collect();
 
         Ok(cols)
@@ -267,19 +286,7 @@ impl DatabaseDriver for MySqlDriver {
         let rows: Vec<(String, String, String, String, String, String)> = self.query_rows(sql.to_string(), ()).await?;
         let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> = std::collections::BTreeMap::new();
         for (schema, table, name, dtype, is_null, col_key) in rows {
-            let data_type = match dtype.to_lowercase().as_str() {
-                "tinyint" | "smallint" => DataType::Int2,
-                "int" | "integer" | "mediumint" => DataType::Int4,
-                "bigint" => DataType::Int8,
-                "float" => DataType::Float4,
-                "double" => DataType::Float8,
-                "decimal" => DataType::Numeric,
-                "json" => DataType::Json,
-                _ => DataType::Text,
-            };
-            let col = ColumnMeta::new(name, data_type)
-                .with_nullable(is_null == "YES")
-                .with_pk(col_key == "PRI");
+            let col = info_schema_column(name, &dtype, &is_null, &col_key);
             map.entry((schema, table)).or_default().push(col);
         }
 
@@ -309,3 +316,32 @@ impl DatabaseDriver for MySqlDriver {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_info_schema_column_mapping() {
+        let col = info_schema_column("id".to_string(), "bigint", "NO", "PRI");
+        assert_eq!(col.data_type, DataType::Int8);
+        assert!(col.is_primary_key);
+        assert!(!col.nullable);
+        assert_eq!(col.raw_type.as_deref(), Some("bigint"));
+
+        assert_eq!(info_schema_data_type("DATETIME"), DataType::Timestamp);
+        assert_eq!(info_schema_data_type("varbinary"), DataType::Bytea);
+        assert_eq!(info_schema_data_type("enum"), DataType::Text);
+    }
+
+    #[test]
+    fn test_value_to_bytes() {
+        assert_eq!(mysql_value_to_bytes(None), None);
+        assert_eq!(mysql_value_to_bytes(Some(Value::NULL)), None);
+        assert_eq!(mysql_value_to_bytes(Some(Value::Int(-7))), Some(b"-7".to_vec()));
+        assert_eq!(
+            mysql_value_to_bytes(Some(Value::Date(2024, 2, 29, 13, 5, 9, 0))),
+            Some(b"2024-02-29 13:05:09".to_vec())
+        );
+        assert_eq!(mysql_value_to_bytes(Some(Value::Time(true, 1, 2, 3, 4, 0))), Some(b"-1d 02:03:04".to_vec()));
+    }
+}

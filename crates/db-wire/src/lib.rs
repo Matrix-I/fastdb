@@ -2,6 +2,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 pub mod traits;
+mod stream;
 pub mod ssh_tunnel;
 pub mod export;
 pub mod postgres;

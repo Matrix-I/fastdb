@@ -5,12 +5,13 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
-use mem_engine::{ColumnMeta, QueryResultPager};
+use mem_engine::ColumnMeta;
 use parking_lot::Mutex;
 use platform_hal::socket::{detect_local_unix_socket, DbKind};
 use tokio_postgres::{CancelToken, Client, NoTls};
 use tracing::{debug, info, warn};
 
+use crate::stream::{report_error, RowSink};
 use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
 use binary_decoder::{decode_pg_cell, pg_type_to_data_type};
 
@@ -26,6 +27,54 @@ fn pg_error_message(e: &tokio_postgres::Error) -> String {
         Some(db) => format!("{}: {}", db.severity(), db.message()),
         None => e.to_string(),
     }
+}
+
+/// Maps an information_schema.columns data_type to the engine's DataType
+fn info_schema_data_type(data_type: &str) -> mem_engine::DataType {
+    use mem_engine::DataType;
+    match data_type.to_lowercase().as_str() {
+        "integer" | "int" => DataType::Int4,
+        "bigint" => DataType::Int8,
+        "smallint" => DataType::Int2,
+        "boolean" => DataType::Bool,
+        "numeric" | "decimal" => DataType::Numeric,
+        "real" => DataType::Float4,
+        "double precision" => DataType::Float8,
+        "json" | "jsonb" => DataType::Json,
+        "uuid" => DataType::Uuid,
+        "character varying" | "varchar" => DataType::Varchar,
+        "date" => DataType::Date,
+        "time without time zone" => DataType::Time,
+        "timestamp without time zone" => DataType::Timestamp,
+        "timestamp with time zone" => DataType::TimestampTz,
+        "bytea" => DataType::Bytea,
+        _ => DataType::Text,
+    }
+}
+
+/// Builds column metadata from an information_schema.columns row
+fn info_schema_column(
+    name: String,
+    data_type: &str,
+    is_nullable: &str,
+    default_val: Option<String>,
+    collation: Option<String>,
+) -> ColumnMeta {
+    let raw_type = if data_type.eq_ignore_ascii_case("character varying") {
+        "varchar"
+    } else {
+        data_type
+    };
+    let mut col = ColumnMeta::new(name, info_schema_data_type(data_type))
+        .with_nullable(is_nullable == "YES")
+        .with_raw_type(raw_type);
+    if let Some(def) = default_val {
+        col = col.with_default(def);
+    }
+    if let Some(coll) = collation {
+        col = col.with_collation(coll);
+    }
+    col
 }
 
 impl PostgresDriver {
@@ -102,12 +151,10 @@ impl DatabaseDriver for PostgresDriver {
 
     async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()> {
         let start_time = Instant::now();
-        let fail = |msg: String| {
-            let _ = event_tx.send(StreamEvent::Error(msg.clone()));
-            anyhow::anyhow!(msg)
-        };
-
-        let client = self.get_or_connect().await.map_err(|e| fail(format!("{e:#}")))?;
+        let client = self
+            .get_or_connect()
+            .await
+            .map_err(|e| report_error(&event_tx, format!("{e:#}")))?;
 
         // Update cancel token for this connection
         *self.cancel_token.lock() = Some(client.cancel_token());
@@ -115,55 +162,31 @@ impl DatabaseDriver for PostgresDriver {
         let statement = client
             .prepare(sql)
             .await
-            .map_err(|e| fail(format!("SQL Preparation Error: {}", pg_error_message(&e))))?;
+            .map_err(|e| report_error(&event_tx, format!("SQL Preparation Error: {}", pg_error_message(&e))))?;
 
-        // Extract column metadata from statement
         let columns: Vec<ColumnMeta> = statement
             .columns()
             .iter()
             .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
             .collect();
-
-        let num_cols = columns.len();
-        let pager = Arc::new(QueryResultPager::new(columns).map_err(|e| fail(format!("{e:#}")))?);
-        let _ = event_tx.send(StreamEvent::SchemaReady(Arc::clone(&pager)));
+        let mut sink = RowSink::start(columns, event_tx, start_time)?;
 
         let row_stream = client
             .query_raw(&statement, std::iter::empty::<i32>())
             .await
-            .map_err(|e| fail(format!("Query execution error: {}", pg_error_message(&e))))?;
-
+            .map_err(|e| sink.fail(format!("Query execution error: {}", pg_error_message(&e))))?;
         futures::pin_mut!(row_stream);
 
-        let mut total_rows = 0u64;
-        let mut last_event_instant = Instant::now();
-        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
-
         while let Some(row_res) = row_stream.next().await {
-            let row = row_res.map_err(|e| fail(format!("Row stream error: {}", pg_error_message(&e))))?;
-
-            for (col_idx, buf) in cell_buffers.iter_mut().enumerate() {
-                *buf = decode_pg_cell(&row, col_idx);
+            let row = row_res.map_err(|e| sink.fail(format!("Row stream error: {}", pg_error_message(&e))))?;
+            for (col_idx, cell) in sink.cells_mut().iter_mut().enumerate() {
+                *cell = decode_pg_cell(&row, col_idx);
             }
-
-            let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-            let (rows, rollover) = pager.append_row(cell_slices).map_err(|e| fail(format!("{e:#}")))?;
-            total_rows = rows;
-
-            // Throttled notification: notify every 16ms (60 FPS) or on page rollover
-            if rollover || last_event_instant.elapsed().as_millis() >= 16 {
-                let _ = event_tx.send(StreamEvent::PageAppended { total_rows });
-                last_event_instant = Instant::now();
-            }
+            sink.commit_row()?;
         }
 
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        let _ = event_tx.send(StreamEvent::Completed {
-            total_rows,
-            elapsed_ms,
-        });
-
-        debug!("Postgres query streaming completed: {} rows in {}ms", total_rows, elapsed_ms);
+        let total_rows = sink.finish();
+        debug!("Postgres query streaming completed: {} rows in {}ms", total_rows, start_time.elapsed().as_millis());
         Ok(())
     }
 
@@ -223,34 +246,7 @@ impl DatabaseDriver for PostgresDriver {
                 let is_null_str: String = r.get(2);
                 let default_val: Option<String> = r.get(3);
                 let collation: Option<String> = r.get(4);
-                let data_type = match dtype_str.to_lowercase().as_str() {
-                    "integer" | "int" => mem_engine::DataType::Int4,
-                    "bigint" => mem_engine::DataType::Int8,
-                    "smallint" => mem_engine::DataType::Int2,
-                    "boolean" => mem_engine::DataType::Bool,
-                    "numeric" | "decimal" => mem_engine::DataType::Numeric,
-                    "real" => mem_engine::DataType::Float4,
-                    "double precision" => mem_engine::DataType::Float8,
-                    "json" | "jsonb" => mem_engine::DataType::Json,
-                    "uuid" => mem_engine::DataType::Uuid,
-                    "character varying" | "varchar" => mem_engine::DataType::Varchar,
-                    _ => mem_engine::DataType::Text,
-                };
-                let raw_type = if dtype_str.to_lowercase() == "character varying" {
-                    "varchar".to_string()
-                } else {
-                    dtype_str
-                };
-                let mut col = ColumnMeta::new(name, data_type)
-                    .with_nullable(is_null_str == "YES")
-                    .with_raw_type(raw_type);
-                if let Some(def) = default_val {
-                    col = col.with_default(def);
-                }
-                if let Some(coll) = collation {
-                    col = col.with_collation(coll);
-                }
-                col
+                info_schema_column(name, &dtype_str, &is_null_str, default_val, collation)
             })
             .collect();
 
@@ -290,34 +286,7 @@ impl DatabaseDriver for PostgresDriver {
             let is_pk: i32 = r.get(5);
             let default_val: Option<String> = r.get(6);
             let collation: Option<String> = r.get(7);
-            let data_type = match dtype_str.to_lowercase().as_str() {
-                "integer" | "int" => mem_engine::DataType::Int4,
-                "bigint" => mem_engine::DataType::Int8,
-                "smallint" => mem_engine::DataType::Int2,
-                "boolean" => mem_engine::DataType::Bool,
-                "numeric" | "decimal" => mem_engine::DataType::Numeric,
-                "real" => mem_engine::DataType::Float4,
-                "double precision" => mem_engine::DataType::Float8,
-                "json" | "jsonb" => mem_engine::DataType::Json,
-                "uuid" => mem_engine::DataType::Uuid,
-                "character varying" | "varchar" => mem_engine::DataType::Varchar,
-                _ => mem_engine::DataType::Text,
-            };
-            let raw_type = if dtype_str.to_lowercase() == "character varying" {
-                "varchar".to_string()
-            } else {
-                dtype_str
-            };
-            let mut col = ColumnMeta::new(name, data_type)
-                .with_nullable(is_null_str == "YES")
-                .with_pk(is_pk > 0)
-                .with_raw_type(raw_type);
-            if let Some(def) = default_val {
-                col = col.with_default(def);
-            }
-            if let Some(coll) = collation {
-                col = col.with_collation(coll);
-            }
+            let col = info_schema_column(name, &dtype_str, &is_null_str, default_val, collation).with_pk(is_pk > 0);
             map.entry((schema, table)).or_default().push(col);
         }
 
@@ -346,5 +315,31 @@ impl DatabaseDriver for PostgresDriver {
         "#;
         let rows = client.query(sql, &[]).await?;
         Ok(rows.into_iter().map(|r| (r.get(0), r.get(1), r.get(2))).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mem_engine::DataType;
+
+    #[test]
+    fn test_info_schema_column_mapping() {
+        let col = info_schema_column(
+            "email".to_string(),
+            "character varying",
+            "NO",
+            Some("''::character varying".to_string()),
+            Some("C".to_string()),
+        );
+        assert_eq!(col.data_type, DataType::Varchar);
+        assert_eq!(col.raw_type.as_deref(), Some("varchar"));
+        assert!(!col.nullable);
+        assert_eq!(col.default_val.as_deref(), Some("''::character varying"));
+        assert_eq!(col.collation.as_deref(), Some("C"));
+
+        assert_eq!(info_schema_data_type("timestamp with time zone"), DataType::TimestampTz);
+        assert_eq!(info_schema_data_type("BIGINT"), DataType::Int8);
+        assert_eq!(info_schema_data_type("tsvector"), DataType::Text);
     }
 }
