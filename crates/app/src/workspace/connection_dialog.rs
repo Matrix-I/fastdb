@@ -190,7 +190,7 @@ impl Workspace {
                                             .cursor_text()
                                             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                 this.active_field = Some(FormField::Name);
-                                                this.field_selected_all = event.click_count() >= 2;
+                                                this.field_anchor = (event.click_count() >= 2).then_some(0);
                                                 this.field_cursor = usize::MAX;
                                                 this.cursor_visible = true;
                                                 window.focus(&this.focus_handle);
@@ -200,7 +200,7 @@ impl Workspace {
                                                 &self.form_name,
                                                 "(optional - defaults to database name)",
                                                 is_name_active,
-                                                if is_name_active { self.field_selected_all } else { false },
+                                                self.field_anchor,
                                                 self.field_cursor,
                                                 self.cursor_visible,
                                                 theme,
@@ -232,7 +232,7 @@ impl Workspace {
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                         this.active_field = Some(FormField::Host);
-                                                        this.field_selected_all = event.click_count() >= 2;
+                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
@@ -242,7 +242,7 @@ impl Workspace {
                                                         &self.form_host,
                                                         "localhost",
                                                         is_host_active,
-                                                        if is_host_active { self.field_selected_all } else { false },
+                                                        self.field_anchor,
                                                         self.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
@@ -269,7 +269,7 @@ impl Workspace {
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                         this.active_field = Some(FormField::Port);
-                                                        this.field_selected_all = event.click_count() >= 2;
+                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
@@ -279,7 +279,7 @@ impl Workspace {
                                                         &self.form_port,
                                                         "5432",
                                                         is_port_active,
-                                                        if is_port_active { self.field_selected_all } else { false },
+                                                        self.field_anchor,
                                                         self.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
@@ -316,7 +316,7 @@ impl Workspace {
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                         this.active_field = Some(FormField::Database);
-                                                        this.field_selected_all = event.click_count() >= 2;
+                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
@@ -326,7 +326,7 @@ impl Workspace {
                                                         &self.form_database,
                                                         if is_sqlite { "e.g. ./test.db or :memory:" } else { "database name" },
                                                         is_db_active,
-                                                        if is_db_active { self.field_selected_all } else { false },
+                                                        self.field_anchor,
                                                         self.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
@@ -353,7 +353,7 @@ impl Workspace {
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                         this.active_field = Some(FormField::User);
-                                                        this.field_selected_all = event.click_count() >= 2;
+                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
@@ -363,7 +363,7 @@ impl Workspace {
                                                         &self.form_user,
                                                         "username",
                                                         is_user_active,
-                                                        if is_user_active { self.field_selected_all } else { false },
+                                                        self.field_anchor,
                                                         self.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
@@ -416,7 +416,7 @@ impl Workspace {
                                             .cursor_text()
                                             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                                                 this.active_field = Some(FormField::Password);
-                                                this.field_selected_all = event.click_count() >= 2;
+                                                this.field_anchor = (event.click_count() >= 2).then_some(0);
                                                 this.field_cursor = usize::MAX;
                                                 this.cursor_visible = true;
                                                 window.focus(&this.focus_handle);
@@ -426,7 +426,7 @@ impl Workspace {
                                                 &display_pass,
                                                 "(optional password)",
                                                 is_pass_active,
-                                                if is_pass_active { self.field_selected_all } else { false },
+                                                self.field_anchor,
                                                 self.field_cursor,
                                                 self.cursor_visible,
                                                 theme,

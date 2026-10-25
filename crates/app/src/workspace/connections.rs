@@ -440,7 +440,7 @@ impl Workspace {
     fn show_connection_error_dialog(&mut self) {
         self.active_field = Some(if self.form_password.is_empty() { FormField::Password } else { FormField::Database });
         self.field_cursor = usize::MAX;
-        self.field_selected_all = false;
+        self.field_anchor = None;
         self.cursor_visible = true;
         self.show_password = false;
         self.form_history.clear();
@@ -654,7 +654,7 @@ impl Workspace {
         self.form_use_unix_socket = false;
         self.active_field = Some(FormField::Name);
         self.field_cursor = usize::MAX;
-        self.field_selected_all = false;
+        self.field_anchor = None;
         self.cursor_visible = true;
         self.show_password = false;
         self.test_result = None;
@@ -688,7 +688,7 @@ impl Workspace {
             self.test_result = None;
             self.active_field = Some(FormField::Database);
             self.field_cursor = usize::MAX;
-            self.field_selected_all = false;
+            self.field_anchor = None;
             self.cursor_visible = true;
             self.show_password = false;
             self.form_history.clear();

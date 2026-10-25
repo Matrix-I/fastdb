@@ -35,7 +35,7 @@ impl Workspace {
         }
         let text = tab.grid.cell_value(row, col).unwrap_or_default();
         tab.grid.selection = ui_grid::GridSelection::single(row, col);
-        tab.grid.editing_cell = Some(CellEdit { row, col, text, caret: usize::MAX, selected_all: true });
+        tab.grid.editing_cell = Some(CellEdit { row, col, text, caret: usize::MAX, anchor: Some(0) });
         self.cell_edit_history.clear();
         self.is_filter_focused = false;
         self.blur_fetch_size();
@@ -332,13 +332,11 @@ impl Workspace {
     pub(super) fn cell_editor_renderer(&self, cx: &mut Context<Self>) -> Option<(u64, usize, CellEditorRenderer)> {
         let edit = self.tabs.get(self.active_tab)?.grid.editing_cell.clone()?;
         let caret_visible = self.cursor_visible;
-        let selection_bg = self.theme.bg_grid_cell_selected;
         let workspace = cx.entity().downgrade();
-        let pick: CaretPick = Rc::new(move |index, clicks, _, cx| {
+        let pick: CaretPick = Rc::new(move |index, kind, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
                 if let Some(e) = this.tabs.get_mut(this.active_tab).and_then(|t| t.grid.editing_cell.as_mut()) {
-                    e.caret = index;
-                    e.selected_all = clicks >= 2;
+                    apply_pick(&mut e.caret, &mut e.anchor, index, kind, true);
                 }
                 this.cursor_visible = true;
                 cx.notify();
@@ -346,13 +344,13 @@ impl Workspace {
         });
         let (row, col) = (edit.row, edit.col);
         let render: CellEditorRenderer = Rc::new(move || {
-            let caret = (!edit.selected_all).then(|| edit.caret.min(edit.text.chars().count()));
+            let len = edit.text.chars().count();
+            let selection = selection_range(edit.anchor, edit.caret, len);
             div()
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .when(edit.selected_all, |d| d.bg(selection_bg))
-                .children(render_caret_text(&edit.text, caret, caret_visible, &pick))
+                .children(render_caret_text(&edit.text, Some(edit.caret.min(len)), caret_visible, selection, &pick))
                 .into_any_element()
         });
         Some((row, col, render))

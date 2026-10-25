@@ -26,7 +26,8 @@ pub struct CellEdit {
     pub col: usize,
     pub text: String,
     pub caret: usize,
-    pub selected_all: bool,
+    /// Other end of the text selection (a char index), if any
+    pub anchor: Option<usize>,
 }
 
 /// Draws the content of the cell being edited; the grid supplies the cell box around it

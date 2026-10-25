@@ -20,7 +20,7 @@ impl Workspace {
         {
             if self.show_connection_modal {
                 self.show_connection_modal = false;
-                self.field_selected_all = false;
+                self.field_anchor = None;
             } else if !self.tabs.is_empty() {
                 self.close_tab(self.active_tab);
             }
@@ -39,7 +39,7 @@ impl Workspace {
         if self.show_connection_modal {
             if event.keystroke.key == "escape" {
                 self.show_connection_modal = false;
-                self.field_selected_all = false;
+                self.field_anchor = None;
                 cx.notify();
                 return;
             }
@@ -48,7 +48,7 @@ impl Workspace {
                 return;
             }
             if event.keystroke.key == "tab" {
-                self.field_selected_all = false;
+                self.field_anchor = None;
                 self.field_cursor = usize::MAX;
                 self.cursor_visible = true;
                 self.active_field = match (self.selected_driver_kind, self.active_field) {
@@ -69,12 +69,12 @@ impl Workspace {
             }
             if let Some(field) = self.active_field {
                 let mut caret = self.field_cursor;
-                let mut selected_all = self.field_selected_all;
+                let mut anchor = self.field_anchor;
                 let mut history = self.form_history.remove(&field).unwrap_or_default();
                 let input = LineInput {
                     text: self.field_value_mut(field),
                     caret: &mut caret,
-                    selected_all: &mut selected_all,
+                    anchor: &mut anchor,
                     digits_only: field == FormField::Port,
                     history: &mut history,
                 };
@@ -82,7 +82,7 @@ impl Workspace {
                 self.form_history.insert(field, history);
                 if consumed {
                     self.field_cursor = caret;
-                    self.field_selected_all = selected_all;
+                    self.field_anchor = anchor;
                     self.cursor_visible = true;
                     cx.notify();
                 }
@@ -104,7 +104,7 @@ impl Workspace {
                 if event.keystroke.key == "escape" {
                     tab.fetch.size_text = tab.fetch.size.to_string();
                     self.is_fetch_size_focused = false;
-                    self.fetch_size_selected_all = false;
+                    self.fetch_size_anchor = None;
                     cx.notify();
                 } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
                     // Like DBeaver, a new fetch size re-reads the result from the first row
@@ -113,7 +113,7 @@ impl Workspace {
                     let input = LineInput {
                         text: &mut tab.fetch.size_text,
                         caret: &mut self.fetch_size_cursor,
-                        selected_all: &mut self.fetch_size_selected_all,
+                        anchor: &mut self.fetch_size_anchor,
                         digits_only: true,
                         history: &mut tab.fetch.size_history,
                     };
@@ -125,7 +125,7 @@ impl Workspace {
             } else if self.is_filter_focused {
                 if event.keystroke.key == "escape" {
                     self.is_filter_focused = false;
-                    self.filter_selected_all = false;
+                    self.filter_anchor = None;
                     cx.notify();
                 } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
                     self.run_active_query(cx);
@@ -133,7 +133,7 @@ impl Workspace {
                     let input = LineInput {
                         text: &mut tab.filter_sql,
                         caret: &mut self.filter_cursor,
-                        selected_all: &mut self.filter_selected_all,
+                        anchor: &mut self.filter_anchor,
                         digits_only: false,
                         history: &mut tab.filter_history,
                     };
@@ -228,7 +228,7 @@ impl Workspace {
                 let input = LineInput {
                     text: &mut edit.text,
                     caret: &mut edit.caret,
-                    selected_all: &mut edit.selected_all,
+                    anchor: &mut edit.anchor,
                     digits_only: false,
                     history: &mut self.cell_edit_history,
                 };

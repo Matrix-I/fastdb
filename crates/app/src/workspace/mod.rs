@@ -37,7 +37,7 @@ pub use query::{group_thousands, TabState};
 #[cfg(test)]
 pub use query::QueryStatus;
 use ddl::render_dbeaver_col_badge;
-use text_input::{handle_line_key, render_caret_text, CaretPick, LineHistory, LineInput};
+use text_input::{apply_pick, handle_line_key, render_caret_text, selection_range, CaretPick, LineHistory, LineInput};
 use panel_resize::{PanelDrag, PanelSplitter, CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH};
 use value_panel::{ValuePanelState, VALUE_PANEL_WIDTH};
 use widgets::{dbeaver_driver_icon, render_field_content};
@@ -145,14 +145,17 @@ pub struct Workspace {
     pub show_right_panels: bool,
     pub value_panel: ValuePanelState,
     pub cursor_visible: bool,
-    pub field_selected_all: bool,
-    pub filter_selected_all: bool,
+    /// Selection anchor of the active form field (see `selection_range`)
+    pub field_anchor: Option<usize>,
+    /// Selection anchor of the filter bar
+    pub filter_anchor: Option<usize>,
     /// Caret of the active form field, as a char index (clamped; `usize::MAX` = end)
     pub field_cursor: usize,
     /// Caret of the filter bar, as a char index (clamped; `usize::MAX` = end)
     pub filter_cursor: usize,
     pub is_fetch_size_focused: bool,
-    pub fetch_size_selected_all: bool,
+    /// Selection anchor of the fetch size box
+    pub fetch_size_anchor: Option<usize>,
     /// Caret of the fetch size box, as a char index (clamped; `usize::MAX` = end)
     pub fetch_size_cursor: usize,
     /// Undo history of the text of the grid cell being edited, reset for each cell
@@ -278,12 +281,12 @@ impl Workspace {
             show_right_panels: false,
             value_panel: ValuePanelState::default(),
             cursor_visible: true,
-            field_selected_all: false,
-            filter_selected_all: false,
+            field_anchor: None,
+            filter_anchor: None,
             field_cursor: usize::MAX,
             filter_cursor: usize::MAX,
             is_fetch_size_focused: false,
-            fetch_size_selected_all: false,
+            fetch_size_anchor: None,
             fetch_size_cursor: usize::MAX,
             cell_edit_history: LineHistory::new(),
             nav_context_menu: None,

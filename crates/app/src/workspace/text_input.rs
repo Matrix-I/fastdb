@@ -1,17 +1,58 @@
 //! Caret-aware single-line text inputs: key handling for the connection form and the
-//! filter bar, and a renderer that lets a mouse click place the caret between characters.
+//! filter bar, and a renderer that lets a mouse click place the caret between characters
+//! and a drag select a range.
 //!
 //! Carets are char indices (not byte offsets) so the masked password field, which
 //! renders one bullet per character, maps clicks straight onto the real value.
+//! A selection runs between an anchor and the caret; no anchor (or one equal to the
+//! caret) means nothing is selected.
 
+use std::ops::Range;
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use ui_core::history::{EditKind, History, UndoKey};
 
 use super::*;
 
-/// Called with `(char_index, click_count)` when a character of an input is clicked.
-pub(super) type CaretPick = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
+/// How the mouse reached a caret position in an input
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PickKind {
+    /// Mouse button pressed; Shift extends the selection from the current caret
+    Press { clicks: usize, shift: bool },
+    /// Mouse moved with the left button held, extending the selection
+    Drag,
+}
+
+/// Called with `(char_index, kind)` when a character of an input is clicked or dragged over.
+pub(super) type CaretPick = Rc<dyn Fn(usize, PickKind, &mut Window, &mut App)>;
+
+/// Moves `caret` and `anchor` for a mouse pick. `was_active` is whether the input already
+/// had the keyboard: Shift+click and drags only extend a selection inside the focused input.
+pub(super) fn apply_pick(caret: &mut usize, anchor: &mut Option<usize>, index: usize, kind: PickKind, was_active: bool) {
+    match kind {
+        PickKind::Press { clicks, .. } if clicks >= 2 => {
+            *anchor = Some(0);
+            *caret = usize::MAX;
+        }
+        PickKind::Press { shift: true, .. } if was_active => {
+            anchor.get_or_insert(*caret);
+            *caret = index;
+        }
+        PickKind::Press { .. } => {
+            *anchor = Some(index);
+            *caret = index;
+        }
+        PickKind::Drag if was_active && anchor.is_some() => *caret = index,
+        PickKind::Drag => {}
+    }
+}
+
+/// Selected char range of an input with `len` chars, if any
+pub(super) fn selection_range(anchor: Option<usize>, caret: usize, len: usize) -> Option<Range<usize>> {
+    let (a, c) = (anchor?.min(len), caret.min(len));
+    (a != c).then(|| a.min(c)..a.max(c))
+}
 
 /// Undo history of a single-line input: snapshots of its text and caret
 pub type LineHistory = History<(String, usize)>;
@@ -20,7 +61,8 @@ pub type LineHistory = History<(String, usize)>;
 pub(super) struct LineInput<'a> {
     pub text: &'a mut String,
     pub caret: &'a mut usize,
-    pub selected_all: &'a mut bool,
+    /// Other end of the selection; see [`selection_range`]
+    pub anchor: &'a mut Option<usize>,
     pub digits_only: bool,
     pub history: &'a mut LineHistory,
 }
@@ -59,17 +101,35 @@ fn next_word(text: &str, caret: usize) -> usize {
     i
 }
 
+fn selection(input: &LineInput) -> Option<Range<usize>> {
+    selection_range(*input.anchor, *input.caret, char_len(input.text))
+}
+
+fn selected_text(input: &LineInput) -> Option<String> {
+    let range = selection(input)?;
+    Some(input.text.chars().skip(range.start).take(range.len()).collect())
+}
+
+/// Removes the selected chars, if any. Returns whether something was removed.
+fn delete_selection(input: &mut LineInput) -> bool {
+    let range = selection(input);
+    *input.anchor = None;
+    match range {
+        Some(range) => {
+            remove_range(input, range.start, range.end);
+            true
+        }
+        None => false,
+    }
+}
+
 fn insert(input: &mut LineInput, s: &str) {
     let s: String = if input.digits_only {
         s.chars().filter(|c| c.is_ascii_digit()).collect()
     } else {
         s.to_string()
     };
-    if *input.selected_all {
-        input.text.clear();
-        *input.caret = 0;
-        *input.selected_all = false;
-    }
+    delete_selection(input);
     let at = byte_at(input.text, *input.caret);
     input.text.insert_str(at, &s);
     *input.caret += char_len(&s);
@@ -94,7 +154,7 @@ pub(super) fn handle_line_key(mut input: LineInput, keystroke: &Keystroke, cx: &
         if let Some((text, caret)) = restored {
             *input.text = text;
             *input.caret = caret;
-            *input.selected_all = false;
+            *input.anchor = None;
         }
         return true;
     }
@@ -120,18 +180,29 @@ fn apply_line_key(input: &mut LineInput, keystroke: &Keystroke, cx: &mut App) ->
     let key = keystroke.key.as_str();
 
     if cmd && key.eq_ignore_ascii_case("a") {
-        *input.selected_all = true;
+        *input.anchor = Some(0);
+        *input.caret = len;
         return Some(EditKind::Other);
     }
+    // Copy and cut act on the selection, or on the whole text when nothing is selected
     if cmd && key.eq_ignore_ascii_case("c") {
-        cx.write_to_clipboard(ClipboardItem::new_string(input.text.clone()));
+        let copied = selected_text(input).unwrap_or_else(|| input.text.clone());
+        cx.write_to_clipboard(ClipboardItem::new_string(copied));
         return Some(EditKind::Other);
     }
     if cmd && key.eq_ignore_ascii_case("x") {
-        cx.write_to_clipboard(ClipboardItem::new_string(input.text.clone()));
-        input.text.clear();
-        *input.caret = 0;
-        *input.selected_all = false;
+        match selected_text(input) {
+            Some(cut) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(cut));
+                delete_selection(input);
+            }
+            None => {
+                cx.write_to_clipboard(ClipboardItem::new_string(input.text.clone()));
+                input.text.clear();
+                *input.caret = 0;
+                *input.anchor = None;
+            }
+        }
         return Some(EditKind::Other);
     }
     if cmd && key.eq_ignore_ascii_case("v") {
@@ -141,32 +212,15 @@ fn apply_line_key(input: &mut LineInput, keystroke: &Keystroke, cx: &mut App) ->
         return Some(EditKind::Other);
     }
 
-    // Caret movement. With everything selected, Left/Right collapse to that edge.
-    let target = match key {
-        "left" if *input.selected_all => Some(0),
-        "right" if *input.selected_all => Some(len),
-        "left" if mods.platform => Some(0),
-        "right" if mods.platform => Some(len),
-        "left" if mods.alt => Some(prev_word(input.text, caret)),
-        "right" if mods.alt => Some(next_word(input.text, caret)),
-        "left" => Some(caret.saturating_sub(1)),
-        "right" => Some((caret + 1).min(len)),
-        "up" | "home" => Some(0),
-        "down" | "end" => Some(len),
-        _ => None,
-    };
-    if let Some(target) = target {
-        *input.caret = target;
-        *input.selected_all = false;
+    if move_caret(input, key, mods) {
         return Some(EditKind::Other);
     }
 
-    let deleting_one = (key == "backspace" || key == "delete") && !*input.selected_all && !mods.platform && !mods.alt;
+    let had_selection = selection(input).is_some();
+    let deleting_one = (key == "backspace" || key == "delete") && !had_selection && !mods.platform && !mods.alt;
     match key {
-        "backspace" | "delete" if *input.selected_all => {
-            input.text.clear();
-            *input.caret = 0;
-            *input.selected_all = false;
+        "backspace" | "delete" if had_selection => {
+            delete_selection(input);
         }
         "backspace" if mods.platform => remove_range(input, 0, caret),
         "backspace" if mods.alt => {
@@ -188,16 +242,45 @@ fn apply_line_key(input: &mut LineInput, keystroke: &Keystroke, cx: &mut App) ->
                 .or_else(|| (key.chars().count() == 1).then_some(key));
             match typed {
                 Some(s) => {
-                    let replaces_selection = *input.selected_all;
                     insert(input, s);
-                    let word_char = !replaces_selection && !s.chars().all(char::is_whitespace);
+                    let word_char = !had_selection && !s.chars().all(char::is_whitespace);
                     return Some(if word_char { EditKind::Typing } else { EditKind::Other });
                 }
                 None => return None,
             }
         }
     }
+    *input.anchor = None;
     Some(if deleting_one { EditKind::Deleting } else { EditKind::Other })
+}
+
+/// Caret movement keys. With Shift they extend the selection (Shift+Cmd+Left selects to
+/// the start, Shift+Cmd+Right to the end); without it they drop the selection, and plain
+/// Left/Right collapse it to its edge. Returns `false` for any other key.
+fn move_caret(input: &mut LineInput, key: &str, mods: &Modifiers) -> bool {
+    let len = char_len(input.text);
+    let caret = *input.caret;
+    let selected = selection(input);
+    let target = match key {
+        "left" if mods.platform => 0,
+        "right" if mods.platform => len,
+        "left" if mods.alt => prev_word(input.text, caret),
+        "right" if mods.alt => next_word(input.text, caret),
+        "left" if !mods.shift && selected.is_some() => selected.as_ref().map_or(0, |r| r.start),
+        "right" if !mods.shift && selected.is_some() => selected.as_ref().map_or(len, |r| r.end),
+        "left" => caret.saturating_sub(1),
+        "right" => (caret + 1).min(len),
+        "up" | "home" => 0,
+        "down" | "end" => len,
+        _ => return false,
+    };
+    if mods.shift {
+        input.anchor.get_or_insert(caret);
+    } else {
+        *input.anchor = None;
+    }
+    *input.caret = target;
+    true
 }
 
 /// Renders the text of an input one character per cell. Clicking the left or right half
@@ -206,8 +289,11 @@ pub(super) fn render_caret_text(
     display: &str,
     caret: Option<usize>,
     caret_visible: bool,
+    selection: Option<Range<usize>>,
     on_pick: &CaretPick,
 ) -> Vec<AnyElement> {
+    // Like macOS, the caret hides while a range is selected
+    let caret = if selection.is_some() { None } else { caret };
     let caret_bar = |visible: bool| {
         div()
             .relative()
@@ -229,9 +315,15 @@ pub(super) fn render_caret_text(
         let pick = on_pick.clone();
         let el = div().absolute().top_0().bottom_0().w(relative(0.5));
         let el = if right { el.right_0() } else { el.left_0() };
+        let drag_pick = on_pick.clone();
         el.on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
             cx.stop_propagation();
-            pick(index, event.click_count, window, cx);
+            pick(index, PickKind::Press { clicks: event.click_count, shift: event.modifiers.shift }, window, cx);
+        })
+        .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                drag_pick(index, PickKind::Drag, window, cx);
+            }
         })
     };
 
@@ -242,10 +334,12 @@ pub(super) fn render_caret_text(
         }
         // A lone space shapes to zero width, so render it as a non-breaking space.
         let glyph = if ch == ' ' { '\u{00a0}' } else { ch };
+        let selected = selection.as_ref().is_some_and(|r| r.contains(&i));
         cells.push(
             div()
                 .relative()
                 .flex_none()
+                .when(selected, |d| d.bg(rgb(0x264f78)).text_color(rgb(0xffffff)))
                 .child(glyph.to_string())
                 .child(half(i, false))
                 .child(half(i + 1, true))
@@ -273,11 +367,14 @@ impl Workspace {
     /// Click handler for the characters of a connection form field.
     pub(super) fn field_caret_pick(&self, field: FormField, cx: &mut Context<Self>) -> CaretPick {
         let workspace = cx.entity().downgrade();
-        Rc::new(move |index, clicks, window, cx| {
+        Rc::new(move |index, kind, window, cx| {
             let _ = workspace.update(cx, |this, cx| {
+                let was_active = this.active_field == Some(field);
+                if !was_active && kind == PickKind::Drag {
+                    return;
+                }
                 this.active_field = Some(field);
-                this.field_selected_all = clicks >= 2;
-                this.field_cursor = index;
+                apply_pick(&mut this.field_cursor, &mut this.field_anchor, index, kind, was_active);
                 this.cursor_visible = true;
                 window.focus(&this.focus_handle);
                 cx.notify();
@@ -288,13 +385,16 @@ impl Workspace {
     /// Click handler for the characters of the filter bar.
     pub(super) fn filter_caret_pick(&self, cx: &mut Context<Self>) -> CaretPick {
         let workspace = cx.entity().downgrade();
-        Rc::new(move |index, clicks, _, cx| {
+        Rc::new(move |index, kind, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
+                let was_active = this.is_filter_focused;
+                if !was_active && kind == PickKind::Drag {
+                    return;
+                }
                 this.commit_cell_edit();
                 this.blur_fetch_size();
                 this.is_filter_focused = true;
-                this.filter_selected_all = clicks >= 2;
-                this.filter_cursor = index;
+                apply_pick(&mut this.filter_cursor, &mut this.filter_anchor, index, kind, was_active);
                 this.cursor_visible = true;
                 cx.notify();
             });
@@ -306,9 +406,17 @@ impl Workspace {
     /// Click handler for the characters of the fetch size box.
     pub(super) fn fetch_size_caret_pick(&self, cx: &mut Context<Self>) -> CaretPick {
         let workspace = cx.entity().downgrade();
-        Rc::new(move |index, clicks, _, cx| {
+        Rc::new(move |index, kind, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
-                this.focus_fetch_size(clicks >= 2, index);
+                let was_active = this.is_fetch_size_focused;
+                if !was_active && kind == PickKind::Drag {
+                    return;
+                }
+                if !was_active {
+                    this.focus_fetch_size(false, index);
+                }
+                apply_pick(&mut this.fetch_size_cursor, &mut this.fetch_size_anchor, index, kind, was_active);
+                this.cursor_visible = true;
                 cx.notify();
             });
         })
@@ -319,8 +427,8 @@ impl Workspace {
         self.commit_cell_edit();
         self.is_filter_focused = false;
         self.is_fetch_size_focused = true;
-        self.fetch_size_selected_all = select_all;
-        self.fetch_size_cursor = caret;
+        self.fetch_size_anchor = select_all.then_some(0);
+        self.fetch_size_cursor = if select_all { usize::MAX } else { caret };
         self.cursor_visible = true;
     }
 
@@ -328,7 +436,7 @@ impl Workspace {
     pub(super) fn blur_fetch_size(&mut self) {
         if self.is_fetch_size_focused {
             self.is_fetch_size_focused = false;
-            self.fetch_size_selected_all = false;
+            self.fetch_size_anchor = None;
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 tab.fetch.commit_size_text();
             }
@@ -339,12 +447,43 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     // Not a glob: `super::*` brings in `gpui::test`, which shadows the built-in `#[test]`.
-    use super::{insert, next_word, prev_word, remove_range, LineHistory, LineInput};
+    use super::{apply_pick, delete_selection, insert, move_caret, next_word, prev_word, remove_range, selected_text,
+        selection_range, LineHistory, LineInput, PickKind};
+    use gpui::Modifiers;
+
+    struct Field {
+        text: String,
+        caret: usize,
+        anchor: Option<usize>,
+        history: LineHistory,
+    }
+
+    impl Field {
+        fn new(text: &str, caret: usize, anchor: Option<usize>) -> Self {
+            Self { text: text.to_string(), caret, anchor, history: LineHistory::new() }
+        }
+
+        fn input(&mut self, digits_only: bool) -> LineInput<'_> {
+            LineInput { text: &mut self.text, caret: &mut self.caret, anchor: &mut self.anchor, digits_only, history: &mut self.history }
+        }
+
+        fn selection(&self) -> Option<std::ops::Range<usize>> {
+            selection_range(self.anchor, self.caret, self.text.chars().count())
+        }
+    }
 
     fn edit(text: &str, caret: usize, f: impl FnOnce(&mut LineInput)) -> (String, usize) {
-        let (mut text, mut caret, mut sel, mut history) = (text.to_string(), caret, false, LineHistory::new());
-        f(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: false, history: &mut history });
-        (text, caret)
+        let mut field = Field::new(text, caret, None);
+        f(&mut field.input(false));
+        (field.text, field.caret)
+    }
+
+    fn shift() -> Modifiers {
+        Modifiers { shift: true, ..Default::default() }
+    }
+
+    fn shift_cmd() -> Modifiers {
+        Modifiers { shift: true, platform: true, ..Default::default() }
     }
 
     #[test]
@@ -356,16 +495,21 @@ mod tests {
 
     #[test]
     fn selection_is_replaced_by_typing() {
-        let (mut text, mut caret, mut sel) = ("old".to_string(), 1, true);
-        insert(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: false, history: &mut LineHistory::new() }, "n");
-        assert_eq!((text.as_str(), caret, sel), ("n", 1, false));
+        let mut field = Field::new("old", usize::MAX, Some(0));
+        insert(&mut field.input(false), "n");
+        assert_eq!((field.text.as_str(), field.caret, field.anchor), ("n", 1, None));
+
+        // Only the selected part is replaced
+        let mut field = Field::new("id = 10", 7, Some(5));
+        insert(&mut field.input(false), "2");
+        assert_eq!((field.text.as_str(), field.caret), ("id = 2", 6));
     }
 
     #[test]
     fn digits_only_drops_other_chars() {
-        let (mut text, mut caret, mut sel) = ("54".to_string(), 1, false);
-        insert(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: true, history: &mut LineHistory::new() }, "3a2");
-        assert_eq!((text.as_str(), caret), ("5324", 3));
+        let mut field = Field::new("54", 1, None);
+        insert(&mut field.input(true), "3a2");
+        assert_eq!((field.text.as_str(), field.caret), ("5324", 3));
     }
 
     #[test]
@@ -375,5 +519,77 @@ mod tests {
         assert_eq!(prev_word(text, 9), 0);
         assert_eq!(next_word(text, 6), 14);
         assert_eq!(next_word(text, 0), 6);
+    }
+
+    #[test]
+    fn shift_cmd_arrows_select_to_the_start_or_end() {
+        let mut field = Field::new("SELECT 1", 3, None);
+        assert!(move_caret(&mut field.input(false), "right", &shift_cmd()));
+        assert_eq!(field.selection(), Some(3..8));
+
+        let mut field = Field::new("SELECT 1", 3, None);
+        move_caret(&mut field.input(false), "left", &shift_cmd());
+        assert_eq!(field.selection(), Some(0..3));
+        assert_eq!(selected_text(&field.input(false)).as_deref(), Some("SEL"));
+    }
+
+    #[test]
+    fn shift_arrows_grow_and_shrink_the_selection_from_the_anchor() {
+        let mut field = Field::new("abcdef", 2, None);
+        move_caret(&mut field.input(false), "right", &shift());
+        move_caret(&mut field.input(false), "right", &shift());
+        assert_eq!(field.selection(), Some(2..4));
+        move_caret(&mut field.input(false), "left", &shift());
+        assert_eq!(field.selection(), Some(2..3));
+        // Crossing the anchor flips the range to its other side
+        move_caret(&mut field.input(false), "left", &shift());
+        move_caret(&mut field.input(false), "left", &shift());
+        assert_eq!(field.selection(), Some(1..2));
+    }
+
+    #[test]
+    fn plain_arrows_collapse_the_selection_to_its_edge() {
+        let mut field = Field::new("abcdef", 4, Some(1));
+        move_caret(&mut field.input(false), "left", &Modifiers::default());
+        assert_eq!((field.caret, field.selection()), (1, None));
+
+        let mut field = Field::new("abcdef", 1, Some(4));
+        move_caret(&mut field.input(false), "right", &Modifiers::default());
+        assert_eq!((field.caret, field.selection()), (4, None));
+    }
+
+    #[test]
+    fn deleting_removes_only_the_selection() {
+        let mut field = Field::new("id = 10 AND x", 7, Some(2));
+        assert!(delete_selection(&mut field.input(false)));
+        assert_eq!((field.text.as_str(), field.caret, field.anchor), ("id AND x", 2, None));
+        assert!(!delete_selection(&mut field.input(false)));
+    }
+
+    #[test]
+    fn mouse_press_and_drag_select_a_range() {
+        let (mut caret, mut anchor) = (0, None);
+        apply_pick(&mut caret, &mut anchor, 2, PickKind::Press { clicks: 1, shift: false }, true);
+        assert_eq!(selection_range(anchor, caret, 10), None);
+        apply_pick(&mut caret, &mut anchor, 6, PickKind::Drag, true);
+        assert_eq!(selection_range(anchor, caret, 10), Some(2..6));
+        // Dragging back past the press point selects to its left
+        apply_pick(&mut caret, &mut anchor, 0, PickKind::Drag, true);
+        assert_eq!(selection_range(anchor, caret, 10), Some(0..2));
+    }
+
+    #[test]
+    fn shift_click_extends_and_double_click_selects_all() {
+        let (mut caret, mut anchor) = (3, None);
+        apply_pick(&mut caret, &mut anchor, 8, PickKind::Press { clicks: 1, shift: true }, true);
+        assert_eq!(selection_range(anchor, caret, 10), Some(3..8));
+
+        // Shift+click into an input that did not have focus just places the caret
+        let (mut caret, mut anchor) = (3, None);
+        apply_pick(&mut caret, &mut anchor, 8, PickKind::Press { clicks: 1, shift: true }, false);
+        assert_eq!((caret, selection_range(anchor, caret, 10)), (8, None));
+
+        apply_pick(&mut caret, &mut anchor, 4, PickKind::Press { clicks: 2, shift: false }, true);
+        assert_eq!(selection_range(anchor, caret, 10), Some(0..10));
     }
 }

@@ -232,7 +232,7 @@ impl Workspace {
                                         this.commit_cell_edit();
                                         this.blur_fetch_size();
                                         this.is_filter_focused = true;
-                                        this.filter_selected_all = event.click_count() >= 2;
+                                        this.filter_anchor = (event.click_count() >= 2).then_some(0);
                                         this.filter_cursor = usize::MAX;
                                         this.cursor_visible = true;
                                         cx.notify();
@@ -242,7 +242,7 @@ impl Workspace {
                                         &filter_sql,
                                         "Enter a SQL expression to filter results (use Ctrl+Space)",
                                         is_filter_focused,
-                                        is_filter_focused && self.filter_selected_all,
+                                        self.filter_anchor,
                                         self.filter_cursor,
                                         self.cursor_visible,
                                         theme,
@@ -498,7 +498,7 @@ impl Workspace {
                                         &fetch_size_text,
                                         "",
                                         is_fetch_size_focused,
-                                        is_fetch_size_focused && self.fetch_size_selected_all,
+                                        self.fetch_size_anchor,
                                         self.fetch_size_cursor,
                                         self.cursor_visible,
                                         theme,
