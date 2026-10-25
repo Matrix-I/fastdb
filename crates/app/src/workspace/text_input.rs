@@ -394,6 +394,7 @@ impl Workspace {
                 this.commit_cell_edit();
                 this.blur_fetch_size();
                 this.is_filter_focused = true;
+                this.filter_suggest = None;
                 apply_pick(&mut this.filter_cursor, &mut this.filter_anchor, index, kind, was_active);
                 this.cursor_visible = true;
                 cx.notify();

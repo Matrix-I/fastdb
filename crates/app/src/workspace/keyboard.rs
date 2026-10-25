@@ -131,13 +131,20 @@ impl Workspace {
                     }
                 }
             } else if self.is_filter_focused {
-                if event.keystroke.key == "escape" {
+                if self.handle_filter_suggest_key(&event.keystroke) {
+                    cx.notify();
+                } else if event.keystroke.key == "escape" {
                     self.is_filter_focused = false;
                     self.filter_anchor = None;
                     cx.notify();
                 } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
                     self.run_active_query(cx);
+                } else if event.keystroke.modifiers.control && event.keystroke.key == "space" {
+                    self.refresh_filter_suggest(true);
+                    cx.notify();
                 } else {
+                    let tab = &mut self.tabs[self.active_tab];
+                    let before = tab.filter_sql.clone();
                     let input = LineInput {
                         text: &mut tab.filter_sql,
                         caret: &mut self.filter_cursor,
@@ -146,6 +153,12 @@ impl Workspace {
                         history: &mut tab.filter_history,
                     };
                     if handle_line_key(input, &event.keystroke, cx) {
+                        // Only typing opens the list; moving the caret just closes it
+                        if self.tabs[self.active_tab].filter_sql != before {
+                            self.refresh_filter_suggest(false);
+                        } else {
+                            self.filter_suggest = None;
+                        }
                         self.cursor_visible = true;
                         cx.notify();
                     }

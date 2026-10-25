@@ -15,6 +15,7 @@ mod data_edit;
 mod data_panel;
 mod ddl;
 mod diagram_panel;
+mod filter_suggest;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
@@ -31,6 +32,7 @@ mod value_panel;
 mod widgets;
 
 pub use column_menu::ColumnMenu;
+pub use filter_suggest::FilterSuggest;
 pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
 pub use tab_context_menu::TabContextMenu;
@@ -155,6 +157,8 @@ pub struct Workspace {
     pub field_cursor: usize,
     /// Caret of the filter bar, as a char index (clamped; `usize::MAX` = end)
     pub filter_cursor: usize,
+    /// Column name suggestions under the filter bar, if open
+    pub filter_suggest: Option<FilterSuggest>,
     pub is_fetch_size_focused: bool,
     /// Selection anchor of the fetch size box
     pub fetch_size_anchor: Option<usize>,
@@ -289,6 +293,7 @@ impl Workspace {
             filter_anchor: None,
             field_cursor: usize::MAX,
             filter_cursor: usize::MAX,
+            filter_suggest: None,
             is_fetch_size_focused: false,
             fetch_size_anchor: None,
             fetch_size_cursor: usize::MAX,

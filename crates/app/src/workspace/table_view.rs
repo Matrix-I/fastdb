@@ -218,6 +218,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .id("filter-sql-input-box")
+                                    .relative()
                                     .flex()
                                     .flex_1()
                                     .items_center()
@@ -234,6 +235,7 @@ impl Workspace {
                                         this.is_filter_focused = true;
                                         this.filter_anchor = (event.click_count() >= 2).then_some(0);
                                         this.filter_cursor = usize::MAX;
+                                        this.filter_suggest = None;
                                         this.cursor_visible = true;
                                         cx.notify();
                                     }))
@@ -248,6 +250,7 @@ impl Workspace {
                                         theme,
                                         &self.filter_caret_pick(cx),
                                     ))
+                                    .children(self.render_filter_suggest(cx))
                             )
                             // Execute Query Button ▶ (Green play arrow)
                             .child(
