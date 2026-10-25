@@ -79,7 +79,10 @@ impl VirtualDataGrid {
         let num_cols = self.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
 
 
-        let mut grid_container = div()
+        let total_cols_width: f32 = self.column_widths.iter().sum();
+        let total_width = (gutter_width + total_cols_width).max(800.0);
+
+        let grid_container = div()
             .flex()
             .flex_col()
             .size_full()
@@ -87,9 +90,18 @@ impl VirtualDataGrid {
             .bg(theme.bg_grid)
             .text_color(theme.text_primary);
 
+        // Horizontal scroller container
+        let mut scroller = div()
+            .id("grid-horizontal-scroller")
+            .flex()
+            .flex_col()
+            .size_full()
+            .overflow_x_scroll();
+
         // 1. Sticky Header Row
         let mut header_row = div()
             .flex()
+            .min_w(px(total_width))
             .h(px(header_height))
             .bg(theme.bg_grid_header)
             .border_b_1()
@@ -144,7 +156,7 @@ impl VirtualDataGrid {
             }
         }
 
-        grid_container = grid_container.child(header_row);
+        scroller = scroller.child(header_row);
 
         // 2. Data Rows with full vertical scroll support
         let mut body = div()
@@ -152,7 +164,7 @@ impl VirtualDataGrid {
             .flex()
             .flex_col()
             .flex_1()
-            .w_full()
+            .min_w(px(total_width))
             .overflow_y_scroll();
 
         if let Some(ref pager) = self.pager {
@@ -163,6 +175,7 @@ impl VirtualDataGrid {
 
                 let mut row_div = div()
                     .flex()
+                    .min_w(px(total_width))
                     .h(px(row_height))
                     .bg(row_bg)
                     .border_b_1()
@@ -214,12 +227,19 @@ impl VirtualDataGrid {
                     };
 
                     let is_null = cell_content == "NULL" && !self.changeset.is_modified(r, c);
+                    let display_text = if cell_content.len() > 300 {
+                        let truncate_idx = cell_content.char_indices().nth(200).map(|(i, _)| i).unwrap_or(cell_content.len());
+                        format!("{}…", &cell_content[..truncate_idx])
+                    } else {
+                        cell_content.clone()
+                    };
+
                     if is_null {
                         cell_div = cell_div
                             .text_color(theme.text_muted)
-                            .child(cell_content);
+                            .child(display_text);
                     } else {
-                        cell_div = cell_div.child(cell_content);
+                        cell_div = cell_div.child(display_text);
                     }
 
                     row_div = row_div.child(cell_div);
@@ -229,7 +249,8 @@ impl VirtualDataGrid {
             }
         }
 
-        grid_container.child(body)
+        scroller = scroller.child(body);
+        grid_container.child(scroller)
     }
 }
 

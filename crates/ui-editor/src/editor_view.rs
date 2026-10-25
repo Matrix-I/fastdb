@@ -35,11 +35,19 @@ impl SqlEditorView {
 
         if let Some(ref mut parser) = self.parser {
             if let Some((_, _, stmt)) = parser.statement_at_offset(&text, offset) {
-                return stmt.to_string();
+                let trimmed = stmt.trim();
+                if !trimmed.trim_matches(';').trim().is_empty() {
+                    return trimmed.to_string();
+                }
             }
         }
 
-        text.trim().to_string()
+        let trimmed_text = text.trim();
+        if !trimmed_text.trim_matches(';').trim().is_empty() {
+            trimmed_text.to_string()
+        } else {
+            String::new()
+        }
     }
 
     pub fn insert_text(&mut self, s: &str) {

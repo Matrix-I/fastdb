@@ -401,6 +401,7 @@ impl Workspace {
                         if !this.tabs.is_empty() {
                             let tab = &mut this.tabs[this.active_tab];
                             tab.editor = SqlEditorView::new(&starter_sql, this.theme.clone(), Some(this.schema_cache.clone()));
+                            tab.editor.buffer.set_cursor_offset(0);
                             tab.grid = VirtualDataGrid::new(None, this.theme.clone());
                         }
 
@@ -548,6 +549,7 @@ impl Workspace {
         if !self.tabs.is_empty() {
             let tab = &mut self.tabs[self.active_tab];
             tab.editor = SqlEditorView::new(&sql, self.theme.clone(), Some(self.schema_cache.clone()));
+            tab.editor.buffer.set_cursor_offset(0);
         }
 
         self.run_active_query(cx);
@@ -567,18 +569,19 @@ impl Workspace {
 
         let tab = &mut self.tabs[self.active_tab];
         let mut sql = tab.editor.active_statement();
-        if sql.trim().is_empty() || sql.trim().starts_with("--") {
+        let is_empty_or_semicolon = sql.trim().trim_matches(';').trim().is_empty();
+        if is_empty_or_semicolon || sql.trim().starts_with("--") {
             let full_text = tab.editor.buffer.text();
             let non_comments: Vec<&str> = full_text
                 .lines()
-                .filter(|l| !l.trim().starts_with("--") && !l.trim().is_empty())
+                .filter(|l| !l.trim().starts_with("--") && !l.trim().trim_matches(';').trim().is_empty())
                 .collect();
             if !non_comments.is_empty() {
                 sql = non_comments.join("\n");
             }
         }
 
-        if sql.trim().is_empty() {
+        if sql.trim().trim_matches(';').trim().is_empty() {
             self.status_message = "No SQL statement to execute.".to_string();
             cx.notify();
             return;
