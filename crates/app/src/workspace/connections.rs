@@ -740,16 +740,6 @@ impl Workspace {
         true
     }
 
-    pub fn connect_saved(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref id) = self.active_connection_id.clone() {
-            self.connect_saved_by_id(id, cx);
-        } else if let Some(first) = self.saved_connections.first().map(|c| c.id.clone()) {
-            self.connect_saved_by_id(&first, cx);
-        } else {
-            self.open_new_connection_dialog();
-        }
-    }
-
     pub fn delete_saved_connection(&mut self, conn_id: &str) {
         self.saved_connections.retain(|c| c.id != conn_id);
         self.live_connections.remove(conn_id);
