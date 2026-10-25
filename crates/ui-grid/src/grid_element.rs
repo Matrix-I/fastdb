@@ -49,6 +49,7 @@ pub struct VirtualDataGrid {
     pub changeset: Changeset,
     pub editing_cell: Option<(u64, usize, String)>,
     pub horizontal_scroll_handle: ScrollHandle,
+    pub vertical_scroll_handle: UniformListScrollHandle,
 }
 
 impl VirtualDataGrid {
@@ -69,6 +70,7 @@ impl VirtualDataGrid {
             changeset: Changeset::new(),
             editing_cell: None,
             horizontal_scroll_handle: ScrollHandle::new(),
+            vertical_scroll_handle: UniformListScrollHandle::new(),
         };
         grid.recalculate_all_widths();
         grid
@@ -83,10 +85,18 @@ impl VirtualDataGrid {
         self.editing_cell = None;
         self.scroll_top = 0.0;
         self.scroll_left = 0.0;
+        self.horizontal_scroll_handle = ScrollHandle::new();
+        self.vertical_scroll_handle = UniformListScrollHandle::new();
     }
 
     pub fn set_table_name(&mut self, name: impl Into<String>) {
         self.table_name = name.into();
+    }
+
+    pub fn update_viewport_height(&mut self, height: f32) {
+        if (self.viewport_height - height).abs() > 2.0 {
+            self.viewport_height = height;
+        }
     }
 
     /// Accurately estimate rendered text width for GPUI proportional fonts (12px standard, scales with size)
@@ -295,6 +305,9 @@ impl VirtualDataGrid {
         let total_width = content_total_width.max(self.viewport_width);
         let has_horizontal_overflow = content_total_width > self.viewport_width + 1.0;
 
+        let total_content_height = total_rows as f32 * row_height;
+        let has_vertical_overflow = total_content_height > self.viewport_height + 1.0;
+
         let grid_container = div()
             .flex()
             .flex_col()
@@ -312,6 +325,7 @@ impl VirtualDataGrid {
             .flex_col()
             .flex_1()
             .w_full()
+            .h_full()
             .overflow_x_scroll();
 
         // 1. Sticky Header Row
@@ -412,105 +426,248 @@ impl VirtualDataGrid {
 
         scroller = scroller.child(header_row);
 
-        // 2. Data Rows with full vertical scroll support
-        let mut body = div()
-            .id("grid-data-body")
+        // 2. Data Rows with full virtualization using uniform_list
+        let total_rows_usize = total_rows as usize;
+        let vertical_scroll_handle = self.vertical_scroll_handle.clone();
+        let pager_clone = self.pager.clone();
+        let column_widths_clone = self.column_widths.clone();
+        let selection_clone = self.selection.clone();
+        let changeset_clone = self.changeset.clone();
+        let theme_bg_grid_alt = theme.bg_grid_alt;
+        let theme_bg_grid = theme.bg_grid;
+        let theme_border = theme.border;
+        let theme_text_muted = theme.text_muted;
+        let theme_bg_cell_selected = theme.bg_grid_cell_selected;
+        let theme_bg_cell_modified = theme.bg_grid_cell_modified;
+
+        let body = div()
+            .id("grid-data-body-container")
             .flex()
             .flex_col()
             .flex_1()
             .w(px(total_width))
-            .overflow_scroll();
+            .h_full()
+            .overflow_hidden()
+            .child(
+                uniform_list(
+                    "grid-data-body",
+                    total_rows_usize,
+                    move |range: std::ops::Range<usize>, _window: &mut Window, _cx: &mut App| {
+                        let mut rows = Vec::with_capacity(range.len());
+                        for r in range {
+                            let r_u64 = r as u64;
+                            let is_alt = r % 2 == 1;
+                            let row_bg = if is_alt { theme_bg_grid_alt } else { theme_bg_grid };
 
-        if let Some(ref pager) = self.pager {
-            let render_count = total_rows.min(2000);
-            for r in 0..render_count {
-                let is_alt = r % 2 == 1;
-                let row_bg = if is_alt { theme.bg_grid_alt } else { theme.bg_grid };
+                            let mut row_div = div()
+                                .id(("grid-row", r))
+                                .flex()
+                                .flex_row()
+                                .flex_none()
+                                .w(px(total_width))
+                                .h(px(row_height))
+                                .bg(row_bg)
+                                .border_b_1()
+                                .border_color(theme_border)
+                                .child(
+                                    // Gutter row index
+                                    div()
+                                        .w(px(gutter_width))
+                                        .h_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .border_r_1()
+                                        .border_color(theme_border)
+                                        .text_size(px(10.0))
+                                        .text_color(theme_text_muted)
+                                        .child(format!("{}", r + 1))
+                                );
 
-                let mut row_div = div()
-                    .id(("grid-row", r))
-                    .flex()
-                    .flex_none()
-                    .w(px(total_width))
-                    .h(px(row_height))
-                    .bg(row_bg)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        // Gutter row index
-                        div()
-                            .w(px(gutter_width))
-                            .h_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .border_r_1()
-                            .border_color(theme.border)
-                            .text_size(px(10.0))
-                            .text_color(theme.text_muted)
-                            .child(format!("{}", r + 1))
-                    );
+                            for c in 0..num_cols {
+                                let width = column_widths_clone.get(c).copied().unwrap_or(MIN_COL_WIDTH);
+                                let is_selected = selection_clone.is_selected(r_u64, c);
+                                let is_modified = changeset_clone.is_modified(r_u64, c);
 
-                for c in 0..num_cols {
-                    let width = self.column_widths.get(c).copied().unwrap_or(MIN_COL_WIDTH);
-                    let is_selected = self.selection.is_selected(r, c);
-                    let is_modified = self.changeset.is_modified(r, c);
+                                let mut cell_div = div()
+                                    .flex()
+                                    .items_center()
+                                    .w(px(width))
+                                    .h_full()
+                                    .px_2()
+                                    .border_r_1()
+                                    .border_color(theme_border)
+                                    .text_size(px(12.0))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis();
 
-                    let mut cell_div = div()
-                        .flex()
-                        .items_center()
-                        .w(px(width))
-                        .h_full()
-                        .px_2()
-                        .border_r_1()
-                        .border_color(theme.border)
-                        .text_size(px(12.0))
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis();
+                                if is_selected {
+                                    cell_div = cell_div.bg(theme_bg_cell_selected);
+                                } else if is_modified {
+                                    cell_div = cell_div.bg(theme_bg_cell_modified);
+                                }
 
-                    if is_selected {
-                        cell_div = cell_div.bg(theme.bg_grid_cell_selected);
-                    } else if is_modified {
-                        cell_div = cell_div.bg(theme.bg_grid_cell_modified);
-                    }
+                                let (display_text, is_null) = if let Some(mod_val) = changeset_clone.get_modified_value(r_u64, c) {
+                                    (mod_val.to_string(), false)
+                                } else if let Some(ref p) = pager_clone {
+                                    if let Some(cell_bytes) = p.get_cell(r_u64, c) {
+                                        let s = String::from_utf8_lossy(&cell_bytes);
+                                        if s.len() > 3000 {
+                                            let truncate_idx = s.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(s.len());
+                                            (format!("{}…", &s[..truncate_idx]), false)
+                                        } else {
+                                            (s.into_owned(), false)
+                                        }
+                                    } else {
+                                        ("NULL".to_string(), true)
+                                    }
+                                } else {
+                                    ("NULL".to_string(), true)
+                                };
 
-                    // Display modified text if staged, otherwise fetch from zero-copy page
-                    let cell_content = if let Some(mod_val) = self.changeset.get_modified_value(r, c) {
-                        mod_val.to_string()
-                    } else if let Some(cell_bytes) = pager.get_cell(r, c) {
-                        String::from_utf8_lossy(&cell_bytes).to_string()
-                    } else {
-                        "NULL".to_string()
-                    };
+                                let text_el = div().truncate().child(display_text);
 
-                    let is_null = cell_content == "NULL" && !self.changeset.is_modified(r, c);
-                    let display_text = if cell_content.len() > 5000 {
-                        let truncate_idx = cell_content.char_indices().nth(4000).map(|(i, _)| i).unwrap_or(cell_content.len());
-                        format!("{}…", &cell_content[..truncate_idx])
-                    } else {
-                        cell_content.clone()
-                    };
+                                if is_null {
+                                    cell_div = cell_div
+                                        .text_color(theme_text_muted)
+                                        .child(text_el);
+                                } else {
+                                    cell_div = cell_div.child(text_el);
+                                }
 
-                    let text_el = div().truncate().child(display_text);
+                                row_div = row_div.child(cell_div);
+                            }
 
-                    if is_null {
-                        cell_div = cell_div
-                            .text_color(theme.text_muted)
-                            .child(text_el);
-                    } else {
-                        cell_div = cell_div.child(text_el);
-                    }
-
-                    row_div = row_div.child(cell_div);
-                }
-
-                body = body.child(row_div);
-            }
-        }
+                            rows.push(row_div);
+                        }
+                        rows
+                    },
+                )
+                .size_full()
+                .track_scroll(vertical_scroll_handle)
+            );
 
         scroller = scroller.child(body);
-        let mut grid_container = grid_container.child(scroller);
+
+        let mut main_area = div()
+            .flex()
+            .flex_row()
+            .flex_1()
+            .size_full()
+            .overflow_hidden()
+            .child(scroller);
+
+        // Vertical scrollbar indicator when content exceeds viewport
+        if has_vertical_overflow {
+            let scroll_y = -f32::from(self.vertical_scroll_handle.0.borrow().base_handle.offset().y).max(0.0);
+            let max_scroll_y = (total_content_height - self.viewport_height).max(1.0);
+            let scroll_ratio = (scroll_y / max_scroll_y).clamp(0.0, 1.0);
+
+            let scrollbar_w = 14.0f32;
+            let btn_h = 16.0f32;
+            let track_h = (self.viewport_height - btn_h * 2.0).max(40.0);
+            let thumb_ratio = (self.viewport_height / total_content_height).clamp(0.08, 0.85);
+            let thumb_height = (track_h * thumb_ratio).max(30.0);
+            let max_travel = (track_h - thumb_height).max(0.0);
+            let thumb_top = scroll_ratio * max_travel;
+
+            let theme_border = theme.border;
+            let theme_bg_header = theme.bg_grid_header;
+            let theme_text_muted = theme.text_muted;
+            let thumb_bg = Rgba { a: 0.4, ..theme_text_muted };
+            let thumb_hover = Rgba { a: 0.8, ..theme_text_muted };
+
+            let handle_up = self.vertical_scroll_handle.clone();
+            let handle_down = self.vertical_scroll_handle.clone();
+            let handle_track = self.vertical_scroll_handle.clone();
+
+            let v_scrollbar = div()
+                .id("grid-vertical-scrollbar")
+                .flex()
+                .flex_col()
+                .flex_none()
+                .items_center()
+                .w(px(scrollbar_w))
+                .h_full()
+                .bg(theme_bg_header)
+                .border_l_1()
+                .border_color(theme_border)
+                .child(
+                    div()
+                        .id("scroll-btn-up")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w_full()
+                        .h(px(btn_h))
+                        .cursor_pointer()
+                        .text_size(px(8.0))
+                        .text_color(theme_text_muted)
+                        .hover(|s| s.bg(Rgba { a: 0.15, ..theme_text_muted }))
+                        .child("▲")
+                        .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
+                            let cur_offset = handle_up.0.borrow().base_handle.offset();
+                            let cur_y = f32::from(cur_offset.y);
+                            let new_y = (cur_y + 100.0).min(0.0);
+                            handle_up.0.borrow().base_handle.set_offset(point(cur_offset.x, px(new_y)));
+                            window.refresh();
+                        })
+                )
+                .child(
+                    div()
+                        .id("scroll-track-v")
+                        .flex()
+                        .flex_1()
+                        .w_full()
+                        .relative()
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, _app| {
+                            let click_y = f32::from(event.position.y) - btn_h;
+                            let target_ratio = (click_y / track_h).clamp(0.0, 1.0);
+                            let target_row = (target_ratio * total_rows as f32) as usize;
+                            handle_track.scroll_to_item_strict(target_row, ScrollStrategy::Center);
+                            window.refresh();
+                        })
+                        .child(
+                            div()
+                                .id("scroll-thumb-v")
+                                .absolute()
+                                .top(px(thumb_top))
+                                .left(px(2.0))
+                                .w(px(scrollbar_w - 4.0))
+                                .h(px(thumb_height))
+                                .rounded_xs()
+                                .bg(thumb_bg)
+                                .hover(move |s| s.bg(thumb_hover))
+                        )
+                )
+                .child(
+                    div()
+                        .id("scroll-btn-down")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w_full()
+                        .h(px(btn_h))
+                        .cursor_pointer()
+                        .text_size(px(8.0))
+                        .text_color(theme_text_muted)
+                        .hover(|s| s.bg(Rgba { a: 0.15, ..theme_text_muted }))
+                        .child("▼")
+                        .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
+                            let cur_offset = handle_down.0.borrow().base_handle.offset();
+                            let cur_y = f32::from(cur_offset.y);
+                            let new_y = (cur_y - 100.0).max(-max_scroll_y);
+                            handle_down.0.borrow().base_handle.set_offset(point(cur_offset.x, px(new_y)));
+                            window.refresh();
+                        })
+                );
+
+            main_area = main_area.child(v_scrollbar);
+        }
+
+        let mut grid_container = grid_container.child(main_area);
 
         // 3. Horizontal Scrollbar indicator when content exceeds viewport
         if has_horizontal_overflow {

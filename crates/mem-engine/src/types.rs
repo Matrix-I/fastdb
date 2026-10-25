@@ -58,6 +58,10 @@ pub struct ColumnMeta {
     pub nullable: bool,
     pub is_primary_key: bool,
     pub is_foreign_key: bool,
+    pub raw_type: Option<String>,
+    pub default_val: Option<String>,
+    pub collation: Option<String>,
+    pub comment: Option<String>,
 }
 
 impl ColumnMeta {
@@ -68,6 +72,10 @@ impl ColumnMeta {
             nullable: true,
             is_primary_key: false,
             is_foreign_key: false,
+            raw_type: None,
+            default_val: None,
+            collation: None,
+            comment: None,
         }
     }
 
@@ -84,5 +92,56 @@ impl ColumnMeta {
     pub fn with_nullable(mut self, nullable: bool) -> Self {
         self.nullable = nullable;
         self
+    }
+
+    pub fn with_raw_type(mut self, raw_type: impl Into<String>) -> Self {
+        self.raw_type = Some(raw_type.into());
+        self
+    }
+
+    pub fn with_default(mut self, default_val: impl Into<String>) -> Self {
+        self.default_val = Some(default_val.into());
+        self
+    }
+
+    pub fn with_collation(mut self, collation: impl Into<String>) -> Self {
+        self.collation = Some(collation.into());
+        self
+    }
+
+    pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = Some(comment.into());
+        self
+    }
+
+    pub fn display_type(&self) -> String {
+        if let Some(ref raw) = self.raw_type {
+            let r = raw.trim().to_lowercase();
+            if r == "character varying" {
+                "varchar".to_string()
+            } else {
+                r
+            }
+        } else {
+            match self.data_type {
+                DataType::Varchar => "varchar".to_string(),
+                DataType::Json => "jsonb".to_string(),
+                DataType::Text => "text".to_string(),
+                DataType::Int4 => "int4".to_string(),
+                DataType::Int8 => "int8".to_string(),
+                DataType::Int2 => "int2".to_string(),
+                DataType::Bool => "bool".to_string(),
+                DataType::Float4 => "float4".to_string(),
+                DataType::Float8 => "float8".to_string(),
+                DataType::Numeric => "numeric".to_string(),
+                DataType::Date => "date".to_string(),
+                DataType::Time => "time".to_string(),
+                DataType::Timestamp => "timestamp".to_string(),
+                DataType::TimestampTz => "timestamptz".to_string(),
+                DataType::Uuid => "uuid".to_string(),
+                DataType::Bytea => "bytea".to_string(),
+                DataType::Unknown => "unknown".to_string(),
+            }
+        }
     }
 }

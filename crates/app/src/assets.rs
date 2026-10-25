@@ -308,5 +308,62 @@ mod tests {
         assert_eq!(field_val, "");
         assert!(!selected_all);
     }
+
+    #[test]
+    fn test_table_properties_column_meta_and_ddl_generation() {
+        use db_wire::{ColumnMeta, DataType};
+        use crate::workspace::generate_table_ddl;
+
+        let cols = vec![
+            ColumnMeta::new("key", DataType::Varchar)
+                .with_nullable(false)
+                .with_pk(true)
+                .with_raw_type("varchar")
+                .with_collation("default"),
+            ColumnMeta::new("value", DataType::Json)
+                .with_nullable(true)
+                .with_raw_type("jsonb"),
+        ];
+
+        assert_eq!(cols[0].display_type(), "varchar");
+        assert_eq!(cols[1].display_type(), "jsonb");
+        assert!(!cols[0].nullable);
+        assert!(cols[1].nullable);
+        assert!(cols[0].is_primary_key);
+
+        let ddl = generate_table_ddl("public", "additionalInfo", &cols, &[], &[]);
+        assert!(ddl.contains("CREATE TABLE public.\"additionalInfo\""));
+        assert!(ddl.contains("\"key\" varchar NOT NULL"));
+        assert!(ddl.contains("\"value\" jsonb NULL"));
+        assert!(ddl.contains("CONSTRAINT additionalInfo_pkey PRIMARY KEY (\"key\")"));
+    }
+
+    #[test]
+    fn test_property_sections_and_subtabs() {
+        use crate::workspace::{TableSubTab, PropertySection, TabState, DataViewMode};
+        use ui_editor::SqlEditorView;
+        use ui_grid::VirtualDataGrid;
+        use ui_core::theme::Theme;
+
+        let tab = TabState {
+            title: "additionalInfo".to_string(),
+            schema_name: Some("public".to_string()),
+            table_name: Some("additionalInfo".to_string()),
+            filter_sql: String::new(),
+            active_subtab: TableSubTab::Properties,
+            active_property_section: PropertySection::Columns,
+            properties_header_collapsed: false,
+            view_mode: DataViewMode::Grid,
+            show_sql_dialog: false,
+            limit: 200,
+            editor: SqlEditorView::new("SELECT 1;", Theme::dark(), None),
+            grid: VirtualDataGrid::new(None, Theme::dark()),
+            execution_time_ms: None,
+        };
+
+        assert_eq!(tab.active_subtab, TableSubTab::Properties);
+        assert_eq!(tab.active_property_section, PropertySection::Columns);
+        assert!(!tab.properties_header_collapsed);
+    }
 }
 

@@ -251,7 +251,7 @@ impl DatabaseDriver for PostgresDriver {
     async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
         let client = self.get_or_connect().await?;
         let sql = r#"
-            SELECT column_name, data_type, is_nullable
+            SELECT column_name, data_type, is_nullable, column_default, collation_name
             FROM information_schema.columns
             WHERE table_schema = $1 AND table_name = $2
             ORDER BY ordinal_position;
@@ -264,6 +264,8 @@ impl DatabaseDriver for PostgresDriver {
                 let name: String = r.get(0);
                 let dtype_str: String = r.get(1);
                 let is_null_str: String = r.get(2);
+                let default_val: Option<String> = r.get(3);
+                let collation: Option<String> = r.get(4);
                 let data_type = match dtype_str.to_lowercase().as_str() {
                     "integer" | "int" => mem_engine::DataType::Int4,
                     "bigint" => mem_engine::DataType::Int8,
@@ -274,9 +276,24 @@ impl DatabaseDriver for PostgresDriver {
                     "double precision" => mem_engine::DataType::Float8,
                     "json" | "jsonb" => mem_engine::DataType::Json,
                     "uuid" => mem_engine::DataType::Uuid,
+                    "character varying" | "varchar" => mem_engine::DataType::Varchar,
                     _ => mem_engine::DataType::Text,
                 };
-                ColumnMeta::new(name, data_type).with_nullable(is_null_str == "YES")
+                let raw_type = if dtype_str.to_lowercase() == "character varying" {
+                    "varchar".to_string()
+                } else {
+                    dtype_str
+                };
+                let mut col = ColumnMeta::new(name, data_type)
+                    .with_nullable(is_null_str == "YES")
+                    .with_raw_type(raw_type);
+                if let Some(def) = default_val {
+                    col = col.with_default(def);
+                }
+                if let Some(coll) = collation {
+                    col = col.with_collation(coll);
+                }
+                col
             })
             .collect();
 
@@ -297,7 +314,9 @@ impl DatabaseDriver for PostgresDriver {
                          AND tc.table_name = c.table_name
                          AND kcu.column_name = c.column_name
                        LIMIT 1
-                   ), 0) as is_pk
+                   ), 0) as is_pk,
+                   c.column_default,
+                   c.collation_name
             FROM information_schema.columns c
             WHERE c.table_schema NOT IN ('information_schema', 'pg_catalog')
             ORDER BY c.table_schema, c.table_name, c.ordinal_position;
@@ -312,6 +331,8 @@ impl DatabaseDriver for PostgresDriver {
             let dtype_str: String = r.get(3);
             let is_null_str: String = r.get(4);
             let is_pk: i32 = r.get(5);
+            let default_val: Option<String> = r.get(6);
+            let collation: Option<String> = r.get(7);
             let data_type = match dtype_str.to_lowercase().as_str() {
                 "integer" | "int" => mem_engine::DataType::Int4,
                 "bigint" => mem_engine::DataType::Int8,
@@ -322,11 +343,24 @@ impl DatabaseDriver for PostgresDriver {
                 "double precision" => mem_engine::DataType::Float8,
                 "json" | "jsonb" => mem_engine::DataType::Json,
                 "uuid" => mem_engine::DataType::Uuid,
+                "character varying" | "varchar" => mem_engine::DataType::Varchar,
                 _ => mem_engine::DataType::Text,
             };
-            let col = ColumnMeta::new(name, data_type)
+            let raw_type = if dtype_str.to_lowercase() == "character varying" {
+                "varchar".to_string()
+            } else {
+                dtype_str
+            };
+            let mut col = ColumnMeta::new(name, data_type)
                 .with_nullable(is_null_str == "YES")
-                .with_pk(is_pk > 0);
+                .with_pk(is_pk > 0)
+                .with_raw_type(raw_type);
+            if let Some(def) = default_val {
+                col = col.with_default(def);
+            }
+            if let Some(coll) = collation {
+                col = col.with_collation(coll);
+            }
             map.entry((schema, table)).or_default().push(col);
         }
 

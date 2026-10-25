@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
-pub use mem_engine::{ColumnMeta, QueryResultPager};
+pub use mem_engine::{ColumnMeta, DataType, QueryResultPager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbDriverKind {
