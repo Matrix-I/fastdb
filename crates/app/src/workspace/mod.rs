@@ -22,6 +22,8 @@ mod status_bar;
 mod table_view;
 mod text_input;
 mod top_bar;
+mod value_format;
+mod value_panel;
 mod widgets;
 
 pub use connections::SavedConnection;
@@ -31,6 +33,7 @@ pub use query::TabState;
 pub use query::QueryStatus;
 use ddl::render_dbeaver_col_badge;
 use text_input::{handle_line_key, render_caret_text, CaretPick, LineInput};
+use value_panel::{ValuePanelState, VALUE_PANEL_WIDTH};
 use widgets::{dbeaver_driver_icon, render_field_content};
 
 
@@ -127,6 +130,7 @@ pub struct Workspace {
     pub resizing_column: Option<(usize, usize, f32, f32)>, // (tab_idx, col_idx, start_mouse_x, start_col_width)
     pub is_filter_focused: bool,
     pub show_right_panels: bool,
+    pub value_panel: ValuePanelState,
     pub cursor_visible: bool,
     pub field_selected_all: bool,
     pub filter_selected_all: bool,
@@ -247,6 +251,7 @@ impl Workspace {
             resizing_column: None,
             is_filter_focused: false,
             show_right_panels: false,
+            value_panel: ValuePanelState::default(),
             cursor_visible: true,
             field_selected_all: false,
             filter_selected_all: false,

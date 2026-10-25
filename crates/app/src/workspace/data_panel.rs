@@ -93,7 +93,7 @@ impl Workspace {
                     match view_mode {
                         DataViewMode::Grid => {
                             let sidebar_w = theme.sidebar_width.max(280.0);
-                            let panels_w = if show_right_panels { 240.0 } else { 0.0 };
+                            let panels_w = if show_right_panels { VALUE_PANEL_WIDTH } else { 0.0 };
                             let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w - 26.0 - 22.0 - panels_w).max(200.0);
                             let available_viewport_h = (f32::from(window.viewport_size().height) - 180.0).max(200.0);
                             let tab = &mut self.tabs[active_tab_idx];
@@ -107,8 +107,14 @@ impl Workspace {
                             let theme_border_focused = theme.border_focused;
                             let theme_border = theme.border;
                             let view = cx.entity().downgrade();
+                            let cell_view = view.clone();
+                            let on_cell_mouse_down: ui_grid::CellMouseDownHandler = std::rc::Rc::new(move |row, col, event, _window, app| {
+                                let _ = cell_view.update(app, |this, cx| {
+                                    this.select_grid_cell(row, col, event.modifiers.shift, cx);
+                                });
+                            });
 
-                            tab.grid.render_grid_interactive(active_resizing_col, move |col_idx, cur_width| {
+                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), move |col_idx, cur_width| {
                                 let is_active = active_resizing_col == Some(col_idx);
                                 let bg_color = if is_active {
                                     Rgba { a: 0.85, ..theme_border_focused }
@@ -240,52 +246,8 @@ impl Workspace {
         );
 
         if show_right_panels {
-            data_row = data_row.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w(px(240.0))
-                    .h_full()
-                    .bg(theme.bg_surface)
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .p_3()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(div().font_weight(FontWeight::BOLD).text_size(px(11.0)).text_color(theme.text_secondary).child("RECORD VALUE"))
-                            .child(
-                                div()
-                                    .id("btn-close-right-panels")
-                                    .px_1()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.text_muted)
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.show_right_panels = false;
-                                        cx.notify();
-                                    }))
-                                    .child("✕")
-                            )
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .p_2()
-                            .rounded_xs()
-                            .bg(theme.bg_editor)
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_size(px(11.0))
-                            .text_color(theme.text_muted)
-                            .child("Select a cell or record in the data grid to view full content, formatting, and metadata.")
-                    )
-            );
+            data_row = data_row.child(self.render_value_panel(active_tab_idx, cx));
         }
-
 
         data_row
     }

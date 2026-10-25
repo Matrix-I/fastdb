@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
 use gpui::*;
 use mem_engine::QueryResultPager;
@@ -13,6 +14,9 @@ pub const MAX_EXPANDED_COL_WIDTH: f32 = 2500.0;
 pub const GUTTER_WIDTH: f32 = 52.0;
 /// Number of leading rows measured when auto-fitting column widths
 pub const WIDTH_SAMPLE_ROWS: u64 = 100;
+
+/// Called with (row, col) when a data cell is pressed
+pub type CellMouseDownHandler = Rc<dyn Fn(u64, usize, &MouseDownEvent, &mut Window, &mut App)>;
 
 pub fn dbeaver_type_badge(data_type: mem_engine::DataType) -> &'static str {
     match data_type {
@@ -301,7 +305,7 @@ impl VirtualDataGrid {
     }
 
     pub fn render_grid(&mut self) -> impl IntoElement {
-        self.render_grid_interactive(None, |_col_idx, _width| {
+        self.render_grid_interactive(None, None, |_col_idx, _width| {
             div()
                 .w(px(8.0))
                 .h_full()
@@ -310,7 +314,12 @@ impl VirtualDataGrid {
         })
     }
 
-    pub fn render_grid_interactive<F>(&mut self, resizing_col: Option<usize>, mut make_resizer: F) -> impl IntoElement
+    pub fn render_grid_interactive<F>(
+        &mut self,
+        resizing_col: Option<usize>,
+        on_cell_mouse_down: Option<CellMouseDownHandler>,
+        mut make_resizer: F,
+    ) -> impl IntoElement
     where
         F: FnMut(usize, f32) -> AnyElement,
     {
@@ -515,6 +524,12 @@ impl VirtualDataGrid {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis();
+
+                                if let Some(handler) = on_cell_mouse_down.clone() {
+                                    cell_div = cell_div.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                        handler(r_u64, c, event, window, cx);
+                                    });
+                                }
 
                                 if is_selected {
                                     cell_div = cell_div.bg(theme_bg_cell_selected);
