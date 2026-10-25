@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
 use mem_engine::{ColumnMeta, DataType, QueryResultPager};
@@ -14,6 +14,8 @@ use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary}
 pub struct MySqlDriver {
     pub config: ConnectionConfig,
     pool: Arc<Mutex<Option<Pool>>>,
+    /// Server connection id of the connection running the current query, for KILL QUERY
+    active_conn_id: Arc<Mutex<Option<u32>>>,
 }
 
 impl MySqlDriver {
@@ -21,6 +23,7 @@ impl MySqlDriver {
         Self {
             config,
             pool: Arc::new(Mutex::new(None)),
+            active_conn_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -73,79 +76,83 @@ impl MySqlDriver {
         .await
     }
 
-    /// Streams a query's rows into the pager; runs on the shared runtime via the caller
+    /// Streams a query's rows into a new pager; runs on the shared runtime via the caller
     async fn stream_query(
         pool: Pool,
         sql: String,
-        pager: Option<Arc<QueryResultPager>>,
-        event_tx: Option<flume::Sender<StreamEvent>>,
-    ) -> Result<(Arc<QueryResultPager>, u64)> {
-        let mut conn = pool.get_conn().await?;
-        let mut query_result = match conn.query_iter(sql).await {
-            Ok(qr) => qr,
-            Err(e) => {
-                let msg = format!("MySQL query execution error: {e}");
-                if let Some(ref tx) = event_tx {
-                    let _ = tx.send(StreamEvent::Error(msg.clone()));
-                }
-                bail!(msg);
-            }
+        event_tx: flume::Sender<StreamEvent>,
+        active_conn_id: Arc<Mutex<Option<u32>>>,
+    ) -> Result<()> {
+        let start_time = Instant::now();
+        let fail = |msg: String| {
+            let _ = event_tx.send(StreamEvent::Error(msg.clone()));
+            anyhow::anyhow!(msg)
         };
 
-        let columns: Vec<ColumnMeta> = query_result
-            .columns()
-            .as_ref()
-            .map(|cols| {
-                cols.iter()
-                    .map(|c| ColumnMeta::new(c.name_str().to_string(), DataType::Text))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut conn = pool
+            .get_conn()
+            .await
+            .map_err(|e| fail(format!("MySQL connection error: {e}")))?;
+        *active_conn_id.lock() = Some(conn.id());
 
-        let num_cols = columns.len();
-        let pager = match pager {
-            Some(p) => p,
-            None => Arc::new(QueryResultPager::new(columns.clone())?),
-        };
-        if let Some(ref tx) = event_tx {
-            let _ = tx.send(StreamEvent::SchemaReady(columns));
-        }
+        let result = async {
+            let mut query_result = conn
+                .query_iter(sql)
+                .await
+                .map_err(|e| fail(format!("MySQL query execution error: {e}")))?;
 
-        let mut total_rows = 0u64;
-        let mut last_event_instant = Instant::now();
-        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
+            let columns: Vec<ColumnMeta> = query_result
+                .columns()
+                .as_ref()
+                .map(|cols| {
+                    cols.iter()
+                        .map(|c| ColumnMeta::new(c.name_str().to_string(), DataType::Text))
+                        .collect()
+                })
+                .unwrap_or_default();
 
-        if let Some(mut stream) = query_result.stream::<mysql_async::Row>().await? {
-            while let Some(row_res) = stream.next().await {
-                let row = match row_res {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let msg = format!("MySQL row stream error: {e}");
-                        if let Some(ref tx) = event_tx {
-                            let _ = tx.send(StreamEvent::Error(msg.clone()));
-                        }
-                        bail!(msg);
+            let num_cols = columns.len();
+            let pager = Arc::new(QueryResultPager::new(columns).map_err(|e| fail(format!("{e:#}")))?);
+            let _ = event_tx.send(StreamEvent::SchemaReady(Arc::clone(&pager)));
+
+            let mut total_rows = 0u64;
+            let mut last_event_instant = Instant::now();
+            let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
+
+            let stream = query_result
+                .stream::<mysql_async::Row>()
+                .await
+                .map_err(|e| fail(format!("MySQL row stream error: {e}")))?;
+            if let Some(mut stream) = stream {
+                while let Some(row_res) = stream.next().await {
+                    let row = row_res.map_err(|e| fail(format!("MySQL row stream error: {e}")))?;
+
+                    for (i, buf) in cell_buffers.iter_mut().enumerate() {
+                        *buf = mysql_value_to_bytes(row.get(i));
                     }
-                };
 
-                for (i, buf) in cell_buffers.iter_mut().enumerate() {
-                    *buf = mysql_value_to_bytes(row.get(i));
-                }
+                    let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
+                    let (rows, rollover) = pager.append_row(cell_slices).map_err(|e| fail(format!("{e:#}")))?;
+                    total_rows = rows;
 
-                let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-                let (rows, rollover) = pager.append_row(cell_slices)?;
-                total_rows = rows;
-
-                if let Some(ref tx) = event_tx {
                     if rollover || last_event_instant.elapsed().as_millis() >= 16 {
-                        let _ = tx.send(StreamEvent::PageAppended { total_rows });
+                        let _ = event_tx.send(StreamEvent::PageAppended { total_rows });
                         last_event_instant = Instant::now();
                     }
                 }
             }
+            Ok::<u64, anyhow::Error>(total_rows)
         }
+        .await;
+        *active_conn_id.lock() = None;
 
-        Ok((pager, total_rows))
+        let total_rows = result?;
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        let _ = event_tx.send(StreamEvent::Completed {
+            total_rows,
+            elapsed_ms,
+        });
+        Ok(())
     }
 }
 
@@ -179,42 +186,25 @@ impl DatabaseDriver for MySqlDriver {
         .await
     }
 
-    async fn execute_streaming(
-        &self,
-        sql: &str,
-        pager: Arc<QueryResultPager>,
-        event_tx: flume::Sender<StreamEvent>,
-    ) -> Result<()> {
-        let start_time = Instant::now();
+    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()> {
         let pool = self.get_pool()?;
         let sql = sql.to_string();
-        let tx = event_tx.clone();
-        let (_, total_rows) =
-            crate::run_on_shared_runtime(Self::stream_query(pool, sql, Some(pager), Some(tx))).await?;
-
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        let _ = event_tx.send(StreamEvent::Completed {
-            total_rows,
-            elapsed_ms,
-        });
-
-        Ok(())
-    }
-
-    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
-        let start_time = Instant::now();
-        let pool = self.get_pool()?;
-        let clean_sql = sql.trim().trim_end_matches(';').to_string();
-        let (pager, total_rows) =
-            crate::run_on_shared_runtime(Self::stream_query(pool, clean_sql, None, None)).await?;
-
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        Ok((pager, total_rows, elapsed_ms))
+        let active_conn_id = Arc::clone(&self.active_conn_id);
+        crate::run_on_shared_runtime(Self::stream_query(pool, sql, event_tx, active_conn_id)).await
     }
 
     async fn cancel_active_query(&self) -> Result<()> {
-        // In MySQL, canceling is done via KILL QUERY <conn_id>
-        Ok(())
+        let Some(conn_id) = *self.active_conn_id.lock() else {
+            return Ok(());
+        };
+        let pool = self.get_pool()?;
+        crate::run_on_shared_runtime(async move {
+            // KILL must run on a different connection than the one executing the query
+            let mut conn = pool.get_conn().await?;
+            conn.query_drop(format!("KILL QUERY {conn_id}")).await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn list_tables(&self) -> Result<Vec<TableSummary>> {

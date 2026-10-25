@@ -2,7 +2,7 @@ pub mod binary_decoder;
 
 use std::sync::Arc;
 use std::time::Instant;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
 use mem_engine::{ColumnMeta, QueryResultPager};
@@ -18,6 +18,14 @@ pub struct PostgresDriver {
     pub config: ConnectionConfig,
     client: tokio::sync::Mutex<Option<Arc<Client>>>,
     cancel_token: Arc<Mutex<Option<CancelToken>>>,
+}
+
+/// Server errors carry the useful text in their DbError; the Display impl only says "db error"
+fn pg_error_message(e: &tokio_postgres::Error) -> String {
+    match e.as_db_error() {
+        Some(db) => format!("{}: {}", db.severity(), db.message()),
+        None => e.to_string(),
+    }
 }
 
 impl PostgresDriver {
@@ -92,26 +100,22 @@ impl DatabaseDriver for PostgresDriver {
         Ok(())
     }
 
-    async fn execute_streaming(
-        &self,
-        sql: &str,
-        pager: Arc<QueryResultPager>,
-        event_tx: flume::Sender<StreamEvent>,
-    ) -> Result<()> {
+    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()> {
         let start_time = Instant::now();
-        let client = self.get_or_connect().await?;
+        let fail = |msg: String| {
+            let _ = event_tx.send(StreamEvent::Error(msg.clone()));
+            anyhow::anyhow!(msg)
+        };
+
+        let client = self.get_or_connect().await.map_err(|e| fail(format!("{e:#}")))?;
 
         // Update cancel token for this connection
         *self.cancel_token.lock() = Some(client.cancel_token());
 
-        let statement = match client.prepare(sql).await {
-            Ok(stmt) => stmt,
-            Err(e) => {
-                let err_msg = format!("SQL Preparation Error: {e}");
-                let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
-                bail!(err_msg);
-            }
-        };
+        let statement = client
+            .prepare(sql)
+            .await
+            .map_err(|e| fail(format!("SQL Preparation Error: {}", pg_error_message(&e))))?;
 
         // Extract column metadata from statement
         let columns: Vec<ColumnMeta> = statement
@@ -121,16 +125,13 @@ impl DatabaseDriver for PostgresDriver {
             .collect();
 
         let num_cols = columns.len();
-        let _ = event_tx.send(StreamEvent::SchemaReady(columns));
+        let pager = Arc::new(QueryResultPager::new(columns).map_err(|e| fail(format!("{e:#}")))?);
+        let _ = event_tx.send(StreamEvent::SchemaReady(Arc::clone(&pager)));
 
-        let row_stream = match client.query_raw(&statement, std::iter::empty::<i32>()).await {
-            Ok(s) => s,
-            Err(e) => {
-                let err_msg = format!("Query execution error: {e}");
-                let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
-                bail!(err_msg);
-            }
-        };
+        let row_stream = client
+            .query_raw(&statement, std::iter::empty::<i32>())
+            .await
+            .map_err(|e| fail(format!("Query execution error: {}", pg_error_message(&e))))?;
 
         futures::pin_mut!(row_stream);
 
@@ -139,21 +140,14 @@ impl DatabaseDriver for PostgresDriver {
         let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
 
         while let Some(row_res) = row_stream.next().await {
-            let row = match row_res {
-                Ok(r) => r,
-                Err(e) => {
-                    let err_msg = format!("Row stream error: {e}");
-                    let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
-                    bail!(err_msg);
-                }
-            };
+            let row = row_res.map_err(|e| fail(format!("Row stream error: {}", pg_error_message(&e))))?;
 
-            for col_idx in 0..num_cols {
-                cell_buffers[col_idx] = decode_pg_cell(&row, col_idx);
+            for (col_idx, buf) in cell_buffers.iter_mut().enumerate() {
+                *buf = decode_pg_cell(&row, col_idx);
             }
 
             let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-            let (rows, rollover) = pager.append_row(cell_slices)?;
+            let (rows, rollover) = pager.append_row(cell_slices).map_err(|e| fail(format!("{e:#}")))?;
             total_rows = rows;
 
             // Throttled notification: notify every 16ms (60 FPS) or on page rollover
@@ -171,44 +165,6 @@ impl DatabaseDriver for PostgresDriver {
 
         debug!("Postgres query streaming completed: {} rows in {}ms", total_rows, elapsed_ms);
         Ok(())
-    }
-
-    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
-        let start_time = Instant::now();
-        let client = self.get_or_connect().await?;
-        *self.cancel_token.lock() = Some(client.cancel_token());
-
-        let clean_sql = sql.trim().trim_end_matches(';').trim();
-        let statement = client.prepare(clean_sql).await
-            .with_context(|| format!("SQL Preparation Error: {clean_sql}"))?;
-
-        let columns: Vec<ColumnMeta> = statement
-            .columns()
-            .iter()
-            .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
-            .collect();
-
-        let num_cols = columns.len();
-        let pager = Arc::new(QueryResultPager::new(columns)?);
-
-        let rows = client.query(&statement, &[]).await
-            .with_context(|| format!("Query execution error: {clean_sql}"))?;
-
-        let mut total_rows = 0u64;
-        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
-
-        for row in &rows {
-            for col_idx in 0..num_cols {
-                cell_buffers[col_idx] = decode_pg_cell(row, col_idx);
-            }
-            let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-            let (r, _) = pager.append_row(cell_slices)?;
-            total_rows = r;
-        }
-
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        info!("Postgres execute_query completed: {} rows in {}ms", total_rows, elapsed_ms);
-        Ok((pager, total_rows, elapsed_ms))
     }
 
     async fn cancel_active_query(&self) -> Result<()> {

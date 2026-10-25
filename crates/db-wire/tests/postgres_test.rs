@@ -101,3 +101,63 @@ fn test_postgres_connection_survives_short_lived_caller_runtime() {
         .unwrap();
     assert_eq!(cell_text(&pager, 0, 0).unwrap(), first_pid, "connection was lost and silently reopened");
 }
+
+#[test]
+fn test_postgres_streams_rows_incrementally() {
+    let Some(config) = test_config() else {
+        eprintln!("skipped: FASTDB_TEST_PG_PORT not set");
+        return;
+    };
+    let driver = PostgresDriver::new(config);
+    let (event_tx, event_rx) = flume::unbounded();
+
+    db_wire::get_runtime()
+        .block_on(driver.execute_streaming(
+            "SELECT g AS id, repeat('x', 100) AS payload FROM generate_series(1, 20000) g",
+            event_tx,
+        ))
+        .unwrap();
+
+    let events: Vec<db_wire::StreamEvent> = event_rx.drain().collect();
+    let db_wire::StreamEvent::SchemaReady(pager) = &events[0] else {
+        panic!("first event must be SchemaReady, got {:?}", events[0]);
+    };
+    let appended: Vec<u64> = events
+        .iter()
+        .filter_map(|e| match e {
+            db_wire::StreamEvent::PageAppended { total_rows } => Some(*total_rows),
+            _ => None,
+        })
+        .collect();
+    assert!(appended.len() > 1, "rows must arrive in several batches, got {appended:?}");
+    assert!(appended.windows(2).all(|w| w[0] < w[1]));
+    assert!(matches!(events.last(), Some(db_wire::StreamEvent::Completed { total_rows: 20000, .. })));
+    assert_eq!(cell_text(pager, 19_999, 0).as_deref(), Some("20000"));
+}
+
+#[test]
+fn test_postgres_running_query_can_be_cancelled() {
+    let Some(config) = test_config() else {
+        eprintln!("skipped: FASTDB_TEST_PG_PORT not set");
+        return;
+    };
+    let driver = Arc::new(PostgresDriver::new(config));
+    let rt = db_wire::get_runtime();
+    let (event_tx, event_rx) = flume::unbounded();
+
+    let runner = Arc::clone(&driver);
+    let query = rt.spawn(async move { runner.execute_streaming("SELECT pg_sleep(30)", event_tx).await });
+
+    rt.block_on(async {
+        assert!(matches!(event_rx.recv_async().await, Ok(db_wire::StreamEvent::SchemaReady(_))));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        driver.cancel_active_query().await.unwrap();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), query)
+            .await
+            .expect("cancelled query must stop promptly")
+            .unwrap();
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("canceling statement"), "unexpected error: {err}");
+    });
+}

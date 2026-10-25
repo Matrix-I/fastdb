@@ -49,12 +49,27 @@ impl Default for ConnectionConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Progress of a streaming query, in order: SchemaReady, PageAppended*, then Completed or Error
+#[derive(Clone)]
 pub enum StreamEvent {
-    SchemaReady(Vec<ColumnMeta>),
+    /// Result columns are known; rows are appended into this pager as they arrive
+    SchemaReady(Arc<QueryResultPager>),
     PageAppended { total_rows: u64 },
     Completed { total_rows: u64, elapsed_ms: u64 },
     Error(String),
+}
+
+impl std::fmt::Debug for StreamEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamEvent::SchemaReady(pager) => write!(f, "SchemaReady({} columns)", pager.num_cols()),
+            StreamEvent::PageAppended { total_rows } => write!(f, "PageAppended {{ total_rows: {total_rows} }}"),
+            StreamEvent::Completed { total_rows, elapsed_ms } => {
+                write!(f, "Completed {{ total_rows: {total_rows}, elapsed_ms: {elapsed_ms} }}")
+            }
+            StreamEvent::Error(e) => write!(f, "Error({e:?})"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -70,16 +85,31 @@ pub trait DatabaseDriver: Send + Sync {
     /// Test connection to verify credentials and connectivity
     async fn ping(&self) -> Result<()>;
 
-    /// Stream query results straight into QueryResultPager and emit StreamEvents
-    async fn execute_streaming(
-        &self,
-        sql: &str,
-        pager: Arc<QueryResultPager>,
-        event_tx: flume::Sender<StreamEvent>,
-    ) -> Result<()>;
+    /// Stream query results into a new QueryResultPager, announced via StreamEvent::SchemaReady.
+    /// Errors are both sent as StreamEvent::Error and returned.
+    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()>;
 
-    /// Execute query and return populated QueryResultPager, total rows, and elapsed ms
-    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)>;
+    /// Execute query to completion and return the populated pager, total rows, and elapsed ms
+    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
+        let (event_tx, event_rx) = flume::unbounded();
+        self.execute_streaming(sql, event_tx).await?;
+
+        let mut pager = None;
+        let mut summary = None;
+        for event in event_rx.drain() {
+            match event {
+                StreamEvent::SchemaReady(p) => pager = Some(p),
+                StreamEvent::Completed { total_rows, elapsed_ms } => summary = Some((total_rows, elapsed_ms)),
+                StreamEvent::Error(e) => anyhow::bail!(e),
+                StreamEvent::PageAppended { .. } => {}
+            }
+        }
+
+        match (pager, summary) {
+            (Some(pager), Some((total_rows, elapsed_ms))) => Ok((pager, total_rows, elapsed_ms)),
+            _ => anyhow::bail!("Query finished without producing a result"),
+        }
+    }
 
     /// Cancel actively running query out-of-band immediately
     async fn cancel_active_query(&self) -> Result<()>;

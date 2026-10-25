@@ -38,34 +38,18 @@ impl SqliteDriver {
         config.database = ":memory:".to_string();
         Self::new(config).expect("Failed to initialize in-memory SQLite database")
     }
-}
 
-#[async_trait]
-impl DatabaseDriver for SqliteDriver {
-    async fn ping(&self) -> Result<()> {
-        let conn = self.conn.lock();
-        // `execute` rejects statements that return rows, so read the row instead
-        conn.query_row("SELECT 1;", [], |_| Ok(()))?;
-        Ok(())
-    }
-
-    async fn execute_streaming(
-        &self,
-        sql: &str,
-        pager: Arc<QueryResultPager>,
-        event_tx: flume::Sender<StreamEvent>,
-    ) -> Result<()> {
+    fn stream_blocking(conn: &Mutex<Connection>, sql: &str, event_tx: &flume::Sender<StreamEvent>) -> Result<()> {
         let start_time = Instant::now();
-        let conn = self.conn.lock();
-
-        let mut stmt = match conn.prepare(sql) {
-            Ok(s) => s,
-            Err(e) => {
-                let err_msg = format!("SQLite prepare error: {e}");
-                let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
-                anyhow::bail!(err_msg);
-            }
+        let fail = |msg: String| {
+            let _ = event_tx.send(StreamEvent::Error(msg.clone()));
+            anyhow::anyhow!(msg)
         };
+
+        let conn = conn.lock();
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| fail(format!("SQLite prepare error: {e}")))?;
 
         let col_count = stmt.column_count();
         let columns: Vec<ColumnMeta> = stmt
@@ -74,24 +58,20 @@ impl DatabaseDriver for SqliteDriver {
             .map(|name| ColumnMeta::new(*name, DataType::Text))
             .collect();
 
-        let _ = event_tx.send(StreamEvent::SchemaReady(columns));
+        let pager = Arc::new(QueryResultPager::new(columns).map_err(|e| fail(format!("{e:#}")))?);
+        let _ = event_tx.send(StreamEvent::SchemaReady(Arc::clone(&pager)));
 
-        let mut rows = match stmt.query([]) {
-            Ok(r) => r,
-            Err(e) => {
-                let err_msg = format!("SQLite query error: {e}");
-                let _ = event_tx.send(StreamEvent::Error(err_msg.clone()));
-                anyhow::bail!(err_msg);
-            }
-        };
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| fail(format!("SQLite query error: {e}")))?;
 
         let mut total_rows = 0u64;
         let mut last_event_instant = Instant::now();
         let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; col_count];
 
-        while let Some(row) = rows.next()? {
-            for i in 0..col_count {
-                cell_buffers[i] = match row.get_ref(i)? {
+        while let Some(row) = rows.next().map_err(|e| fail(format!("SQLite query error: {e}")))? {
+            for (i, buf) in cell_buffers.iter_mut().enumerate() {
+                *buf = match row.get_ref(i).map_err(|e| fail(format!("SQLite read error: {e}")))? {
                     ValueRef::Null => None,
                     ValueRef::Integer(v) => Some(v.to_string().into_bytes()),
                     ValueRef::Real(v) => Some(v.to_string().into_bytes()),
@@ -101,7 +81,7 @@ impl DatabaseDriver for SqliteDriver {
             }
 
             let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-            let (count, rollover) = pager.append_row(cell_slices)?;
+            let (count, rollover) = pager.append_row(cell_slices).map_err(|e| fail(format!("{e:#}")))?;
             total_rows = count;
 
             if rollover || last_event_instant.elapsed().as_millis() >= 16 {
@@ -118,45 +98,25 @@ impl DatabaseDriver for SqliteDriver {
 
         Ok(())
     }
+}
 
-    async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
-        let start_time = Instant::now();
+#[async_trait]
+impl DatabaseDriver for SqliteDriver {
+    async fn ping(&self) -> Result<()> {
         let conn = self.conn.lock();
-        let clean_sql = sql.trim();
-        let mut stmt = conn.prepare(clean_sql)
-            .map_err(|e| anyhow::anyhow!("SQLite prepare error: {e}"))?;
+        // `execute` rejects statements that return rows, so read the row instead
+        conn.query_row("SELECT 1;", [], |_| Ok(()))?;
+        Ok(())
+    }
 
-        let col_count = stmt.column_count();
-        let columns: Vec<ColumnMeta> = stmt
-            .column_names()
-            .iter()
-            .map(|name| ColumnMeta::new(*name, DataType::Text))
-            .collect();
-
-        let pager = Arc::new(QueryResultPager::new(columns)?);
-        let mut rows = stmt.query([])
-            .map_err(|e| anyhow::anyhow!("SQLite query error: {e}"))?;
-
-        let mut total_rows = 0u64;
-        let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; col_count];
-
-        while let Some(row) = rows.next()? {
-            for i in 0..col_count {
-                cell_buffers[i] = match row.get_ref(i)? {
-                    ValueRef::Null => None,
-                    ValueRef::Integer(v) => Some(v.to_string().into_bytes()),
-                    ValueRef::Real(v) => Some(v.to_string().into_bytes()),
-                    ValueRef::Text(v) => Some(v.to_vec()),
-                    ValueRef::Blob(v) => Some(v.to_vec()),
-                };
-            }
-            let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-            let (count, _) = pager.append_row(cell_slices)?;
-            total_rows = count;
-        }
-
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        Ok((pager, total_rows, elapsed_ms))
+    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()> {
+        let conn = Arc::clone(&self.conn);
+        let sql = sql.to_string();
+        // rusqlite is synchronous; keep it off the async workers so cancel_active_query can interrupt it
+        crate::get_runtime()
+            .spawn_blocking(move || Self::stream_blocking(&conn, &sql, &event_tx))
+            .await
+            .map_err(|e| anyhow::anyhow!("SQLite worker failed: {e}"))?
     }
 
     async fn cancel_active_query(&self) -> Result<()> {
