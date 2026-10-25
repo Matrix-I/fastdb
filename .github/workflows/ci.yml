@@ -12,7 +12,7 @@ jobs:
   # Engine and driver crates against live PostgreSQL and MySQL servers
   db-integration:
     name: Engine & drivers (live databases)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -42,7 +42,7 @@ jobs:
       FASTDB_TEST_MYSQL_USER: root
       FASTDB_TEST_MYSQL_PASSWORD: fastdb
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install system libraries
         # keyring's Secret Service backend links against D-Bus
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
@@ -56,7 +56,7 @@ jobs:
     name: Build & test (macOS)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
@@ -67,9 +67,9 @@ jobs:
 
   linux-app:
     name: Build app (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install system libraries
         run: >-
           sudo apt-get update && sudo apt-get install -y
