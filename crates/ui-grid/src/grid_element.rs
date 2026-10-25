@@ -54,6 +54,39 @@ pub fn resolve_cell(pager: &QueryResultPager, changeset: &Changeset, row: u64, c
     }
 }
 
+/// Columns of a row that intersect the horizontally scrolled viewport, plus one on each
+/// side, and the x offset (after the gutter) where the first of them starts. Rows only
+/// build these cells, so a wide table costs no more per frame than a narrow one.
+pub fn visible_columns(widths: &[f32], scroll_x: f32, viewport_width: f32) -> (std::ops::Range<usize>, f32) {
+    let (view_start, view_end) = (scroll_x - GUTTER_WIDTH, scroll_x + viewport_width - GUTTER_WIDTH);
+    let mut x = 0.0;
+    let mut first = None;
+    let mut end = widths.len();
+    for (c, w) in widths.iter().enumerate() {
+        if first.is_none() && x + w > view_start {
+            first = Some(c);
+        }
+        if x >= view_end {
+            end = c;
+            break;
+        }
+        x += w;
+    }
+    let first = first.unwrap_or(widths.len()).saturating_sub(1);
+    let end = (end + 1).min(widths.len()).max(first);
+    (first..end, widths[..first].iter().sum())
+}
+
+/// Cell text cut to what a column of `width` px can show; the rest would only be
+/// measured and dropped by the ellipsis on every frame. Kept long enough to still overflow.
+fn clip_cell_text(mut text: String, width: f32) -> String {
+    let max_chars = (width / 2.5) as usize + 1;
+    if let Some((i, _)) = text.char_indices().nth(max_chars) {
+        text.truncate(i);
+    }
+    text
+}
+
 pub fn dbeaver_type_badge(data_type: mem_engine::DataType) -> &'static str {
     match data_type {
         mem_engine::DataType::Text | mem_engine::DataType::Varchar => "AZ",
@@ -450,7 +483,6 @@ impl VirtualDataGrid {
         let gutter_width = GUTTER_WIDTH;
 
         let total_rows = self.row_count();
-        let num_cols = self.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
 
         let total_cols_width: f32 = self.column_widths.iter().sum();
         let content_total_width = gutter_width + total_cols_width;
@@ -616,6 +648,8 @@ impl VirtualDataGrid {
         let theme_bg_editor = theme.bg_editor;
         let theme_text_success = theme.text_success;
         let theme_text_error = theme.text_error;
+        let scroll_x = -f32::from(self.horizontal_scroll_handle.offset().x);
+        let (visible_cols, cols_offset) = visible_columns(&self.column_widths, scroll_x, self.viewport_width);
 
         let body = div()
             .id("grid-data-body-container")
@@ -673,9 +707,10 @@ impl VirtualDataGrid {
                                             RowRef::New(_) => "+".to_string(),
                                             RowRef::Fetched(f) => format!("{}", f + 1),
                                         })
-                                );
+                                )
+                                .child(div().flex_none().w(px(cols_offset)).h_full());
 
-                            for c in 0..num_cols {
+                            for c in visible_cols.clone() {
                                 let width = column_widths_clone.get(c).copied().unwrap_or(MIN_COL_WIDTH);
                                 let is_selected = selection_clone.is_selected(r_u64, c);
                                 let is_modified = matches!(row_ref, RowRef::Fetched(f) if changeset_clone.is_modified(f, c));
@@ -718,11 +753,7 @@ impl VirtualDataGrid {
 
                                 let value = pager_clone.as_ref().and_then(|p| resolve_cell(p, &changeset_clone, r_u64, c));
                                 let (display_text, is_null) = match value {
-                                    Some(s) if s.len() > 3000 => {
-                                        let truncate_idx = s.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(s.len());
-                                        (format!("{}…", &s[..truncate_idx]), false)
-                                    }
-                                    Some(s) => (s, false),
+                                    Some(s) => (clip_cell_text(s, width), false),
                                     None => ("NULL".to_string(), true),
                                 };
 
@@ -1026,6 +1057,33 @@ impl VirtualDataGrid {
 impl Render for VirtualDataGrid {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         self.render_grid()
+    }
+}
+
+#[cfg(test)]
+mod visible_columns_tests {
+    use super::{clip_cell_text, visible_columns, GUTTER_WIDTH};
+
+    #[test]
+    fn only_columns_in_view_are_kept_with_one_extra_each_side() {
+        let widths = [100.0; 10];
+        // Unscrolled, a 300px view past the gutter shows columns 0..=2
+        let (range, offset) = visible_columns(&widths, 0.0, 300.0 + GUTTER_WIDTH);
+        assert_eq!((range, offset), (0..4, 0.0));
+        // Scrolled by 450px: columns 4..=7 are in view, 3 and 8 are the extras
+        let (range, offset) = visible_columns(&widths, 450.0 + GUTTER_WIDTH, 300.0);
+        assert_eq!((range, offset), (3..9, 300.0));
+        // Scrolled to the end
+        let (range, _) = visible_columns(&widths, 800.0 + GUTTER_WIDTH, 300.0);
+        assert_eq!(range, 7..10);
+        assert_eq!(visible_columns(&[], 0.0, 300.0).0, 0..0);
+    }
+
+    #[test]
+    fn cell_text_is_clipped_to_the_column() {
+        assert_eq!(clip_cell_text("short".to_string(), 100.0), "short");
+        assert_eq!(clip_cell_text("x".repeat(500), 100.0).len(), 41);
+        assert_eq!(clip_cell_text("ngày".repeat(100), 10.0), "ngàyn");
     }
 }
 
