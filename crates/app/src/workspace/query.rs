@@ -115,6 +115,14 @@ impl FetchSummary {
     }
 }
 
+/// Column name quoted for the driver's SQL dialect
+pub(super) fn quote_ident(kind: DbDriverKind, name: &str) -> String {
+    match kind {
+        DbDriverKind::MySql => format!("`{}`", name.replace('`', "``")),
+        DbDriverKind::Postgres | DbDriverKind::Sqlite => format!("\"{}\"", name.replace('"', "\"\"")),
+    }
+}
+
 /// Formats a row count with thousands separators: 1400 -> "1,400"
 pub fn group_thousands(n: u64) -> String {
     let digits = n.to_string();
@@ -158,7 +166,7 @@ impl TabState {
                 if let Some(ref mut append) = self.fetch.append {
                     append.pager = Some(pager);
                 } else {
-                    self.grid.set_pager(pager);
+                    self.grid.refill_pager(pager);
                     if let Some(ref t_name) = self.table_name {
                         self.grid.set_table_name(t_name.clone());
                     }
@@ -269,15 +277,25 @@ impl Workspace {
         };
 
         let filter = tab.filter_sql.trim();
+        let f_upper = filter.to_uppercase();
         let mut limit_suffix = format!(" LIMIT {}", tab.fetch.size);
         if offset > 0 {
             limit_suffix.push_str(&format!(" OFFSET {}", offset));
         }
+        // A filter that orders or limits its rows itself already ends the statement,
+        // so the header ordering cannot be appended after it
+        let order_suffix = match &tab.grid.ordering {
+            Some(o) if !f_upper.contains("ORDER BY") && !f_upper.contains("LIMIT") => format!(
+                " ORDER BY {} {}",
+                quote_ident(self.selected_driver_kind, &o.column),
+                if o.descending { "DESC" } else { "ASC" }
+            ),
+            _ => String::new(),
+        };
 
         if filter.is_empty() {
-            (format!("SELECT * FROM {}{};", target, limit_suffix), true)
+            (format!("SELECT * FROM {}{}{};", target, order_suffix, limit_suffix), true)
         } else {
-            let f_upper = filter.to_uppercase();
             // A filter with its own LIMIT decides the row count, so it is not fetched in chunks
             let paged = !f_upper.contains("LIMIT");
             let limit_suffix = if paged { limit_suffix.as_str() } else { "" };
@@ -288,9 +306,9 @@ impl Workspace {
                 || f_upper.starts_with("HAVING")
                 || f_upper.starts_with("LIMIT")
             {
-                format!("SELECT * FROM {} {}{};", target, filter, limit_suffix)
+                format!("SELECT * FROM {} {}{}{};", target, filter, order_suffix, limit_suffix)
             } else {
-                format!("SELECT * FROM {} WHERE {}{};", target, filter, limit_suffix)
+                format!("SELECT * FROM {} WHERE {}{}{};", target, filter, order_suffix, limit_suffix)
             };
             (sql, paged)
         }

@@ -123,10 +123,21 @@ impl Workspace {
                                     }
                                 });
                             });
+                            // Ordering is added to the generated SELECT, so only table tabs offer it
+                            let on_header_menu: Option<ui_grid::HeaderMenuHandler> =
+                                self.tabs[active_tab_idx].table_name.is_some().then(|| {
+                                    let menu_view = view.clone();
+                                    std::rc::Rc::new(move |col: usize, event: &MouseDownEvent, _window: &mut Window, app: &mut App| {
+                                        let _ = menu_view.update(app, |this, cx| {
+                                            this.open_column_menu(active_tab_idx, col, event.position);
+                                            cx.notify();
+                                        });
+                                    }) as ui_grid::HeaderMenuHandler
+                                });
                             let cell_editor = self.cell_editor_renderer(cx);
                             let tab = &mut self.tabs[active_tab_idx];
 
-                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), cell_editor, move |col_idx, cur_width| {
+                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), on_header_menu, cell_editor, move |col_idx, cur_width| {
                                 let is_active = active_resizing_col == Some(col_idx);
                                 let bg_color = if is_active {
                                     Rgba { a: 0.85, ..theme_border_focused }

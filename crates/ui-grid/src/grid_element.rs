@@ -19,6 +19,16 @@ pub const WIDTH_SAMPLE_ROWS: u64 = 100;
 /// Called with (row, col) when a data cell is pressed
 pub type CellMouseDownHandler = Rc<dyn Fn(u64, usize, &MouseDownEvent, &mut Window, &mut App)>;
 
+/// Called with the column index when the dropdown arrow of a column header is pressed
+pub type HeaderMenuHandler = Rc<dyn Fn(usize, &MouseDownEvent, &mut Window, &mut App)>;
+
+/// Server-side ordering of the result by one column, picked from the header menu
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnOrder {
+    pub column: String,
+    pub descending: bool,
+}
+
 /// A cell being edited in place: its text and caret, as a char index
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellEdit {
@@ -84,6 +94,8 @@ pub struct VirtualDataGrid {
     /// Undo history of the staged edits; each change made through `stage` is one step
     pub changeset_history: History<Changeset>,
     pub editing_cell: Option<CellEdit>,
+    /// Ordering applied to the query; kept when a new result replaces the pager
+    pub ordering: Option<ColumnOrder>,
     pub horizontal_scroll_handle: ScrollHandle,
     pub vertical_scroll_handle: UniformListScrollHandle,
 }
@@ -107,6 +119,7 @@ impl VirtualDataGrid {
             changeset: Changeset::new(),
             changeset_history: History::new(),
             editing_cell: None,
+            ordering: None,
             horizontal_scroll_handle: ScrollHandle::new(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
         };
@@ -125,6 +138,29 @@ impl VirtualDataGrid {
         self.scroll_top = 0.0;
         self.scroll_left = 0.0;
         self.horizontal_scroll_handle = ScrollHandle::new();
+        self.vertical_scroll_handle = UniformListScrollHandle::new();
+    }
+
+    /// Swaps in a re-read of the same columns (re-ordered, refreshed or re-filtered): column
+    /// widths and the horizontal scroll stay as they are, only the rows start over from the top.
+    /// A result with other columns is laid out from scratch, as `set_pager` does.
+    pub fn refill_pager(&mut self, pager: Arc<QueryResultPager>) {
+        let same_columns = self.pager.as_ref().is_some_and(|old| {
+            old.columns.len() == pager.columns.len()
+                && old.columns.iter().zip(&pager.columns).all(|(a, b)| a.name == b.name && a.data_type == b.data_type)
+        });
+        if !same_columns {
+            self.set_pager(pager);
+            return;
+        }
+        self.pager = Some(pager);
+        // The widths already fit the columns; re-measuring the new rows would make them jump
+        self.width_sampled_rows = WIDTH_SAMPLE_ROWS;
+        self.selection.clear();
+        self.changeset.clear();
+        self.changeset_history.clear();
+        self.editing_cell = None;
+        self.scroll_top = 0.0;
         self.vertical_scroll_handle = UniformListScrollHandle::new();
     }
 
@@ -388,7 +424,7 @@ impl VirtualDataGrid {
     }
 
     pub fn render_grid(&mut self) -> impl IntoElement {
-        self.render_grid_interactive(None, None, None, |_col_idx, _width| {
+        self.render_grid_interactive(None, None, None, None, |_col_idx, _width| {
             div()
                 .w(px(8.0))
                 .h_full()
@@ -401,6 +437,7 @@ impl VirtualDataGrid {
         &mut self,
         resizing_col: Option<usize>,
         on_cell_mouse_down: Option<CellMouseDownHandler>,
+        on_header_menu: Option<HeaderMenuHandler>,
         cell_editor: Option<(u64, usize, CellEditorRenderer)>,
         mut make_resizer: F,
     ) -> impl IntoElement
@@ -475,6 +512,32 @@ impl VirtualDataGrid {
                 let resizer = make_resizer(col_idx, width);
                 let badge_str = dbeaver_type_badge(col.data_type);
                 let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
+                let sort_glyph = self
+                    .ordering
+                    .as_ref()
+                    .filter(|o| o.column == col.name)
+                    .map(|o| if o.descending { "↓" } else { "↑" });
+                let mut arrow = div()
+                    .id(("header-menu-arrow", col_idx))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(14.0))
+                    .h(px(14.0))
+                    .rounded_xs()
+                    .text_size(px(8.5))
+                    .text_color(rgb(0x58a6ff))
+                    .child("▼");
+                if let Some(handler) = on_header_menu.clone() {
+                    arrow = arrow
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_surface_hover))
+                        .on_mouse_down(MouseButton::Left, move |event, window, app| {
+                            app.stop_propagation();
+                            handler(col_idx, event, window, app);
+                        });
+                }
 
                 header_row = header_row.child(
                     div()
@@ -518,13 +581,15 @@ impl VirtualDataGrid {
                                         .truncate()
                                         .child(col.name.clone())
                                 )
-                                .child(
+                                .children(sort_glyph.map(|g| {
                                     div()
                                         .flex_none()
-                                        .text_size(px(8.5))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_size(px(12.0))
                                         .text_color(rgb(0x58a6ff))
-                                        .child("▼")
-                                )
+                                        .child(g)
+                                }))
+                                .child(arrow)
                         )
                         .child(resizer)
                 );
@@ -987,6 +1052,34 @@ mod tests {
         grid.changeset.set_cell(0, 1, Some(b"Alice".to_vec()), Some("Alicia".to_string()));
         grid.selection.set_range(crate::GridCoord { row: 0, col: 0 }, crate::GridCoord { row: 1, col: 1 });
         assert_eq!(grid.selection_text().as_deref(), Some("1\tAlicia\n2\t"));
+    }
+
+    #[test]
+    fn test_refill_keeps_column_widths_of_the_same_columns() {
+        let cols = || vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let first = Arc::new(QueryResultPager::new(cols()).unwrap());
+        first.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+
+        let mut grid = VirtualDataGrid::new(None, Theme::dark());
+        grid.set_pager(Arc::clone(&first));
+        grid.set_column_width(1, 300.0);
+        grid.selection = GridSelection::single(0, 1);
+        let widths = grid.column_widths.clone();
+
+        let reordered = Arc::new(QueryResultPager::new(cols()).unwrap());
+        reordered.append_row(vec![Some(&b"2"[..]), Some(&b"a much longer name than before, by far"[..])]).unwrap();
+        grid.refill_pager(Arc::clone(&reordered));
+        grid.on_rows_appended();
+        assert_eq!(grid.column_widths, widths);
+        assert!(grid.manual_column_widths.contains(&1));
+        assert_eq!(grid.selection_text(), None);
+        assert_eq!(grid.cell_value(0, 0).as_deref(), Some("2"));
+
+        // Other columns are laid out from scratch
+        let other = Arc::new(QueryResultPager::new(vec![ColumnMeta::new("email", DataType::Text)]).unwrap());
+        grid.refill_pager(other);
+        assert!(grid.manual_column_widths.is_empty());
+        assert_eq!(grid.column_widths.len(), 1);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use ui_core::theme::Theme;
 use ui_editor::SqlEditorView;
 use ui_grid::VirtualDataGrid;
 
+mod column_menu;
 mod connection_dialog;
 mod connections;
 mod data_edit;
@@ -29,6 +30,7 @@ mod value_format;
 mod value_panel;
 mod widgets;
 
+pub use column_menu::ColumnMenu;
 pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
 pub use tab_context_menu::TabContextMenu;
@@ -164,6 +166,8 @@ pub struct Workspace {
     pub nav_context_menu: Option<NavContextMenu>,
     /// Right-click menu of a top bar tab, if open
     pub tab_context_menu: Option<TabContextMenu>,
+    /// Dropdown of a result grid column header, if open
+    pub column_menu: Option<ColumnMenu>,
 }
 
 impl Workspace {
@@ -291,6 +295,7 @@ impl Workspace {
             cell_edit_history: LineHistory::new(),
             nav_context_menu: None,
             tab_context_menu: None,
+            column_menu: None,
         };
 
         cx.spawn(async move |this, cx| {
@@ -395,6 +400,9 @@ impl Render for Workspace {
         }
         if let Some(menu) = self.tab_context_menu.clone() {
             root = root.child(self.render_tab_context_menu(menu, cx));
+        }
+        if let Some(menu) = self.column_menu.clone() {
+            root = root.child(self.render_column_menu(menu, cx));
         }
 
         // 4. Modal Dialog: Database Connection Setup

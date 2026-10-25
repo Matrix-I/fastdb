@@ -28,6 +28,14 @@ impl Workspace {
             return;
         }
 
+        if self.column_menu.is_some() {
+            if event.keystroke.key == "escape" {
+                self.column_menu = None;
+                cx.notify();
+            }
+            return;
+        }
+
         if self.nav_context_menu.is_some() {
             if event.keystroke.key == "escape" {
                 self.nav_context_menu = None;
