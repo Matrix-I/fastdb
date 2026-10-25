@@ -386,7 +386,6 @@ impl Workspace {
     fn start_query(&mut self, sql: String, paged: bool, append: bool, cx: &mut Context<Self>) {
         let Some(ref driver) = self.driver else {
             self.show_connection_modal = true;
-            self.status_message = "Please connect to a database first.".to_string();
             cx.notify();
             return;
         };
@@ -394,13 +393,11 @@ impl Workspace {
         // The connection runs one statement at a time, and a cancel request targets whatever is
         // running when it arrives, so a new run waits for the current one instead of racing it
         if self.is_running_query {
-            self.status_message = "⏳ A query is still running — cancel it or wait for it to finish.".to_string();
             cx.notify();
             return;
         }
 
         if sql.trim().trim_matches(';').trim().is_empty() {
-            self.status_message = "No SQL statement to execute.".to_string();
             cx.notify();
             return;
         }
@@ -412,7 +409,6 @@ impl Workspace {
         let tab_id = tab.id;
         self.is_running_query = true;
         self.cancel_requested = false;
-        self.status_message = format!("Executing query: {}", sql.trim().replace('\n', " "));
         cx.notify();
 
         let (event_tx, event_rx) = flume::unbounded();
@@ -444,7 +440,6 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 if this.query_generation == generation && this.is_running_query {
                     this.is_running_query = false;
-                    this.status_message = "❌ Query ended without a result.".to_string();
                     cx.notify();
                 }
             });
@@ -464,31 +459,14 @@ impl Workspace {
             let finished = matches!(event, StreamEvent::Completed { .. } | StreamEvent::Error(_));
             if finished {
                 self.is_running_query = false;
-                self.status_message = "⏹ Query cancelled (tab closed).".to_string();
             }
             return !finished;
         };
 
         match tab.apply_stream_event(event) {
-            QueryStatus::Running { rows } => {
-                self.status_message = format!("⏳ Fetching rows… {} so far", rows);
-                true
-            }
-            QueryStatus::Done { .. } => {
+            QueryStatus::Running { .. } => true,
+            QueryStatus::Done { .. } | QueryStatus::Failed(_) => {
                 self.is_running_query = false;
-                self.status_message = match tab.fetch.last {
-                    Some(ref summary) => format!("✅ {}", summary.message()),
-                    None => "✅ Query finished.".to_string(),
-                };
-                false
-            }
-            QueryStatus::Failed(e) => {
-                self.is_running_query = false;
-                self.status_message = if self.cancel_requested {
-                    "⏹ Query cancelled.".to_string()
-                } else {
-                    format!("❌ SQL Error: {}", e)
-                };
                 false
             }
         }
@@ -503,18 +481,16 @@ impl Workspace {
         }
 
         self.cancel_requested = true;
-        self.status_message = "⏹ Cancelling query…".to_string();
         cx.notify();
 
         let driver = Arc::clone(driver);
         let generation = self.query_generation;
         cx.spawn(async move |this, cx| {
             let result = db_wire::run_on_shared_runtime(async move { driver.cancel_active_query().await }).await;
-            if let Err(e) = result {
+            if result.is_err() {
                 let _ = this.update(cx, |this, cx| {
                     if this.query_generation == generation && this.is_running_query {
                         this.cancel_requested = false;
-                        this.status_message = format!("❌ Cancel failed: {}", e);
                         cx.notify();
                     }
                 });

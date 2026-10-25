@@ -800,9 +800,8 @@ impl Workspace {
                                     .text_color(theme.text_primary)
                                     .cursor_pointer()
                                     .hover(|s| s.bg(theme.bg_surface_hover))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(ddl_copy.clone()));
-                                        this.status_message = "✅ DDL copied to clipboard".to_string();
                                         cx.notify();
                                     }))
                                     .child("📋 Copy DDL")

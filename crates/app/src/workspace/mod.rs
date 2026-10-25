@@ -23,7 +23,6 @@ mod panel_resize;
 mod panes;
 mod properties_panel;
 mod query;
-mod status_bar;
 mod tab_context_menu;
 mod table_view;
 mod text_input;
@@ -104,7 +103,6 @@ pub struct Workspace {
     pub query_generation: u64,
     pub cancel_requested: bool,
     pub next_tab_id: u64,
-    pub status_message: String,
 
     // Real Database Connection Setup State
     pub saved_connections: Vec<SavedConnection>,
@@ -191,14 +189,6 @@ impl Workspace {
             saved_connections.first().cloned()
         };
 
-        let status_message = if saved_connections.is_empty() {
-            "⚪ Disconnected — Click ➕ to connect to a database.".to_string()
-        } else if let Some(ref saved) = initial_active_conn {
-            format!("⚪ Saved connection: {} — Click in navigator to connect.", saved.name)
-        } else {
-            format!("⚪ {} saved connection(s) — Click in navigator to connect.", saved_connections.len())
-        };
-
         let (form_name, form_driver, form_host, form_port, form_database, form_user, form_password, form_sock) =
             if let Some(ref saved) = initial_active_conn {
                 let drv = match saved.driver.as_str() {
@@ -241,7 +231,6 @@ impl Workspace {
             query_generation: 0,
             cancel_requested: false,
             next_tab_id: 1,
-            status_message,
 
             // Connection Setup Form Defaults
             saved_connections,
@@ -403,8 +392,6 @@ impl Render for Workspace {
                 .child(panes.table_view()),
         );
 
-        // 3. Bottom Status Bar
-        root = root.child(self.render_status_bar());
 
         if let Some(menu) = self.nav_context_menu.clone() {
             root = root.child(self.render_nav_context_menu(menu, cx));

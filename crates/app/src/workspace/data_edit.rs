@@ -25,7 +25,6 @@ impl Workspace {
     pub(super) fn begin_cell_edit(&mut self, row: u64, col: usize) {
         self.commit_cell_edit();
         if !self.can_edit_active_rows() {
-            self.status_message = "Only rows of a table opened from the navigator can be edited.".to_string();
             return;
         }
         let tab = &mut self.tabs[self.active_tab];
@@ -45,9 +44,8 @@ impl Workspace {
     /// Opens the editor on the focused cell
     pub(super) fn edit_focused_cell(&mut self) {
         let focus = self.tabs.get(self.active_tab).and_then(|t| t.grid.selection.focus);
-        match focus {
-            Some(f) => self.begin_cell_edit(f.row, f.col),
-            None => self.status_message = "Select a cell to edit.".to_string(),
+        if let Some(f) = focus {
+            self.begin_cell_edit(f.row, f.col);
         }
     }
 
@@ -107,7 +105,6 @@ impl Workspace {
         self.commit_cell_edit();
         let tab = &mut self.tabs[self.active_tab];
         let Some((min_r, max_r, _, _)) = tab.grid.selection.bounding_box() else {
-            self.status_message = "Select a row to duplicate.".to_string();
             return;
         };
         let num_cols = tab.grid.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
@@ -127,7 +124,6 @@ impl Workspace {
             ui_grid::GridCoord { row: first_new + added - 1, col: num_cols.saturating_sub(1) },
         );
         tab.grid.vertical_scroll_handle.scroll_to_item((first_new + added - 1) as usize, ScrollStrategy::Bottom);
-        self.status_message = format!("Duplicated {} row(s) — Save to write them to the table.", added);
     }
 
     /// Marks every selected fetched row for deletion; selected new rows are dropped at once
@@ -138,7 +134,6 @@ impl Workspace {
         self.cancel_cell_edit();
         let tab = &mut self.tabs[self.active_tab];
         let Some((min_r, max_r, _, _)) = tab.grid.selection.bounding_box() else {
-            self.status_message = "Select a row to delete.".to_string();
             return;
         };
         let max_r = max_r.min(tab.grid.row_count().saturating_sub(1));
@@ -161,7 +156,6 @@ impl Workspace {
         if dropped_new_rows {
             tab.grid.selection.clear();
         }
-        self.status_message = "Rows marked for deletion — Save to delete them from the table.".to_string();
     }
 
     /// Drops every staged edit of the active tab (the Cancel button); Cmd+Z brings them back
@@ -173,7 +167,6 @@ impl Workspace {
             if had_rows {
                 tab.grid.selection.clear();
             }
-            self.status_message = "Changes cancelled.".to_string();
         }
     }
 
@@ -182,9 +175,7 @@ impl Workspace {
     pub(super) fn step_pending_edits(&mut self, redo: bool) {
         self.commit_cell_edit();
         let Some(tab) = self.tabs.get_mut(self.active_tab) else { return };
-        if tab.grid.step_staged_edits(redo) {
-            self.status_message = format!("{} — {} pending change(s).", if redo { "Redo" } else { "Undo" }, tab.grid.changeset.count());
-        }
+        tab.grid.step_staged_edits(redo);
     }
 
     /// Writes the staged edits of the active tab to the database in one transaction,
@@ -197,7 +188,6 @@ impl Workspace {
             return;
         }
         if self.is_running_query {
-            self.status_message = "⏳ A query is still running — wait for it before saving.".to_string();
             cx.notify();
             return;
         }
@@ -228,7 +218,6 @@ impl Workspace {
         let statements = tab.grid.changeset.generate_sql(&target, &pager, &key_cols, dialect);
         let tab_id = tab.id;
         self.is_running_query = true;
-        self.status_message = format!("Saving {} change(s)…", statements.len());
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -236,18 +225,12 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 this.is_running_query = false;
                 let Some(idx) = this.tabs.iter().position(|t| t.id == tab_id) else { return };
-                match result {
-                    Ok(applied) => {
-                        this.tabs[idx].grid.changeset.clear();
-                        this.tabs[idx].grid.changeset_history.clear();
-                        this.tabs[idx].grid.selection.clear();
-                        this.status_message = format!("✅ Saved {} change(s).", applied);
-                        if idx == this.active_tab {
-                            this.run_active_query(cx);
-                        }
-                    }
-                    Err(e) => {
-                        this.status_message = format!("❌ Save failed, nothing was changed: {:#}", e);
+                if result.is_ok() {
+                    this.tabs[idx].grid.changeset.clear();
+                    this.tabs[idx].grid.changeset_history.clear();
+                    this.tabs[idx].grid.selection.clear();
+                    if idx == this.active_tab {
+                        this.run_active_query(cx);
                     }
                 }
                 cx.notify();

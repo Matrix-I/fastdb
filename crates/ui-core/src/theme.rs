@@ -27,7 +27,6 @@ pub struct Theme {
 
     pub row_height: f32,
     pub header_height: f32,
-    pub status_bar_height: f32,
     pub sidebar_width: f32,
 }
 
@@ -59,7 +58,6 @@ impl Theme {
 
             row_height: 26.0,
             header_height: 28.0,
-            status_bar_height: 24.0,
             sidebar_width: 260.0,
         }
     }
@@ -91,7 +89,6 @@ impl Theme {
 
             row_height: 26.0,
             header_height: 28.0,
-            status_bar_height: 24.0,
             sidebar_width: 260.0,
         }
     }

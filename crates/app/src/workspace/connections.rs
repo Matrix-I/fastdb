@@ -237,7 +237,6 @@ impl Workspace {
         }
 
         self.is_connecting = true;
-        self.status_message = "Testing database connection...".to_string();
         self.test_result = None;
         cx.notify();
 
@@ -271,11 +270,9 @@ impl Workspace {
                 match result {
                     Ok(msg) => {
                         this.test_result = Some(Ok(msg));
-                        this.status_message = "✓ Database connection test passed.".to_string();
                     }
                     Err(err) => {
                         this.test_result = Some(Err(err.clone()));
-                        this.status_message = format!("✕ Test failed: {}", err);
                     }
                 }
                 cx.notify();
@@ -289,7 +286,6 @@ impl Workspace {
         }
 
         self.is_connecting = true;
-        self.status_message = "Connecting to database...".to_string();
         self.test_result = None;
         cx.notify();
 
@@ -400,9 +396,6 @@ impl Workspace {
                             this.nav_tables_expanded.insert(t.schema.clone());
                         }
 
-                        let db_label = format!("{:?} ({}:{})", config.driver, config.host, config.port);
-                        this.status_message = format!("🟢 Connected to: {} ({}) — {} tables found", conn_name, db_label, this.tables.len());
-
                         for tab in &mut this.tabs {
                             tab.editor.schema_cache = Some(this.schema_cache.clone());
                         }
@@ -423,7 +416,6 @@ impl Workspace {
                     }
                     Err(e) => {
                         this.test_result = Some(Err(e.clone()));
-                        this.status_message = format!("❌ Connection failed: {}", e);
                         // Connected from the navigator: open the saved connection so the error is
                         // visible and a missing password can be filled in
                         if !this.show_connection_modal && this.editing_connection_id.is_some() {
@@ -533,17 +525,15 @@ impl Workspace {
             tab.editor.schema_cache = Some(self.schema_cache.clone());
         }
 
-        let name = self.active_saved_connection().map(|c| c.name.clone()).unwrap_or_default();
-        self.status_message = format!("🟢 Switched to: {} — {} tables", name, self.tables.len());
         true
     }
 
     /// Closes one connection: the active one, or a parked one in the background
     pub fn disconnect_by_id(&mut self, conn_id: &str) {
-        if self.live_connections.remove(conn_id).is_some() {
-            let name = self.saved_connections.iter().find(|c| c.id == conn_id).map(|c| c.name.clone()).unwrap_or_default();
-            self.status_message = format!("⚪ Disconnected from {}", name);
-        } else if self.active_connection_id.as_deref() == Some(conn_id) && self.is_connected {
+        if self.live_connections.remove(conn_id).is_none()
+            && self.active_connection_id.as_deref() == Some(conn_id)
+            && self.is_connected
+        {
             self.disconnect();
         }
     }
@@ -560,7 +550,6 @@ impl Workspace {
         self.nav_table_expanded.clear();
         self.nav_subfolder_expanded.clear();
         self.nav_connection_expanded = false;
-        self.status_message = "⚪ Disconnected from database — Click connection in navigator to reconnect.".to_string();
         if !self.tabs.is_empty() {
             let tab = &mut self.tabs[self.active_tab];
             tab.grid = VirtualDataGrid::new(None, self.theme.clone());
@@ -577,7 +566,6 @@ impl Workspace {
         let Some(driver) = self.driver.clone() else {
             return;
         };
-        self.status_message = "Refreshing database metadata...".to_string();
         cx.notify();
 
         let fetch_driver = driver.clone();
@@ -597,14 +585,8 @@ impl Workspace {
                 if !this.driver.as_ref().is_some_and(|d| Arc::ptr_eq(d, &driver)) {
                     return;
                 }
-                match result {
-                    Ok(metadata) => {
-                        this.apply_schema_metadata(metadata);
-                        this.status_message = format!("🟢 Refreshed — {} tables found", this.tables.len());
-                    }
-                    Err(e) => {
-                        this.status_message = format!("❌ Refresh failed: {}", e);
-                    }
+                if let Ok(metadata) = result {
+                    this.apply_schema_metadata(metadata);
                 }
                 cx.notify();
             });
@@ -750,7 +732,6 @@ impl Workspace {
             self.active_connection_id = self.saved_connections.first().map(|c| c.id.clone());
         }
         self.save_config();
-        self.status_message = "Removed connection from list.".to_string();
     }
 
     pub fn save_connection_form(&mut self) {
@@ -803,7 +784,6 @@ impl Workspace {
         self.active_connection_id = Some(conn_id.clone());
         self.save_config();
         self.show_connection_modal = false;
-        self.status_message = "✓ Saved connection to list.".to_string();
     }
 
     pub fn select_preset_postgres(&mut self) {

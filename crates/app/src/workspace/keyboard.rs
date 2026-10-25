@@ -167,9 +167,7 @@ impl Workspace {
                 && event.keystroke.key.eq_ignore_ascii_case("c")
             {
                 if let Some(text) = tab.grid.selection_text() {
-                    let cells = text.split('\n').map(|l| l.split('\t').count()).sum::<usize>();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    self.status_message = format!("📋 Copied {} cell(s) to clipboard", cells);
                     cx.notify();
                 }
             } else if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
