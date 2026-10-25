@@ -179,6 +179,7 @@ impl Workspace {
                     "port": c.port.to_string(),
                     "database": c.database,
                     "user": c.user,
+                    "password": c.password.as_deref().filter(|p| !p.is_empty()),
                     "use_unix_socket": c.use_unix_socket,
                 })
             })
@@ -196,54 +197,6 @@ impl Workspace {
     pub fn save_config(&self) {
         let content = Self::serialize_connections_config(&self.saved_connections, self.active_connection_id.as_deref());
         let _ = std::fs::write(".fastdb_config.json", content);
-    }
-
-    /// Stores a connection's password in the credential store; an empty password removes it
-    pub fn store_connection_secret(store: &dyn CredentialStore, conn_id: &str, password: Option<&str>) -> anyhow::Result<()> {
-        match password.filter(|p| !p.is_empty()) {
-            Some(pw) => store.save(conn_id, pw),
-            None => store.delete(conn_id),
-        }
-    }
-
-    /// Returns the in-memory password, or fetches it from the credential store on first use
-    pub fn resolve_connection_password(store: &dyn CredentialStore, saved: &SavedConnection) -> Option<String> {
-        if saved.password.is_some() {
-            return saved.password.clone();
-        }
-        match store.get(&saved.id) {
-            Ok(pw) => pw,
-            Err(e) => {
-                tracing::warn!("Failed to read password for connection {}: {}", saved.id, e);
-                None
-            }
-        }
-    }
-
-    /// Moves passwords loaded from a legacy plaintext config into the credential store.
-    /// Returns true when the config file should be rewritten without them.
-    pub fn migrate_plaintext_passwords(store: &dyn CredentialStore, connections: &mut [SavedConnection]) -> bool {
-        let mut migrated = false;
-        for conn in connections.iter_mut() {
-            let Some(pw) = conn.password.clone() else { continue };
-            if pw.is_empty() {
-                conn.password = None;
-                migrated = true;
-                continue;
-            }
-            match store.save(&conn.id, &pw) {
-                Ok(()) => migrated = true,
-                Err(e) => tracing::warn!("Failed to migrate password for connection {}: {}", conn.id, e),
-            }
-        }
-        migrated
-    }
-
-    fn persist_connection_secret(&mut self, conn_id: &str, password: Option<&str>) {
-        if let Err(e) = Self::store_connection_secret(&*self.credentials, conn_id, password) {
-            tracing::warn!("Failed to store password for connection {}: {}", conn_id, e);
-            self.status_message = format!("⚠ Could not save password to the system keychain: {}", e);
-        }
     }
 
     pub fn active_saved_connection(&self) -> Option<&SavedConnection> {
@@ -430,7 +383,6 @@ impl Workspace {
                         } else {
                             this.saved_connections.push(saved.clone());
                         }
-                        this.persist_connection_secret(&conn_id, config.password.as_deref());
                         this.active_connection_id = Some(conn_id.clone());
                         this.editing_connection_id = Some(conn_id);
                         this.save_config();
@@ -714,7 +666,7 @@ impl Workspace {
             self.form_port = saved.port.to_string();
             self.form_database = saved.database.clone();
             self.form_user = saved.user.clone();
-            self.form_password = Self::resolve_connection_password(&*self.credentials, &saved).unwrap_or_default();
+            self.form_password = saved.password.clone().unwrap_or_default();
             self.form_use_unix_socket = saved.use_unix_socket;
             self.editing_connection_id = Some(saved.id.clone());
             self.test_result = None;
@@ -766,7 +718,7 @@ impl Workspace {
         self.form_port = saved.port.to_string();
         self.form_database = saved.database.clone();
         self.form_user = saved.user.clone();
-        self.form_password = Self::resolve_connection_password(&*self.credentials, &saved).unwrap_or_default();
+        self.form_password = saved.password.clone().unwrap_or_default();
         self.form_use_unix_socket = saved.use_unix_socket;
         self.editing_connection_id = Some(saved.id.clone());
         true
@@ -785,9 +737,6 @@ impl Workspace {
     pub fn delete_saved_connection(&mut self, conn_id: &str) {
         self.saved_connections.retain(|c| c.id != conn_id);
         self.live_connections.remove(conn_id);
-        if let Err(e) = self.credentials.delete(conn_id) {
-            tracing::warn!("Failed to delete password for connection {}: {}", conn_id, e);
-        }
         if self.active_connection_id.as_deref() == Some(conn_id) {
             if self.is_connected {
                 self.disconnect();
@@ -849,7 +798,6 @@ impl Workspace {
         self.save_config();
         self.show_connection_modal = false;
         self.status_message = "✓ Saved connection to list.".to_string();
-        self.persist_connection_secret(&conn_id, config.password.as_deref());
     }
 
     pub fn select_preset_postgres(&mut self) {

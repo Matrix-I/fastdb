@@ -3,7 +3,6 @@ use std::sync::Arc;
 use db_wire::{create_driver, ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary};
 use mem_engine::DataType;
 use gpui::*;
-use platform_hal::keychain::{CredentialStore, KeychainStore};
 use sql_intel::SchemaCache;
 use ui_core::theme::Theme;
 use ui_editor::SqlEditorView;
@@ -106,7 +105,6 @@ pub struct Workspace {
     pub active_connection_id: Option<String>,
     /// Open connections other than the active one, kept alive for instant switching
     pub live_connections: HashMap<String, LiveConnection>,
-    pub credentials: Arc<dyn CredentialStore>,
     pub editing_connection_id: Option<String>,
     pub is_connected: bool,
     pub is_connecting: bool,
@@ -171,9 +169,7 @@ impl Workspace {
         let focus_handle = cx.focus_handle();
         let schema_cache = Arc::new(SchemaCache::new().expect("Failed to initialize SchemaCache"));
 
-        let credentials: Arc<dyn CredentialStore> = Arc::new(KeychainStore::default());
-        let (mut saved_connections, active_connection_id) = Self::load_saved_connections();
-        let migrated_passwords = Self::migrate_plaintext_passwords(&*credentials, &mut saved_connections);
+        let (saved_connections, active_connection_id) = Self::load_saved_connections();
         let initial_active_conn = if let Some(ref id) = active_connection_id {
             saved_connections.iter().find(|c| &c.id == id).cloned()
         } else {
@@ -235,7 +231,6 @@ impl Workspace {
             // Connection Setup Form Defaults
             saved_connections,
             active_connection_id,
-            credentials,
             editing_connection_id: None,
             is_connected: false,
             is_connecting: false,
@@ -306,11 +301,6 @@ impl Workspace {
                 }
             }
         }).detach();
-
-        if migrated_passwords {
-            // Rewrite the config so the migrated plaintext passwords leave the disk
-            workspace.save_config();
-        }
 
         workspace
     }

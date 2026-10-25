@@ -386,64 +386,26 @@ mod tests {
     }
 
     #[test]
-    fn test_serialized_config_never_contains_passwords() {
+    fn test_password_roundtrips_through_config() {
         use crate::workspace::Workspace;
 
         let conns = vec![saved_pg_connection("conn_pg", Some("s3cret-pw"))];
         let serialized = Workspace::serialize_connections_config(&conns, Some("conn_pg"));
 
-        assert!(!serialized.contains("s3cret-pw"));
-        assert!(!serialized.contains("\"password\""));
+        let (loaded, _) = Workspace::load_saved_connections_from_str(&serialized);
+        assert_eq!(loaded[0].password.as_deref(), Some("s3cret-pw"));
+    }
+
+    #[test]
+    fn test_empty_password_is_not_written_to_config() {
+        use crate::workspace::Workspace;
+
+        let conns = vec![saved_pg_connection("conn_a", None), saved_pg_connection("conn_b", Some(""))];
+        let serialized = Workspace::serialize_connections_config(&conns, None);
+
         let (loaded, _) = Workspace::load_saved_connections_from_str(&serialized);
         assert_eq!(loaded[0].password, None);
-    }
-
-    #[test]
-    fn test_password_roundtrips_through_credential_store() {
-        use crate::workspace::Workspace;
-        use platform_hal::keychain::{CredentialStore, InMemoryCredentialStore};
-
-        let store = InMemoryCredentialStore::default();
-        Workspace::store_connection_secret(&store, "conn_pg", Some("s3cret-pw")).unwrap();
-        assert_eq!(store.get("conn_pg").unwrap().as_deref(), Some("s3cret-pw"));
-
-        // A connection loaded from disk has no password until resolved from the store
-        let loaded = saved_pg_connection("conn_pg", None);
-        assert_eq!(Workspace::resolve_connection_password(&store, &loaded).as_deref(), Some("s3cret-pw"));
-
-        // Clearing the password in the form removes the stored secret
-        Workspace::store_connection_secret(&store, "conn_pg", Some("")).unwrap();
-        assert_eq!(store.get("conn_pg").unwrap(), None);
-        assert_eq!(Workspace::resolve_connection_password(&store, &loaded), None);
-    }
-
-    #[test]
-    fn test_legacy_plaintext_passwords_are_migrated_to_store() {
-        use crate::workspace::Workspace;
-        use platform_hal::keychain::{CredentialStore, InMemoryCredentialStore};
-
-        let legacy_json = r#"{
-            "connections": [
-                {"id": "conn_pg", "driver": "Postgres", "host": "db", "port": 5432,
-                 "database": "prod_db", "user": "postgres", "password": "legacy-pw"},
-                {"id": "conn_lite", "driver": "Sqlite", "database": "/tmp/a.db", "password": ""}
-            ]
-        }"#;
-        let (mut conns, _) = Workspace::load_saved_connections_from_str(legacy_json);
-
-        let store = InMemoryCredentialStore::default();
-        assert!(Workspace::migrate_plaintext_passwords(&store, &mut conns));
-        assert_eq!(store.get("conn_pg").unwrap().as_deref(), Some("legacy-pw"));
-        assert_eq!(store.get("conn_lite").unwrap(), None);
-
-        // The password stays usable this session, but is no longer written back to disk
-        assert_eq!(conns[0].password.as_deref(), Some("legacy-pw"));
-        let rewritten = Workspace::serialize_connections_config(&conns, None);
-        assert!(!rewritten.contains("legacy-pw"));
-
-        // Nothing left to migrate on the next start
-        let (mut reloaded, _) = Workspace::load_saved_connections_from_str(&rewritten);
-        assert!(!Workspace::migrate_plaintext_passwords(&store, &mut reloaded));
+        assert_eq!(loaded[1].password, None);
     }
 
     fn sample_table_tab() -> crate::workspace::TabState {
