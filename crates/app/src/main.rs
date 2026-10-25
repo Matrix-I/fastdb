@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 use anyhow::Result;
 use gpui::*;
 use tracing::info;
@@ -6,6 +8,12 @@ mod workspace;
 mod assets;
 use workspace::Workspace;
 use assets::FastDbAssetSource;
+use ui_core::actions::Quit;
+
+fn quit(_: &Quit, cx: &mut App) {
+    info!("Closing FastDB via Quit action");
+    cx.quit();
+}
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -25,6 +33,28 @@ fn main() -> Result<()> {
     let app = Application::new().with_assets(FastDbAssetSource);
 
     app.run(|cx: &mut App| {
+        cx.activate(true);
+        cx.on_action(quit);
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("ctrl-q", Quit, None),
+        ]);
+        cx.set_menus(vec![Menu {
+            name: "FastDB".into(),
+            items: vec![
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Quit FastDB", Quit),
+            ],
+        }]);
+
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,

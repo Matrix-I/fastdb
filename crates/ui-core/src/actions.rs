@@ -3,6 +3,7 @@ use gpui::actions;
 actions!(
     fastdb,
     [
+        Quit,
         RunQuery,
         CancelQuery,
         SaveChanges,
