@@ -70,6 +70,14 @@ ui-core = { path = "crates/ui-core" }
 ui-editor = { path = "crates/ui-editor" }
 ui-grid = { path = "crates/ui-grid" }
 
+# Unoptimized GPUI makes every re-render (one per key press or hover change) visibly slow,
+# so dev builds optimize dependencies fully and our own crates lightly
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 lto = "thin"
