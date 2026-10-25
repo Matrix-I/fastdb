@@ -1,219 +1,248 @@
 # FastDB ⚡
 
-> **Next-Generation Pure Rust Database Client**  
-> *Zero JVM · Zero JDBC · 120 FPS GPU-Accelerated UI · Zero-Copy Memory Management*
+> **A native, pure-Rust database client — aiming to replace JVM/JDBC tools like DBeaver**
+> *No JVM · No JDBC · GPU-rendered UI (GPUI) · Bounded memory for huge result sets*
 
-[![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![CI](https://github.com/Matrix-I/fastdb/actions/workflows/ci.yml/badge.svg)](https://github.com/Matrix-I/fastdb/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/Rust-stable-orange.svg?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![UI](https://img.shields.io/badge/UI-GPUI-blue.svg)](https://github.com/zed-industries/zed)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey.svg)](ci/)
 
-FastDB is a lightning-fast, resource-efficient database client built from the ground up in pure Rust. Designed as a modern replacement for legacy JVM/JDBC-heavy tools like DBeaver, FastDB renders directly via **Metal** (macOS) and **Vulkan/X11/Wayland** (Linux) at a fluid 120 FPS, consumes a fraction of the memory, and provides instant cold starts.
+FastDB is a database client built from scratch in Rust. It talks to databases through native async drivers, renders its UI on the GPU with [GPUI](https://github.com/zed-industries/zed) (Metal on macOS, Vulkan on Linux), and keeps query results in a paged, disk-spilling memory engine so a million-row result does not need a million-row heap.
+
+> **Status: early prototype.** Browsing tables and streaming their data works against PostgreSQL, MySQL and SQLite. The free-form SQL editor, inline editing and several other features listed under [Not built yet](#-not-built-yet) exist only as tested library code or not at all. The performance numbers below are **targets, not measurements**.
 
 ---
 
-## ⚡ Performance Benchmarks
+## 🎯 Goals
 
-| Metric | DBeaver (Java / JDBC) | FastDB (Rust / GPUI) | Advantage |
-| :--- | :--- | :--- | :--- |
-| **Cold Start Time** | 4.5s – 12s | **< 120ms** | **~40× faster** |
-| **Idle RAM Usage** | 600 MB – 1.2 GB | **< 35 MB** | **~25× less memory** |
-| **1M Rows × 20 Cols Query** | 2.5 GB+ (Risk of OOM) | **Bounded ~80 MB** (Auto Spill) | **Stable memory footprint** |
-| **Time-to-First-Row (TTFR)** | 300ms – 2,000ms | **< 10ms** | **Instant response** |
-| **Grid Scrolling Framerate** | 15 – 45 FPS (GC pauses) | **120 FPS** (GPU Virtualized) | **Silky smooth** |
-| **Application Package Size** | ~130 MB+ (Bundled JRE) | **~12 MB** (.dmg / .AppImage) | **~10× smaller** |
+FastDB is aiming for these targets against a typical JVM client. None of them has been benchmarked yet.
 
----
+| Metric | DBeaver (Java / JDBC) | FastDB target |
+| :--- | :--- | :--- |
+| Cold start | 4.5 s – 12 s | < 120 ms |
+| Idle RAM | 600 MB – 1.2 GB | < 35 MB |
+| 1M rows × 20 cols query | 2.5 GB+ (risk of OOM) | ~80 MB, bounded by disk spill |
+| Time to first row | 300 ms – 2,000 ms | < 10 ms |
+| Grid scrolling | 15 – 45 FPS (GC pauses) | 120 FPS |
+| Package size | ~130 MB (bundled JRE) | ~12 MB |
 
-## 🚀 Key Features
-
-### 🏎️ Flat Memory Engine & Automated Disk Spill (`mem-engine`)
-- **64KB Slotted Pages**: Aligned to 16KB Apple Silicon OS pages and 4KB Linux pages. Eliminates per-cell heap allocations using compact bitmapped NULL tracking and 32-bit cell offsets.
-- **LRU Page Cache**: Keeps up to 1,024 active pages (~64 MB RAM) hot in memory.
-- **LZ4 Disk Spiller**: As query results exceed cache limits, background workers compress evicted pages with `lz4_flex` and write them to memory-mapped temporary files (`memmap2`). Pages reload back into memory in **< 0.4ms**.
-
-### 🖥️ 120 FPS 2D Virtualized Data Grid (`ui-grid`)
-- **2D Viewport Culling**: Regardless of whether a query returns 100 rows or 10,000,000 rows, only the visible ~40 rows and onscreen columns are rendered each frame.
-- **Zero-Allocation Stack Formatting**: Numeric columns (`INT2`, `INT4`, `INT8`, `FLOAT4`, `FLOAT8`) are serialized to UTF-8 directly into stack buffers via `itoa` and `ryu`, bypassing heap allocations during scrolling.
-- **Interactive Editing & Export**:
-  - Drag-to-resize and double-click to auto-fit column widths based on content.
-  - Multi-cell and rectangular range selection with one-click export to TSV, CSV, or SQL `INSERT` statements.
-  - In-place inline cell editing with visual change indicators and automated SQL `UPDATE` statement generation.
-
-### 🔌 Pure Native Wire Protocols (`db-wire`)
-- **No JDBC Overhead**: Native asynchronous drivers communicate directly with database wire protocols:
-  - **PostgreSQL**: Native binary wire decoding for rich types (`INT`, `FLOAT`, `NUMERIC`, `TEXT`, `TIMESTAMPTZ`, `UUID`, `JSONB`).
-  - **MySQL / MariaDB**: Asynchronous binary protocol streaming.
-  - **SQLite**: Direct zero-latency C-FFI integration.
-- **Decoupled Architecture**: High-throughput network I/O runs on a dedicated multi-threaded Tokio runtime, delivering throttled batch events (per 64KB page or 16ms frame interval) to the GPUI main thread over lock-free channels.
-- **Instant Out-of-Band Cancellation**: Cancel long-running queries immediately using dedicated connection cancel tokens.
-- **Integrated SSH Bastion / Jump Host**: Built-in SSH client (`russh`) supporting Ed25519, RSA, and system SSH Agents.
-
-### 🧠 SQL Intelligence & Modern Editor (`sql-intel` & `ui-editor`)
-- **Tree-Sitter SQL Parsing**: Accurate syntax highlighting and statement boundary detection powered by `tree-sitter-sequel`. Run only the statement at your cursor without manual text selection.
-- **Ropey Text Buffer**: Ultra-responsive editing with fast undo/redo history, even for multi-megabyte SQL scripts.
-- **Sub-2ms Autocompletion**: In-memory SQLite catalog (`SchemaCache`) indexing tables, views, columns, aliases, and foreign keys for instantaneous autocompletion popups.
-
-### 🍏 Platform Hardware Abstraction Layer (`platform-hal`)
-- **Safe Disk Spilling**: Automatically avoids `tmpfs` on Linux distributions by directing spill files to `/var/tmp/fastdb` instead of RAM-backed `/tmp`, while adhering to `$TMPDIR` on macOS.
-- **Automatic Unix Socket Discovery**: Automatically detects local Unix Domain Sockets for PostgreSQL (`/tmp/.s.PGSQL.5432`, `/var/run/postgresql/`, `/run/postgresql/`) and MySQL (`/tmp/mysql.sock`, `/var/run/mysqld/mysqld.sock`).
-- **OS Keychain Integration**: Securely stores database passwords via macOS Keychain and Linux Secret Service (DBus).
-- **Normalized Keybindings**: Transparent `Cmd` (macOS) and `Ctrl` (Linux) modifier mapping.
+What exists today that these targets build on: a paged result store with an LRU cache and LZ4 disk spill, a virtualized grid that only lays out visible rows, and drivers that stream rows into the store as they arrive.
 
 ---
 
-## 🏛️ System Architecture
+## ✅ What works today
+
+### Connections
+- **PostgreSQL** (`tokio-postgres`), **MySQL / MariaDB** (`mysql_async`) and **SQLite** (`rusqlite`, bundled).
+- TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
+- Saved connections with create / edit / delete / test, plus quick presets per driver.
+- **Passwords are stored in the OS keychain** (macOS Keychain, Linux Secret Service), never in the config file. Passwords left in an older plaintext config are migrated to the keychain on startup.
+
+### Database navigator
+- DBeaver-style tree: connection → databases → schemas → tables → columns, constraints, foreign keys, indexes.
+- Schema metadata (tables, columns, primary keys, constraints, indexes) is loaded in bulk when you connect.
+
+### Table tabs
+- **Data**:
+  - Results **stream into the grid**: the grid appears as soon as the columns are known and grows as row batches arrive.
+  - While a query runs, the execute button becomes **Cancel**. Cancellation uses the PostgreSQL cancel token, `KILL QUERY` on MySQL, and `sqlite3_interrupt` on SQLite.
+  - Filter bar for `WHERE` / `ORDER BY` / `GROUP BY` fragments, a row limit (default 200), and a grid or plain-text view.
+  - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit.
+- **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and generated DDL.
+- **Diagram**: a simple entity box listing the table's columns.
+
+### Type handling
+- **PostgreSQL**: every column is decoded from the binary wire format. Covered types include integers, floats, `NUMERIC` (exact), `TEXT`, `UUID`, `JSON(B)`, `BYTEA`, dates and times (including `TIMETZ`, `INTERVAL` and ±infinity), `INET`, `CIDR`, `MACADDR`, `MONEY`, `OID`, `"char"`, enums, domains and N-dimensional arrays. A type FastDB does not recognize is shown as text or as a hex literal; it is never shown as `NULL`.
+- **MySQL**: result columns are typed from the wire column type. **SQLite**: result columns are typed from the declared column type.
+
+### Memory engine
+- Rows are stored in 64 KB slotted pages, with a null bitmap and a cell offset table per row for O(1) cell access.
+- An LRU cache keeps up to 1,024 pages (~64 MB) in memory. Evicted pages are LZ4-compressed into a temporary spill file and paged back in on demand.
+- The page currently being filled is shared copy-on-write, so reading it does not copy 64 KB per cell.
+- Spill files go to `/var/tmp/fastdb` on Linux, to avoid a RAM-backed `/tmp`, and to `$TMPDIR/fastdb` on macOS.
+
+### Keyboard shortcuts
+
+| macOS | Linux | Action |
+| :--- | :--- | :--- |
+| `Cmd + Enter` | `Ctrl + Enter` | Run the active tab's query |
+| `Enter` (in filter bar) | `Enter` (in filter bar) | Apply the filter and re-run |
+| `Esc` (in filter bar) | `Esc` (in filter bar) | Leave the filter bar |
+| `Cmd + W` | `Ctrl + W` | Close the active tab |
+| `Cmd + Q` | `Ctrl + Q` | Quit |
+| `Cmd + A / C / X / V` | `Ctrl + A / C / X / V` | Select all, copy, cut, paste in text fields |
+
+---
+
+## 🚧 Not built yet
+
+These are goals of the project, but they are not available in the app today:
+
+- **Free-form SQL editor tabs.** The Ropey-backed editor (`ui-editor`), tree-sitter statement-at-cursor detection and schema-aware autocompletion (`sql-intel`) are implemented and unit-tested, but no editor is shown in the UI yet. Queries currently come from table tabs.
+- **Grid selection, copy and inline editing.** Range selection with TSV / CSV / SQL `INSERT` copy, and inline edits that generate `UPDATE` statements, exist in `ui-grid` with tests, but they are not connected to mouse or keyboard input.
+- **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
+- **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
+- **TLS.** PostgreSQL connects without TLS, so servers that require SSL are not supported yet.
+- **Placeholder metadata.** Some Properties fields (object ID, owner, tablespace, and the statistics table) show placeholder values rather than data read from the database. The status bar's "120 FPS" label is static text.
+- **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
+- **Benchmarks.** None of the numbers under [Goals](#-goals) has been measured.
+
+---
+
+## 🏛️ Architecture
 
 ```mermaid
 flowchart TD
-    subgraph UI_Thread["GPUI Main Thread (120 FPS Rendering)"]
-        Workspace["Workspace Window"]
-        Navigator["Database Navigator Tree"]
-        Editor["ui-editor (Ropey + Tree-sitter)"]
-        Grid["ui-grid (2D Virtualized Viewport)"]
+    subgraph UI["GPUI main thread"]
+        Workspace["Workspace (crates/app/src/workspace/)"]
+        Navigator["Navigator tree"]
+        Grid["ui-grid: virtualized grid"]
     end
 
-    subgraph Channel["Async Communication"]
-        Flume["Flume Event Stream\n(Throttled: 64KB or 16ms)"]
+    subgraph Runtime["Shared Tokio runtime (db_wire::get_runtime)"]
+        Driver["db-wire driver<br/>Postgres · MySQL · SQLite (blocking pool)"]
+        Sink["RowSink<br/>decode → append → throttle events"]
     end
 
-    subgraph Backend["Tokio Multi-Thread Worker Pool"]
-        DBWire["db-wire Driver\n(PostgreSQL / MySQL / SQLite)"]
-        SSHTunnel["SSH Tunnel\n(russh)"]
-        SqlIntel["sql-intel\n(SchemaCache & AST Parser)"]
+    subgraph Engine["mem-engine"]
+        Pager["QueryResultPager<br/>LRU cache, 1,024 × 64 KB pages"]
+        Spiller["DiskSpiller<br/>LZ4 + temp file"]
     end
 
-    subgraph Storage["mem-engine (Zero-Copy)"]
-        Pager["QueryResultPager\n(LRU Cache: 1,024 Pages / 64MB)"]
-        Slotted["SlottedPage (64KB aligned)"]
-        Spiller["DiskSpiller\n(LZ4 Compression + memmap2)"]
-        Disk[("Spill Files\n/var/tmp/fastdb or $TMPDIR")]
-    end
-
-    Editor -->|"Cmd/Ctrl + Enter"| DBWire
-    DBWire -->|"Decode Binary Wire"| Slotted
-    Slotted --> Pager
-    Pager -->|"Evict > 64MB"| Spiller
-    Spiller <-->|"Mmap & LZ4"| Disk
-    DBWire -->|"StreamEvent"| Flume
-    Flume -->|"Notify UI"| Grid
-    Pager -.->|"Zero-Copy Cell Read O(1)"| Grid
+    Workspace -->|"execute_streaming(sql)"| Driver
+    Workspace -->|"cancel_active_query()"| Driver
+    Driver --> Sink
+    Sink -->|"append_row"| Pager
+    Pager <-->|"evict / reload"| Spiller
+    Sink -->|"StreamEvent over flume:<br/>SchemaReady(pager) · PageAppended · Completed / Error"| Workspace
+    Workspace --> Grid
+    Grid -.->|"read visible cells"| Pager
 ```
 
----
+- Every driver future runs on one shared multi-threaded Tokio runtime (`db_wire::run_on_shared_runtime`). Sockets and pool tasks therefore never depend on a short-lived caller runtime.
+- A query produces an ordered event stream:
+  1. `SchemaReady(pager)`: the driver owns the result pager and hands it to the UI.
+  2. Throttled `PageAppended` batches, at most once per frame or on each page rollover.
+  3. `Completed` or `Error`.
+- The UI routes events to tabs by a stable tab id. While a query is running, a second run is refused rather than racing the cancel.
 
-## 📂 Workspace Crates
+### Workspace crates
 
-```text
-fastdb/
-├── Cargo.toml               # Workspace configuration & shared dependencies
-├── rust-toolchain.toml      # Pinned stable Rust toolchain (1.85+)
-├── assets/                  # Icons and font assets (JetBrains Mono, Inter, DB icons)
-├── ci/                      # Distribution packaging scripts (.dmg, .deb, .AppImage)
-└── crates/
-    ├── app/                 # [Binary] Main entrypoint, window setup & workspace UI
-    ├── platform-hal/        # [Library] OS abstraction (sockets, paths, keychain, keymaps)
-    ├── mem-engine/          # [Library] Zero-copy slotted pages, LRU pager & LZ4 spill engine
-    ├── db-wire/             # [Library] Binary database drivers (Postgres, MySQL, SQLite, SSH)
-    ├── sql-intel/           # [Library] Tree-sitter SQL parsing, schema cache & autocompletion
-    ├── ui-core/             # [Library] Core themes, styles & shared GPUI actions
-    ├── ui-editor/           # [Library] Ropey-backed SQL code editor with syntax highlighting
-    └── ui-grid/             # [Library] 2D virtualized data table with inline editing & export
-```
-
----
-
-## ⌨️ Default Keybindings
-
-| Shortcut (macOS) | Shortcut (Linux) | Action |
-| :--- | :--- | :--- |
-| `Cmd + Enter` | `Ctrl + Enter` | Execute SQL statement at cursor |
-| `Cmd + S` | `Ctrl + S` | Save & commit inline grid modifications to DB |
-| `Cmd + T` | `Ctrl + T` | Open a new SQL editor tab |
-| `Cmd + W` | `Ctrl + W` | Close current SQL editor tab |
-| `Cmd + C` | `Ctrl + C` | Copy selected grid cells as TSV / CSV / SQL Insert |
-| `Double Click` | `Double Click` | Edit grid cell inline / Auto-fit column width |
+| Crate | Kind | Responsibility | State |
+| :--- | :--- | :--- | :--- |
+| `app` | binary | Window, workspace UI, connection management, query orchestration | Used |
+| `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used |
+| `mem-engine` | library | Slotted pages, LRU pager, LZ4 disk spill | Used |
+| `db-wire` | library | Drivers, streaming, cancellation, CSV/SQL export, SSH (stub) | Used (export and SSH unused) |
+| `sql-intel` | library | Tree-sitter SQL parsing, schema cache, completion | Schema cache used; parser and completion are not in the UI yet |
+| `ui-core` | library | Theme and shared actions | Used |
+| `ui-editor` | library | Rope buffer and SQL editor view | Not rendered yet |
+| `ui-grid` | library | Virtualized grid, selection, changeset | Grid used; selection and editing not wired |
 
 ---
 
-## 🛠️ Getting Started
+## 🛠️ Getting started
 
 ### Prerequisites
 
-- **Rust**: Version `1.85.0` or newer with `cargo`.
-- **macOS**: macOS 12 Monterey or newer (Metal support).
-- **Linux**: Ubuntu 22.04+, Debian 12+, Fedora 38+, Arch Linux, or any modern distribution with:
+- **Rust** stable, with `cargo` (see `rust-toolchain.toml`).
+- **macOS** with Xcode command line tools.
+- **Linux** system libraries (Debian/Ubuntu):
   ```bash
-  # Debian/Ubuntu dependencies
-  sudo apt-get install -y build-essential libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
-                          libfontconfig1-dev libasound2-dev libvulkan-dev libssl-dev
+  sudo apt-get install -y build-essential pkg-config libdbus-1-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig1-dev libasound2-dev libvulkan-dev libssl-dev
   ```
 
-### Clone and Run
+### Run
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/fastdb.git
+git clone https://github.com/Matrix-I/fastdb.git
 cd fastdb
-
-# Run FastDB in release mode for best performance
 cargo run --release -p fastdb-app
 ```
 
-### Running Tests
-
-FastDB includes comprehensive unit and integration tests covering memory paging, disk spilling under high load, SQL statement boundary parsing, and binary drivers:
-
-```bash
-# Run all workspace unit and integration tests
-cargo test
-
-# Run memory engine load test (spill & accuracy test)
-cargo test -p mem-engine --test load_test
-
-# Run UI grid selection and virtual scrolling tests
-cargo test -p ui-grid
-```
+Saved connections are written to `.fastdb_config.json` in the current working directory. Passwords go to the OS keychain under the service `com.fastdb.credentials`. On macOS, the first launch may ask for permission to access the keychain.
 
 ---
 
-## 📦 Building Distribution Packages
+## 🧪 Testing
 
-FastDB includes automated packaging scripts for macOS and Linux in the `ci/` directory:
-
-### macOS (.app & .dmg)
 ```bash
-chmod +x ci/build-macos.sh
-./ci/build-macos.sh
+# Unit tests and SQLite driver tests (live-database tests skip themselves)
+cargo test --workspace
 ```
-*Generates an optimized Apple Silicon bundle at `dist/macos/FastDB.app` and an installer at `dist/macos/FastDB-0.1.0-arm64.dmg`.*
 
-### Linux (.deb & .AppImage)
+The PostgreSQL and MySQL integration tests run when a server is configured through environment variables. They cover binary decoding against the server's own text output, incremental streaming, cancellation, and connections that outlive the caller's runtime.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `FASTDB_TEST_PG_PORT` | (unset: skip) | PostgreSQL port; enables `crates/db-wire/tests/postgres_test.rs` |
+| `FASTDB_TEST_PG_HOST` / `_USER` | `127.0.0.1` / `postgres` | PostgreSQL host and user (trust auth expected) |
+| `FASTDB_TEST_MYSQL_PORT` | (unset: skip) | MySQL port; enables `crates/db-wire/tests/mysql_test.rs` |
+| `FASTDB_TEST_MYSQL_HOST` / `_USER` / `_PASSWORD` / `_DATABASE` | `127.0.0.1` / `root` / none / `mysql` | MySQL connection |
+| `FASTDB_REQUIRE_DB_TESTS` | unset | When set, a missing port fails the tests instead of skipping them (used in CI) |
+
+For example, with Docker:
+
 ```bash
-chmod +x ci/build-linux.sh
-./ci/build-linux.sh
+docker run -d --name fastdb-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 postgres:16
 ```
-*Generates `dist/linux/fastdb_0.1.0_amd64.deb` and `dist/linux/FastDB-0.1.0-x86_64.AppImage`.*
+
+```bash
+docker run -d --name fastdb-mysql -e MYSQL_ROOT_PASSWORD=fastdb -p 3306:3306 mysql:8.4
+```
+
+```bash
+FASTDB_TEST_PG_PORT=5432 FASTDB_TEST_MYSQL_PORT=3306 FASTDB_TEST_MYSQL_PASSWORD=fastdb cargo test -p db-wire
+```
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three jobs:
+
+- The engine and driver crates against `postgres:16` and `mysql:8.4` service containers, with `FASTDB_REQUIRE_DB_TESTS` set.
+- A full workspace build and test on macOS.
+- A Linux build of the app.
+
+---
+
+## 📦 Packaging
+
+Packaging scripts live in [`ci/`](ci/):
+
+```bash
+./ci/build-macos.sh   # dist/macos/FastDB.app and a .dmg
+```
+
+```bash
+./ci/build-linux.sh   # dist/linux/*.deb and an AppImage
+```
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] Pure Rust workspace structure and GPUI window initialization
-- [x] Zero-copy 64KB `SlottedPage` and LZ4 `DiskSpiller` with `memmap2`
-- [x] Native PostgreSQL binary wire streaming and out-of-band query cancellation
-- [x] 120 FPS 2D Virtual Data Grid with auto-fit, column resizing, and inline editing
-- [x] DBeaver-style database explorer navigation tree (Databases, Schemas, Tables, Columns, Constraints, Indexes)
-- [x] Tree-sitter SQL parsing and statement-at-cursor detection
-- [x] MySQL binary protocol and embedded SQLite drivers
-- [x] SSH Bastion / Jump Host tunneling
-- [x] Streaming export to CSV and SQL
-- [ ] Visual query execution plan (EXPLAIN ANALYZE) tree viewer
-- [ ] Data diff and schema comparison tool
-- [ ] Dark / Light theme customizer
+- [x] Workspace structure and GPUI window
+- [x] Slotted pages, LRU pager and LZ4 disk spill
+- [x] PostgreSQL, MySQL and SQLite drivers with streaming results and cancellation
+- [x] Complete PostgreSQL binary decoding (no false `NULL`s)
+- [x] DBeaver-style navigator and table tabs (data, properties, diagram)
+- [x] Virtualized grid with auto-fit and resizable columns
+- [x] Keychain-backed password storage
+- [x] CI with live PostgreSQL and MySQL
+- [ ] SQL editor tabs with statement-at-cursor execution and autocompletion
+- [ ] Grid selection, copy, and inline editing with `UPDATE` generation
+- [ ] Export to CSV / SQL from the UI
+- [ ] Real table statistics and metadata in Properties
+- [ ] TLS for PostgreSQL and MySQL
+- [ ] SSH bastion / jump host tunneling
+- [ ] Benchmarks for the goals above
+- [ ] Visual query plan (`EXPLAIN ANALYZE`) viewer
+- [ ] Data diff and schema comparison
+- [ ] Theme switching
 
 ---
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+MIT, as declared in `Cargo.toml`. A `LICENSE` file has not been added yet.
