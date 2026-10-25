@@ -41,3 +41,63 @@ pub fn delete_credential(service: &str, account: &str) -> Result<()> {
         Err(e) => Err(e).with_context(|| format!("Failed to delete credential for account: {account}")),
     }
 }
+
+/// Secret storage keyed by account, so callers can swap the OS keychain for a test double
+pub trait CredentialStore: Send + Sync {
+    fn save(&self, account: &str, secret: &str) -> Result<()>;
+    fn get(&self, account: &str) -> Result<Option<String>>;
+    fn delete(&self, account: &str) -> Result<()>;
+}
+
+/// OS-backed store (macOS Keychain / Linux Secret Service) under a fixed service name
+pub struct KeychainStore {
+    service: String,
+}
+
+impl KeychainStore {
+    pub fn new(service: impl Into<String>) -> Self {
+        Self { service: service.into() }
+    }
+}
+
+impl Default for KeychainStore {
+    fn default() -> Self {
+        Self::new(FASTDB_KEYCHAIN_SERVICE)
+    }
+}
+
+impl CredentialStore for KeychainStore {
+    fn save(&self, account: &str, secret: &str) -> Result<()> {
+        save_credential(&self.service, account, secret)
+    }
+
+    fn get(&self, account: &str) -> Result<Option<String>> {
+        get_credential(&self.service, account)
+    }
+
+    fn delete(&self, account: &str) -> Result<()> {
+        delete_credential(&self.service, account)
+    }
+}
+
+/// Process-local store for tests and environments without a keychain
+#[derive(Default)]
+pub struct InMemoryCredentialStore {
+    secrets: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+impl CredentialStore for InMemoryCredentialStore {
+    fn save(&self, account: &str, secret: &str) -> Result<()> {
+        self.secrets.lock().unwrap().insert(account.to_string(), secret.to_string());
+        Ok(())
+    }
+
+    fn get(&self, account: &str) -> Result<Option<String>> {
+        Ok(self.secrets.lock().unwrap().get(account).cloned())
+    }
+
+    fn delete(&self, account: &str) -> Result<()> {
+        self.secrets.lock().unwrap().remove(account);
+        Ok(())
+    }
+}
