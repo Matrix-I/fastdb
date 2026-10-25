@@ -1167,12 +1167,9 @@ impl Render for Workspace {
                                         .child(
                                             div()
                                                 .id("btn-edit-saved-conn")
-                                                .px_1()
-                                                .rounded_sm()
-                                                .hover(|s| s.bg(theme.bg_surface))
+                                                .hover(|s| s.bg(theme.bg_surface).text_color(theme.text_accent))
                                                 .text_size(px(11.0))
                                                 .text_color(theme.text_muted)
-                                                .hover(|s| s.text_color(theme.text_accent))
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.edit_saved_connection();
