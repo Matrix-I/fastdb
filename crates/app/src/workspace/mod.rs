@@ -28,7 +28,7 @@ mod widgets;
 
 pub use connections::SavedConnection;
 pub use ddl::generate_table_ddl;
-pub use query::TabState;
+pub use query::{group_thousands, TabState};
 #[cfg(test)]
 pub use query::QueryStatus;
 use ddl::render_dbeaver_col_badge;
@@ -138,6 +138,10 @@ pub struct Workspace {
     pub field_cursor: usize,
     /// Caret of the filter bar, as a char index (clamped; `usize::MAX` = end)
     pub filter_cursor: usize,
+    pub is_fetch_size_focused: bool,
+    pub fetch_size_selected_all: bool,
+    /// Caret of the fetch size box, as a char index (clamped; `usize::MAX` = end)
+    pub fetch_size_cursor: usize,
 }
 
 impl Workspace {
@@ -257,6 +261,9 @@ impl Workspace {
             filter_selected_all: false,
             field_cursor: usize::MAX,
             filter_cursor: usize::MAX,
+            is_fetch_size_focused: false,
+            fetch_size_selected_all: false,
+            fetch_size_cursor: usize::MAX,
         };
 
         cx.spawn(async move |this, cx| {

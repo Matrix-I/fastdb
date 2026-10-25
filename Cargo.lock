@@ -2111,6 +2111,7 @@ name = "fastdb-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "db-wire",
  "flume",
  "gpui",

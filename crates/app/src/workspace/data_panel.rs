@@ -87,6 +87,7 @@ impl Workspace {
                 .overflow_hidden()
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.is_filter_focused = false;
+                    this.blur_fetch_size();
                     cx.notify();
                 }))
                 .child({
@@ -96,9 +97,15 @@ impl Workspace {
                             let panels_w = if show_right_panels { VALUE_PANEL_WIDTH } else { 0.0 };
                             let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w - 26.0 - 22.0 - panels_w).max(200.0);
                             let available_viewport_h = (f32::from(window.viewport_size().height) - 180.0).max(200.0);
+                            let is_running_query = self.is_running_query;
                             let tab = &mut self.tabs[active_tab_idx];
                             tab.grid.update_viewport_width(available_viewport_w);
                             tab.grid.update_viewport_height(available_viewport_h);
+
+                            // Scrolling onto the last row reads the next chunk, as DBeaver does
+                            if tab.fetch.has_more && !is_running_query && is_scrolled_to_bottom(&tab.grid) {
+                                cx.defer_in(window, |this, _, cx| this.fetch_next_rows(cx));
+                            }
 
                             let active_resizing_col = self.resizing_column.and_then(|(t, c, _, _)| {
                                 if t == active_tab_idx { Some(c) } else { None }
@@ -251,4 +258,13 @@ impl Workspace {
 
         data_row
     }
+}
+
+/// Whether the grid body is scrolled within one row of its end. A result that fits the
+/// viewport has nothing to scroll, so it never counts as scrolled to the bottom.
+fn is_scrolled_to_bottom(grid: &VirtualDataGrid) -> bool {
+    let state = grid.vertical_scroll_handle.0.borrow();
+    let max_y = f32::from(state.base_handle.max_offset().height);
+    let scrolled_y = -f32::from(state.base_handle.offset().y);
+    max_y > 0.0 && scrolled_y >= max_y - grid.theme.row_height
 }

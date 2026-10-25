@@ -482,6 +482,7 @@ impl Workspace {
             let tab = &mut self.tabs[self.active_tab];
             tab.grid = VirtualDataGrid::new(None, self.theme.clone());
             tab.execution_time_ms = None;
+            tab.fetch.reset_result();
         }
     }
 

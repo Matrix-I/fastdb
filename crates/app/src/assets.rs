@@ -356,10 +356,10 @@ mod tests {
             properties_header_collapsed: false,
             view_mode: DataViewMode::Grid,
             show_sql_dialog: false,
-            limit: 200,
             editor: SqlEditorView::new("SELECT 1;", Theme::dark(), None),
             grid: VirtualDataGrid::new(None, Theme::dark()),
             execution_time_ms: None,
+            fetch: Default::default(),
         };
 
         assert_eq!(tab.active_subtab, TableSubTab::Properties);
@@ -457,10 +457,10 @@ mod tests {
             properties_header_collapsed: false,
             view_mode: DataViewMode::Grid,
             show_sql_dialog: false,
-            limit: 200,
             editor: ui_editor::SqlEditorView::new("SELECT 1;", Theme::dark(), None),
             grid: ui_grid::VirtualDataGrid::new(None, Theme::dark()),
             execution_time_ms: None,
+            fetch: Default::default(),
         }
     }
 
@@ -508,5 +508,64 @@ mod tests {
             QueryStatus::Failed("relation does not exist".to_string())
         );
         assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &previous));
+    }
+
+    #[test]
+    fn test_fetch_next_appends_rows_to_the_current_result() {
+        use crate::workspace::QueryStatus;
+        use db_wire::{ColumnMeta, DataType, QueryResultPager, StreamEvent};
+        use std::sync::Arc;
+
+        let columns = || vec![ColumnMeta::new("id", DataType::Int4)];
+        let mut tab = sample_table_tab();
+        tab.fetch.size = 2;
+
+        // First chunk comes back full, so more rows may follow
+        let first = Arc::new(QueryResultPager::new(columns()).unwrap());
+        tab.begin_fetch(true, false);
+        tab.apply_stream_event(StreamEvent::SchemaReady(Arc::clone(&first)));
+        first.append_row(vec![Some(&b"1"[..])]).unwrap();
+        first.append_row(vec![Some(&b"2"[..])]).unwrap();
+        tab.apply_stream_event(StreamEvent::Completed { total_rows: 2, elapsed_ms: 3 });
+        assert!(tab.fetch.has_more);
+        assert!(tab.fetch.last.as_ref().unwrap().message().starts_with("2 row(s) fetched - "));
+
+        // The next chunk lands after the existing rows in the same pager
+        let next = Arc::new(QueryResultPager::new(columns()).unwrap());
+        tab.begin_fetch(true, true);
+        assert_eq!(tab.apply_stream_event(StreamEvent::SchemaReady(Arc::clone(&next))), QueryStatus::Running { rows: 2 });
+        next.append_row(vec![Some(&b"3"[..])]).unwrap();
+        assert_eq!(tab.apply_stream_event(StreamEvent::PageAppended { total_rows: 1 }), QueryStatus::Running { rows: 3 });
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::Completed { total_rows: 1, elapsed_ms: 2 }),
+            QueryStatus::Done { rows: 3, elapsed_ms: 2 }
+        );
+
+        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &first));
+        assert_eq!(first.get_cell(2, 0), Some(b"3".to_vec()));
+        assert!(!tab.fetch.has_more, "a short chunk means the table is exhausted");
+        assert!(!tab.fetch.is_appending());
+        assert!(tab.fetch.last.as_ref().unwrap().message().starts_with("3 row(s) fetched - "));
+    }
+
+    #[test]
+    fn test_fetch_size_text_falls_back_to_current_size() {
+        let mut tab = sample_table_tab();
+        tab.fetch.size_text = "500".to_string();
+        tab.fetch.commit_size_text();
+        assert_eq!(tab.fetch.size, 500);
+
+        tab.fetch.size_text = "0".to_string();
+        tab.fetch.commit_size_text();
+        assert_eq!((tab.fetch.size, tab.fetch.size_text.as_str()), (500, "500"));
+    }
+
+    #[test]
+    fn test_row_counts_group_thousands() {
+        use crate::workspace::group_thousands;
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1400), "1,400");
+        assert_eq!(group_thousands(1234567), "1,234,567");
     }
 }

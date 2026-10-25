@@ -79,7 +79,28 @@ impl Workspace {
             self.run_active_query(cx);
         } else if !self.tabs.is_empty() {
             let tab = &mut self.tabs[self.active_tab];
-            if self.is_filter_focused {
+            if self.is_fetch_size_focused {
+                if event.keystroke.key == "escape" {
+                    tab.fetch.size_text = tab.fetch.size.to_string();
+                    self.is_fetch_size_focused = false;
+                    self.fetch_size_selected_all = false;
+                    cx.notify();
+                } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
+                    // Like DBeaver, a new fetch size re-reads the result from the first row
+                    self.run_active_query(cx);
+                } else {
+                    let input = LineInput {
+                        text: &mut tab.fetch.size_text,
+                        caret: &mut self.fetch_size_cursor,
+                        selected_all: &mut self.fetch_size_selected_all,
+                        digits_only: true,
+                    };
+                    if handle_line_key(input, &event.keystroke, cx) {
+                        self.cursor_visible = true;
+                        cx.notify();
+                    }
+                }
+            } else if self.is_filter_focused {
                 if event.keystroke.key == "escape" {
                     self.is_filter_focused = false;
                     self.filter_selected_all = false;

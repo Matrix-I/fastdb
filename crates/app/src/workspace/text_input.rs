@@ -250,6 +250,7 @@ impl Workspace {
         let workspace = cx.entity().downgrade();
         Rc::new(move |index, clicks, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
+                this.blur_fetch_size();
                 this.is_filter_focused = true;
                 this.filter_selected_all = clicks >= 2;
                 this.filter_cursor = index;
@@ -257,6 +258,39 @@ impl Workspace {
                 cx.notify();
             });
         })
+    }
+}
+
+impl Workspace {
+    /// Click handler for the characters of the fetch size box.
+    pub(super) fn fetch_size_caret_pick(&self, cx: &mut Context<Self>) -> CaretPick {
+        let workspace = cx.entity().downgrade();
+        Rc::new(move |index, clicks, _, cx| {
+            let _ = workspace.update(cx, |this, cx| {
+                this.focus_fetch_size(clicks >= 2, index);
+                cx.notify();
+            });
+        })
+    }
+
+    /// Moves keyboard input to the fetch size box, leaving the filter bar
+    pub(super) fn focus_fetch_size(&mut self, select_all: bool, caret: usize) {
+        self.is_filter_focused = false;
+        self.is_fetch_size_focused = true;
+        self.fetch_size_selected_all = select_all;
+        self.fetch_size_cursor = caret;
+        self.cursor_visible = true;
+    }
+
+    /// Leaves the fetch size box, keeping a valid typed size for the next fetch
+    pub(super) fn blur_fetch_size(&mut self) {
+        if self.is_fetch_size_focused {
+            self.is_fetch_size_focused = false;
+            self.fetch_size_selected_all = false;
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                tab.fetch.commit_size_text();
+            }
+        }
     }
 }
 

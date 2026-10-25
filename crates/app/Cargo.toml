@@ -23,4 +23,5 @@ ui-core.workspace = true
 ui-editor.workspace = true
 ui-grid.workspace = true
 rust-embed.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

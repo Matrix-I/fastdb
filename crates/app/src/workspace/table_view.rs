@@ -46,9 +46,12 @@ impl Workspace {
                     let active_subtab = self.tabs[active_tab_idx].active_subtab;
                     let show_sql_dialog = self.tabs[active_tab_idx].show_sql_dialog;
                     let filter_sql = self.tabs[active_tab_idx].filter_sql.clone();
-                    let current_limit = self.tabs[active_tab_idx].limit;
-                    let total_rows = self.tabs[active_tab_idx].grid.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
-                    let exec_ms = self.tabs[active_tab_idx].execution_time_ms;
+                    let fetch_size_text = self.tabs[active_tab_idx].fetch.size_text.clone();
+                    let has_more_rows = self.tabs[active_tab_idx].fetch.has_more;
+                    let is_appending = self.tabs[active_tab_idx].fetch.is_appending();
+                    let fetch_summary = self.tabs[active_tab_idx].fetch.last.as_ref().map(|s| s.message());
+                    let total_rows = self.tabs[active_tab_idx].loaded_rows();
+                    let is_fetch_size_focused = self.is_fetch_size_focused;
                     let is_filter_focused = self.is_filter_focused;
                     let is_running_query = self.is_running_query;
 
@@ -226,6 +229,7 @@ impl Workspace {
                                     .px_2()
                                     .cursor_text()
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                        this.blur_fetch_size();
                                         this.is_filter_focused = true;
                                         this.filter_selected_all = event.click_count() >= 2;
                                         this.filter_cursor = usize::MAX;
@@ -444,64 +448,92 @@ impl Workspace {
                     }
                 }
 
-                // E. Table Bottom Pagination & Status Bar (when in Data subtab)
+                // E. Result footer (when in Data subtab): fetch size, fetch next, row count and the
+                // summary of the last fetch, laid out like DBeaver's result panel status bar
                 if active_subtab == TableSubTab::Data {
+                    let can_fetch_next = has_more_rows && !is_running_query;
+                    let row_count = format!(
+                        "{}{}",
+                        group_thousands(total_rows),
+                        if has_more_rows { "+" } else { "" }
+                    );
+                    let summary = if is_appending {
+                        "Fetching next rows…".to_string()
+                    } else {
+                        fetch_summary.unwrap_or_default()
+                    };
                     center_col = center_col.child(
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .h(px(24.0))
+                            .gap_2()
+                            .h(px(26.0))
                             .bg(theme.bg_surface)
                             .border_t_1()
                             .border_color(theme.border)
-                            .px_3()
+                            .px_2()
                             .text_size(px(11.0))
                             .text_color(theme.text_muted)
                             .child(
                                 div()
+                                    .id("fetch-size-input-box")
                                     .flex()
                                     .items_center()
-                                    .gap_1p5()
-                                    .child(img("icons/grid.svg").w(px(12.0)).h(px(12.0)))
-                                    .child({
-                                        let exec_str = if let Some(ms) = exec_ms {
-                                            format!(" | {}ms", ms)
-                                        } else {
-                                            "".to_string()
-                                        };
-                                        format!("{} rows{}", total_rows, exec_str)
-                                    })
-                                    .child(div().text_color(theme.text_muted).child(" | Zero-Copy 120 FPS Culled Grid"))
+                                    .w(px(64.0))
+                                    .h(px(20.0))
+                                    .px_1()
+                                    .bg(theme.bg_editor)
+                                    .border_1()
+                                    .border_color(if is_fetch_size_focused { rgb(0x388bfd) } else { theme.border })
+                                    .rounded_xs()
+                                    .cursor_text()
+                                    .text_color(theme.text_primary)
+                                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                        this.focus_fetch_size(event.click_count() >= 2, usize::MAX);
+                                        cx.notify();
+                                    }))
+                                    .child(render_field_content(
+                                        &fetch_size_text,
+                                        "",
+                                        is_fetch_size_focused,
+                                        is_fetch_size_focused && self.fetch_size_selected_all,
+                                        self.fetch_size_cursor,
+                                        self.cursor_visible,
+                                        theme,
+                                        &self.fetch_size_caret_pick(cx),
+                                    ))
                             )
+                            .child({
+                                let fetch_next_btn = div()
+                                    .id("btn-fetch-next-page")
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(20.0))
+                                    .h(px(20.0))
+                                    .rounded_xs();
+                                let fetch_next_btn = if can_fetch_next {
+                                    fetch_next_btn.cursor_pointer().hover(|s| s.bg(theme.bg_surface_hover))
+                                } else {
+                                    fetch_next_btn.opacity(0.4)
+                                };
+                                fetch_next_btn
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.blur_fetch_size();
+                                        this.fetch_next_rows(cx);
+                                        cx.notify();
+                                    }))
+                                    .child(img("icons/fetch_next.svg").w(px(14.0)).h(px(14.0)))
+                            })
+                            .child(div().text_color(theme.text_secondary).child(row_count))
+                            .child(div().w(px(1.0)).h(px(14.0)).bg(theme.border))
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("|◀"))
-                                            .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("◀"))
-                                            .child(div().px_1p5().text_size(px(10.5)).text_color(theme.text_secondary).child(format!("1 - {}", current_limit)))
-                                            .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("▶"))
-                                            .child(div().px_1().text_size(px(10.0)).cursor_pointer().hover(|s| s.text_color(theme.text_primary)).child("▶|"))
-                                    )
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded_xs()
-                                            .bg(theme.bg_editor)
-                                            .border_1()
-                                            .border_color(theme.border)
-                                            .text_size(px(10.5))
-                                            .text_color(theme.text_secondary)
-                                            .child(format!("Limit: {}", current_limit))
-                                    )
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(summary)
                             )
                     );
                 }
