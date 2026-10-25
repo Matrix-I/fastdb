@@ -757,18 +757,15 @@ impl VirtualDataGrid {
                                     None => ("NULL".to_string(), true),
                                 };
 
-                                let mut text_el = div().truncate().child(display_text);
+                                // The cell itself clips the text with an ellipsis; an inner element
+                                // per cell would double what is laid out on every scrolled frame
                                 if is_deleted {
-                                    text_el = text_el.line_through();
+                                    cell_div = cell_div.line_through();
                                 }
-
                                 if is_null || is_deleted {
-                                    cell_div = cell_div
-                                        .text_color(theme_text_muted)
-                                        .child(text_el);
-                                } else {
-                                    cell_div = cell_div.child(text_el);
+                                    cell_div = cell_div.text_color(theme_text_muted);
                                 }
+                                cell_div = cell_div.child(display_text);
 
                                 row_div = row_div.child(cell_div);
                             }
