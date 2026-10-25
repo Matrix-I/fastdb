@@ -135,11 +135,14 @@ impl VirtualDataGrid {
         let sample_rows = pager.total_rows().min(WIDTH_SAMPLE_ROWS);
 
         for (col_idx, col) in pager.columns.iter().enumerate() {
-            // 1. Column header width: name + DBeaver data type badge + key icon + dropdown arrow + padding
-            let name_w = Self::estimate_text_width(&col.name, 12.0);
+            // 1. Column header width: name + DBeaver data type badge + key icon + dropdown arrow + padding.
+            // Names are measured at a heavier weight than the estimator assumes, hence the 10% margin.
+            let name_w = Self::estimate_text_width(&col.name, 12.0) * 1.1;
             let badge_str = dbeaver_type_badge(col.data_type);
             let badge_w = Self::estimate_text_width(badge_str, 10.0);
-            let header_w = name_w + badge_w + 50.0;
+            let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
+            let key_w = if is_pk { 17.0 } else { 0.0 };
+            let header_w = name_w + badge_w + key_w + 50.0;
 
             // 2. Data sample width across up to 100 rows
             let mut max_cell_w = 0.0f32;
@@ -392,47 +395,39 @@ impl VirtualDataGrid {
                         .border_r_1()
                         .border_color(if is_resizing { theme.border_focused } else { theme.border })
                         .child(
+                            // Badge, key and arrow keep their size; only the name shrinks,
+                            // ending in an ellipsis once the column is too narrow for it.
                             div()
                                 .flex()
                                 .flex_1()
+                                .min_w_0()
                                 .items_center()
-                                .justify_between()
+                                .gap_1_5()
                                 .h_full()
                                 .px_2()
                                 .overflow_hidden()
                                 .child(
                                     div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_1_5()
+                                        .flex_none()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_size(px(10.0))
+                                        .text_color(rgb(0x58a6ff))
+                                        .child(badge_str)
+                                )
+                                .children(is_pk.then(|| img("icons/key.svg").flex_none().w(px(11.0)).h(px(11.0))))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_size(px(12.0))
+                                        .text_color(theme.text_primary)
                                         .truncate()
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_size(px(10.0))
-                                                .text_color(rgb(0x58a6ff))
-                                                .child(badge_str)
-                                        )
-                                        .child(if is_pk {
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .child(img("icons/key.svg").w(px(11.0)).h(px(11.0)))
-                                                .into_any_element()
-                                        } else {
-                                            div().into_any_element()
-                                        })
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_size(px(12.0))
-                                                .text_color(theme.text_primary)
-                                                .truncate()
-                                                .child(col.name.clone())
-                                        )
+                                        .child(col.name.clone())
                                 )
                                 .child(
                                     div()
+                                        .flex_none()
                                         .text_size(px(8.5))
                                         .text_color(rgb(0x58a6ff))
                                         .child("▼")
