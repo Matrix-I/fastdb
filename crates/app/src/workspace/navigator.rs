@@ -8,7 +8,9 @@ impl Workspace {
         div()
             .flex()
             .flex_col()
-            .w(px(theme.sidebar_width.max(280.0)))
+            .relative()
+            .flex_none()
+            .w(px(self.navigator_width))
             .h_full()
             .bg(theme.bg_sidebar)
             .border_r_1()
@@ -978,6 +980,7 @@ impl Workspace {
 
             nav_tree
         })
+        .child(self.render_panel_splitter(PanelSplitter::Navigator, cx))
     }
 }
 

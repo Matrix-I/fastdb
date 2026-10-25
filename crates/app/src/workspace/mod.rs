@@ -16,6 +16,7 @@ mod ddl;
 mod diagram_panel;
 mod keyboard;
 mod navigator;
+mod panel_resize;
 mod properties_panel;
 mod query;
 mod status_bar;
@@ -33,6 +34,7 @@ pub use query::{group_thousands, TabState};
 pub use query::QueryStatus;
 use ddl::render_dbeaver_col_badge;
 use text_input::{handle_line_key, render_caret_text, CaretPick, LineInput};
+use panel_resize::{PanelDrag, PanelSplitter, CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH};
 use value_panel::{ValuePanelState, VALUE_PANEL_WIDTH};
 use widgets::{dbeaver_driver_icon, render_field_content};
 
@@ -128,6 +130,10 @@ pub struct Workspace {
     pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
     pub table_indexes: HashMap<(String, String), Vec<String>>,
     pub resizing_column: Option<(usize, usize, f32, f32)>, // (tab_idx, col_idx, start_mouse_x, start_col_width)
+    pub resizing_panel: Option<PanelDrag>,
+    /// Live widths of the side panels, changed by dragging their splitters
+    pub navigator_width: f32,
+    pub value_panel_width: f32,
     pub is_filter_focused: bool,
     pub show_right_panels: bool,
     pub value_panel: ValuePanelState,
@@ -253,6 +259,9 @@ impl Workspace {
             table_constraints: HashMap::new(),
             table_indexes: HashMap::new(),
             resizing_column: None,
+            resizing_panel: None,
+            navigator_width: NAVIGATOR_DEFAULT_WIDTH,
+            value_panel_width: VALUE_PANEL_WIDTH,
             is_filter_focused: false,
             show_right_panels: false,
             value_panel: ValuePanelState::default(),
@@ -331,6 +340,23 @@ impl Render for Workspace {
                         this.resizing_column = None;
                         cx.notify();
                     }
+                }));
+        }
+
+        if self.resizing_panel.is_some() {
+            root = root
+                .cursor_col_resize()
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                    this.drag_panel_splitter(f32::from(event.position.x), f32::from(window.viewport_size().width));
+                    cx.notify();
+                }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    this.resizing_panel = None;
+                    cx.notify();
+                }))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    this.resizing_panel = None;
+                    cx.notify();
                 }));
         }
 

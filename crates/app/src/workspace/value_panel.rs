@@ -2,7 +2,7 @@ use super::*;
 use gpui::prelude::FluentBuilder;
 use super::value_format::{detect_format, format_value, FormattedValue, ValueFormat};
 
-/// Width of the record value side panel
+/// Default width of the record value side panel
 pub(super) const VALUE_PANEL_WIDTH: f32 = 340.0;
 /// Lines past this are not rendered, so a huge value cannot stall the frame
 const MAX_RENDERED_LINES: usize = 5_000;
@@ -124,7 +124,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(VALUE_PANEL_WIDTH))
+            .w(px(self.value_panel_width))
             .h_full()
             .bg(theme.bg_editor)
             .border_l_1()
@@ -304,6 +304,8 @@ impl Workspace {
                     .child(div().flex_none().child(format!("{size} · UTF-8"))),
             );
         }
+
+        panel = panel.child(self.render_panel_splitter(PanelSplitter::ValuePanel, cx));
 
         if state.show_format_menu {
             panel = panel.child(self.render_format_menu(format, &theme, cx));
