@@ -6,7 +6,15 @@ use std::time::Duration;
 use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, MySqlDriver, StreamEvent};
 
 fn test_config() -> Option<ConnectionConfig> {
-    let port = std::env::var("FASTDB_TEST_MYSQL_PORT").ok()?.parse().ok()?;
+    let Ok(port) = std::env::var("FASTDB_TEST_MYSQL_PORT") else {
+        // CI sets FASTDB_REQUIRE_DB_TESTS so a misconfigured job fails instead of skipping
+        assert!(
+            std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none(),
+            "FASTDB_REQUIRE_DB_TESTS is set but FASTDB_TEST_MYSQL_PORT is not"
+        );
+        return None;
+    };
+    let port = port.parse().expect("FASTDB_TEST_MYSQL_PORT must be a port number");
     let env = |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_string());
     Some(ConnectionConfig {
         driver: DbDriverKind::MySql,

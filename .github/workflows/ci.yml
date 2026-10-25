@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Engine and driver crates against live PostgreSQL and MySQL servers
+  db-integration:
+    name: Engine & drivers (live databases)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: fastdb
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pfastdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      FASTDB_REQUIRE_DB_TESTS: "1"
+      FASTDB_TEST_PG_PORT: "5432"
+      FASTDB_TEST_PG_USER: postgres
+      FASTDB_TEST_MYSQL_PORT: "3306"
+      FASTDB_TEST_MYSQL_USER: root
+      FASTDB_TEST_MYSQL_PASSWORD: fastdb
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system libraries
+        # keyring's Secret Service backend links against D-Bus
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test engine and driver crates
+        run: cargo test -p mem-engine -p db-wire -p platform-hal -p sql-intel
+
+  # Full workspace, including the GPUI app, on the primary desktop target
+  macos:
+    name: Build & test (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: Test
+        # Live-database tests skip here; db-integration covers them
+        run: cargo test --workspace
+
+  linux-app:
+    name: Build app (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system libraries
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          build-essential pkg-config libdbus-1-dev libxcb1-dev libxkbcommon-dev
+          libxkbcommon-x11-dev libwayland-dev libfontconfig1-dev libasound2-dev
+          libvulkan-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --all-targets

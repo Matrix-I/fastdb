@@ -5,7 +5,15 @@ use std::sync::Arc;
 use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, PostgresDriver};
 
 fn test_config() -> Option<ConnectionConfig> {
-    let port = std::env::var("FASTDB_TEST_PG_PORT").ok()?.parse().ok()?;
+    let Ok(port) = std::env::var("FASTDB_TEST_PG_PORT") else {
+        // CI sets FASTDB_REQUIRE_DB_TESTS so a misconfigured job fails instead of skipping
+        assert!(
+            std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none(),
+            "FASTDB_REQUIRE_DB_TESTS is set but FASTDB_TEST_PG_PORT is not"
+        );
+        return None;
+    };
+    let port = port.parse().expect("FASTDB_TEST_PG_PORT must be a port number");
     Some(ConnectionConfig {
         driver: DbDriverKind::Postgres,
         host: std::env::var("FASTDB_TEST_PG_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
