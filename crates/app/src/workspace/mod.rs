@@ -22,6 +22,7 @@ mod panel_resize;
 mod properties_panel;
 mod query;
 mod status_bar;
+mod tab_context_menu;
 mod table_view;
 mod text_input;
 mod top_bar;
@@ -31,6 +32,7 @@ mod widgets;
 
 pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
+pub use tab_context_menu::TabContextMenu;
 pub use ddl::generate_table_ddl;
 pub use query::{group_thousands, TabState};
 #[cfg(test)]
@@ -159,6 +161,8 @@ pub struct Workspace {
     pub cell_edit_history: LineHistory,
     /// Right-click menu of a navigator connection, if open
     pub nav_context_menu: Option<NavContextMenu>,
+    /// Right-click menu of a top bar tab, if open
+    pub tab_context_menu: Option<TabContextMenu>,
 }
 
 impl Workspace {
@@ -288,6 +292,7 @@ impl Workspace {
             fetch_size_cursor: usize::MAX,
             cell_edit_history: LineHistory::new(),
             nav_context_menu: None,
+            tab_context_menu: None,
         };
 
         cx.spawn(async move |this, cx| {
@@ -394,6 +399,9 @@ impl Render for Workspace {
 
         if let Some(menu) = self.nav_context_menu.clone() {
             root = root.child(self.render_nav_context_menu(menu, cx));
+        }
+        if let Some(menu) = self.tab_context_menu.clone() {
+            root = root.child(self.render_tab_context_menu(menu, cx));
         }
 
         // 4. Modal Dialog: Database Connection Setup

@@ -74,6 +74,11 @@ impl Workspace {
                                         this.is_filter_focused = false;
                                         cx.notify();
                                     }))
+                                    .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        this.open_tab_context_menu(i, event.position);
+                                        cx.notify();
+                                    }))
                                     .child(img("icons/table.svg").w(px(13.0)).h(px(13.0)))
                                     .child(tab.title.clone())
                                     .child(

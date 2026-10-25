@@ -540,14 +540,7 @@ impl Workspace {
 
     pub fn close_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
-            self.tabs.remove(index);
-            if self.tabs.is_empty() {
-                self.active_tab = 0;
-                self.is_filter_focused = false;
-            } else if self.active_tab >= self.tabs.len() {
-                self.active_tab = self.tabs.len() - 1;
-                self.is_filter_focused = false;
-            }
+            self.close_tabs_where(index, |i| i != index);
         }
     }
 }
