@@ -24,8 +24,7 @@ impl Workspace {
 
     pub(super) fn render_nav_context_menu(&mut self, menu: NavContextMenu, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme.clone();
-        let is_active = self.active_connection_id.as_deref() == Some(menu.conn_id.as_str());
-        let is_connected = self.is_connected && is_active;
+        let is_connected = self.is_connection_live(&menu.conn_id);
 
         let item = |id: &'static str, icon: &'static str, label: &'static str, enabled: bool, action: NavMenuAction, cx: &mut Context<Self>| {
             let conn_id = menu.conn_id.clone();
@@ -93,9 +92,13 @@ impl Workspace {
         match action {
             NavMenuAction::EditConnection => self.edit_saved_connection(Some(conn_id)),
             NavMenuAction::Connect => self.connect_saved_by_id(conn_id, cx),
-            NavMenuAction::Disconnect => self.disconnect(),
+            NavMenuAction::Disconnect => self.disconnect_by_id(conn_id),
             NavMenuAction::Delete => self.delete_saved_connection(conn_id),
-            NavMenuAction::Refresh => self.refresh_connection(cx),
+            NavMenuAction::Refresh => {
+                // Refresh acts on the active connection, so switch to a parked one first
+                self.connect_saved_by_id(conn_id, cx);
+                self.refresh_connection(cx);
+            }
         }
     }
 }

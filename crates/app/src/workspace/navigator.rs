@@ -117,9 +117,10 @@ impl Workspace {
                     for conn in &self.saved_connections {
                         let conn_id = conn.id.clone();
                         let is_this_active = self.active_connection_id.as_deref() == Some(&conn_id);
-                        let is_this_connected = self.is_connected && is_this_active;
+                        let is_this_connected = self.is_connection_live(&conn_id);
                         let is_this_connecting = self.is_connecting && is_this_active;
-                        let is_conn_exp = self.nav_connection_expanded && is_this_connected;
+                        // Only the active connection's tree is loaded into the navigator
+                        let is_conn_exp = self.nav_connection_expanded && self.is_connected && is_this_active;
 
                         let drv_name = conn.driver.clone();
                         let conn_name = conn.name.clone();
@@ -143,7 +144,7 @@ impl Workspace {
                                 .pl_1()
                                 .pr_2()
                                 .rounded_sm()
-                                .bg(if is_this_connected { theme.bg_surface_selected } else { rgba(0x00000000) })
+                                .bg(if is_this_connected && is_this_active { theme.bg_surface_selected } else { rgba(0x00000000) })
                                 .hover(|s| s.bg(theme.bg_surface_hover))
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -203,7 +204,7 @@ impl Workspace {
                                 )
                         );
 
-                        if is_this_connected && is_conn_exp {
+                        if is_conn_exp {
                         // Level 1: "Databases" Folder
                         let is_dbs_exp = self.nav_databases_expanded;
                         nav_tree = nav_tree.child(
@@ -930,7 +931,8 @@ impl Workspace {
 }
 
 impl Workspace {
-    /// Connection node action: expand/collapse when connected, otherwise connect.
+    /// Connection node action: expand/collapse the active connection, otherwise
+    /// switch to it (reusing it when already open) or connect.
     fn toggle_or_connect(&mut self, conn_id: &str, cx: &mut Context<Self>) {
         let is_active = self.active_connection_id.as_deref() == Some(conn_id);
         if self.is_connected && is_active {

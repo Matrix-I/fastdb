@@ -29,7 +29,7 @@ mod value_format;
 mod value_panel;
 mod widgets;
 
-pub use connections::SavedConnection;
+pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
 pub use ddl::generate_table_ddl;
 pub use query::{group_thousands, TabState};
@@ -102,6 +102,8 @@ pub struct Workspace {
     // Real Database Connection Setup State
     pub saved_connections: Vec<SavedConnection>,
     pub active_connection_id: Option<String>,
+    /// Open connections other than the active one, kept alive for instant switching
+    pub live_connections: HashMap<String, LiveConnection>,
     pub credentials: Arc<dyn CredentialStore>,
     pub editing_connection_id: Option<String>,
     pub is_connected: bool,
@@ -229,6 +231,7 @@ impl Workspace {
             editing_connection_id: None,
             is_connected: false,
             is_connecting: false,
+            live_connections: HashMap::new(),
             show_connection_modal: false,
             selected_driver_kind: form_driver,
             form_name,

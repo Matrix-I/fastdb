@@ -21,6 +21,24 @@ pub(super) struct SchemaMetadata {
     indexes: Vec<(String, String, String)>,
 }
 
+/// An open connection parked in the background while another one is active.
+/// Holds everything the navigator needs so switching back needs no reconnect.
+pub struct LiveConnection {
+    driver: Arc<dyn DatabaseDriver>,
+    tables: Vec<TableSummary>,
+    table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
+    table_constraints: HashMap<(String, String), Vec<(String, String)>>,
+    table_indexes: HashMap<(String, String), Vec<String>>,
+    nav_databases_expanded: bool,
+    nav_database_expanded: bool,
+    nav_schemas_expanded: bool,
+    nav_schema_expanded: HashSet<String>,
+    nav_tables_expanded: HashSet<String>,
+    nav_table_expanded: HashSet<String>,
+    nav_subfolder_expanded: HashSet<String>,
+    selected_table_name: Option<String>,
+}
+
 /// Loads tables, then columns, constraints and indexes in batch; only a failed
 /// table listing is an error, the rest fall back to empty
 async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMetadata, String> {
@@ -355,15 +373,22 @@ impl Workspace {
                 this.is_connecting = false;
                 match result {
                     Ok((driver, metadata, config)) => {
+                        let conn_id = this.editing_connection_id.clone().unwrap_or_else(|| {
+                            format!("conn_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0))
+                        });
+
+                        // Keep the previously active connection open in the background
+                        if this.active_connection_id.as_deref() != Some(conn_id.as_str()) {
+                            this.park_active_connection();
+                        }
+                        // A reconnect replaces any parked session of the same connection
+                        this.live_connections.remove(&conn_id);
+
                         this.apply_schema_metadata(metadata);
                         this.driver = Some(driver);
                         this.is_connected = true;
                         this.show_connection_modal = false;
                         this.test_result = None;
-
-                        let conn_id = this.editing_connection_id.clone().unwrap_or_else(|| {
-                            format!("conn_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0))
-                        });
 
                         let conn_name = if !this.form_name.trim().is_empty() {
                             this.form_name.trim().to_string()
@@ -452,6 +477,107 @@ impl Workspace {
                 cx.notify();
             });
         }).detach();
+    }
+
+    /// True when the connection is open, whether active or parked in the background
+    pub fn is_connection_live(&self, conn_id: &str) -> bool {
+        (self.is_connected && self.active_connection_id.as_deref() == Some(conn_id))
+            || self.live_connections.contains_key(conn_id)
+    }
+
+    /// Moves the active open connection into `live_connections`, leaving the
+    /// workspace disconnected but the connection itself open
+    fn park_active_connection(&mut self) {
+        if !self.is_connected {
+            return;
+        }
+        let (Some(id), Some(driver)) = (self.active_connection_id.clone(), self.driver.take()) else {
+            return;
+        };
+        let live = LiveConnection {
+            driver,
+            tables: std::mem::take(&mut self.tables),
+            table_columns: std::mem::take(&mut self.table_columns),
+            table_constraints: std::mem::take(&mut self.table_constraints),
+            table_indexes: std::mem::take(&mut self.table_indexes),
+            nav_databases_expanded: self.nav_databases_expanded,
+            nav_database_expanded: self.nav_database_expanded,
+            nav_schemas_expanded: self.nav_schemas_expanded,
+            nav_schema_expanded: std::mem::take(&mut self.nav_schema_expanded),
+            nav_tables_expanded: std::mem::take(&mut self.nav_tables_expanded),
+            nav_table_expanded: std::mem::take(&mut self.nav_table_expanded),
+            nav_subfolder_expanded: std::mem::take(&mut self.nav_subfolder_expanded),
+            selected_table_name: self.selected_table_name.take(),
+        };
+        self.live_connections.insert(id, live);
+        let _ = self.schema_cache.clear();
+        self.is_connected = false;
+    }
+
+    /// Makes a parked connection the active one without reconnecting.
+    /// Returns false when the connection is not parked.
+    fn activate_live_connection(&mut self, conn_id: &str) -> bool {
+        if !self.live_connections.contains_key(conn_id) {
+            return false;
+        }
+        self.park_active_connection();
+        let Some(live) = self.live_connections.remove(conn_id) else {
+            return false;
+        };
+
+        let _ = self.schema_cache.clear();
+        for t in &live.tables {
+            let _ = self.schema_cache.add_table(&t.schema, &t.name, &t.table_type);
+        }
+        for ((schema, table), cols) in &live.table_columns {
+            for c in cols {
+                let _ = self.schema_cache.add_column(schema, table, &c.name, c.data_type.display_name(), c.is_primary_key);
+            }
+        }
+
+        self.driver = Some(live.driver);
+        self.tables = live.tables;
+        self.table_columns = live.table_columns;
+        self.table_constraints = live.table_constraints;
+        self.table_indexes = live.table_indexes;
+        self.nav_connection_expanded = true;
+        self.nav_databases_expanded = live.nav_databases_expanded;
+        self.nav_database_expanded = live.nav_database_expanded;
+        self.nav_schemas_expanded = live.nav_schemas_expanded;
+        self.nav_schema_expanded = live.nav_schema_expanded;
+        self.nav_tables_expanded = live.nav_tables_expanded;
+        self.nav_table_expanded = live.nav_table_expanded;
+        self.nav_subfolder_expanded = live.nav_subfolder_expanded;
+        self.selected_table_name = live.selected_table_name;
+        self.is_connected = true;
+        self.active_connection_id = Some(conn_id.to_string());
+        self.load_connection_form(conn_id);
+        self.save_config();
+
+        // Results in the active tab came from the previous connection
+        if !self.tabs.is_empty() {
+            let tab = &mut self.tabs[self.active_tab];
+            tab.grid = VirtualDataGrid::new(None, self.theme.clone());
+            tab.execution_time_ms = None;
+            tab.fetch.reset_result();
+        }
+        for tab in &mut self.tabs {
+            tab.editor.schema_cache = Some(self.schema_cache.clone());
+        }
+
+        let name = self.active_saved_connection().map(|c| c.name.clone()).unwrap_or_default();
+        self.status_message = format!("🟢 Switched to: {} — {} tables", name, self.tables.len());
+        true
+    }
+
+    /// Closes one connection: the active one, or a parked one in the background
+    pub fn disconnect_by_id(&mut self, conn_id: &str) {
+        if self.live_connections.remove(conn_id).is_some() {
+            let name = self.saved_connections.iter().find(|c| c.id == conn_id).map(|c| c.name.clone()).unwrap_or_default();
+            self.status_message = format!("⚪ Disconnected from {}", name);
+        } else if self.active_connection_id.as_deref() == Some(conn_id) && self.is_connected {
+            self.disconnect();
+        }
     }
 
     pub fn disconnect(&mut self) {
@@ -606,8 +732,26 @@ impl Workspace {
         if self.is_connecting {
             return;
         }
-        let Some(saved) = self.saved_connections.iter().find(|c| c.id == conn_id).cloned() else {
+        if self.is_connected && self.active_connection_id.as_deref() == Some(conn_id) {
+            self.nav_connection_expanded = true;
             return;
+        }
+        if self.activate_live_connection(conn_id) {
+            return;
+        }
+        if !self.load_connection_form(conn_id) {
+            return;
+        }
+        self.park_active_connection();
+        self.active_connection_id = Some(conn_id.to_string());
+        self.nav_connection_expanded = true;
+        self.connect_to_database(cx);
+    }
+
+    /// Fills the connection form from a saved connection; false when it does not exist
+    fn load_connection_form(&mut self, conn_id: &str) -> bool {
+        let Some(saved) = self.saved_connections.iter().find(|c| c.id == conn_id).cloned() else {
+            return false;
         };
 
         self.selected_driver_kind = match saved.driver.as_str() {
@@ -623,9 +767,7 @@ impl Workspace {
         self.form_password = Self::resolve_connection_password(&*self.credentials, &saved).unwrap_or_default();
         self.form_use_unix_socket = saved.use_unix_socket;
         self.editing_connection_id = Some(saved.id.clone());
-        self.active_connection_id = Some(saved.id.clone());
-        self.nav_connection_expanded = true;
-        self.connect_to_database(cx);
+        true
     }
 
     pub fn connect_saved(&mut self, cx: &mut Context<Self>) {
@@ -640,6 +782,7 @@ impl Workspace {
 
     pub fn delete_saved_connection(&mut self, conn_id: &str) {
         self.saved_connections.retain(|c| c.id != conn_id);
+        self.live_connections.remove(conn_id);
         if let Err(e) = self.credentials.delete(conn_id) {
             tracing::warn!("Failed to delete password for connection {}: {}", conn_id, e);
         }
