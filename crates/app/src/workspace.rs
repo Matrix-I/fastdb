@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-use db_wire::{create_driver, ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
+use db_wire::{create_driver, ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
 use gpui::*;
 use sql_intel::SchemaCache;
 use ui_core::theme::Theme;
@@ -23,6 +23,17 @@ pub enum FormField {
     Password,
 }
 
+#[derive(Debug, Clone)]
+pub struct SavedConnection {
+    pub driver: String,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub user: String,
+    pub password: Option<String>,
+    pub use_unix_socket: bool,
+}
+
 pub struct Workspace {
     pub theme: Theme,
     pub focus_handle: FocusHandle,
@@ -36,6 +47,8 @@ pub struct Workspace {
     pub status_message: String,
 
     // Real Database Connection Setup State
+    pub has_saved_connection: bool,
+    pub saved_connection: Option<SavedConnection>,
     pub is_connected: bool,
     pub is_connecting: bool,
     pub show_connection_modal: bool,
@@ -57,7 +70,12 @@ pub struct Workspace {
     pub nav_schemas_expanded: bool,
     pub nav_schema_expanded: HashSet<String>,
     pub nav_tables_expanded: HashSet<String>,
+    pub nav_table_expanded: HashSet<String>,
+    pub nav_subfolder_expanded: HashSet<String>,
     pub selected_table_name: Option<String>,
+    pub table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
+    pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
+    pub table_indexes: HashMap<(String, String), Vec<String>>,
 }
 
 impl Workspace {
@@ -77,21 +95,32 @@ impl Workspace {
             execution_time_ms: None,
         };
 
-        let (mut saved_host, mut saved_port, mut saved_db, mut saved_user) = (
-            "ubiid.ubitec.local".to_string(),
-            "8091".to_string(),
-            "signeer_local".to_string(),
-            "postgres".to_string(),
-        );
+        let mut saved_connection: Option<SavedConnection> = None;
 
         if let Ok(content) = std::fs::read_to_string(".fastdb_config.json") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(h) = v["host"].as_str() { saved_host = h.to_string(); }
-                if let Some(p) = v["port"].as_str() { saved_port = p.to_string(); }
-                if let Some(d) = v["database"].as_str() { saved_db = d.to_string(); }
-                if let Some(u) = v["user"].as_str() { saved_user = u.to_string(); }
+                let h = v["host"].as_str().unwrap_or("localhost").to_string();
+                let p = v["port"].as_str().and_then(|s| s.parse::<u16>().ok()).unwrap_or(5432);
+                let d = v["database"].as_str().unwrap_or("").to_string();
+                let u = v["user"].as_str().unwrap_or("postgres").to_string();
+                let pw = v["password"].as_str().map(|s| s.to_string());
+                let sock = v["use_unix_socket"].as_bool().unwrap_or(false);
+                let drv_str = v["driver"].as_str().unwrap_or("Postgres").to_string();
+                let has = v["has_saved_connection"].as_bool().unwrap_or(!d.is_empty());
+                if has && !d.is_empty() {
+                    saved_connection = Some(SavedConnection {
+                        driver: drv_str,
+                        host: h,
+                        port: p,
+                        database: d,
+                        user: u,
+                        password: pw,
+                        use_unix_socket: sock,
+                    });
+                }
             }
         }
+        let has_saved_connection = saved_connection.is_some();
 
         Self {
             theme,
@@ -102,25 +131,31 @@ impl Workspace {
             schema_cache,
             tables: Vec::new(),
             is_running_query: false,
-            status_message: "⚪ Disconnected — Please configure and connect to a database.".to_string(),
+            status_message: if let Some(ref saved) = saved_connection {
+                format!("⚪ Saved connection: {} — Click dropdown in navigator to connect.", saved.database)
+            } else {
+                "⚪ Disconnected — Click ➕ to connect to a database.".to_string()
+            },
 
-            // Connection Setup Form Defaults (PostgreSQL)
+            // Connection Setup Form Defaults - Start completely clean to prevent data leakage
+            has_saved_connection,
+            saved_connection,
             is_connected: false,
             is_connecting: false,
-            show_connection_modal: true,
+            show_connection_modal: false,
             selected_driver_kind: DbDriverKind::Postgres,
-            form_host: saved_host,
-            form_port: saved_port,
-            form_database: saved_db,
-            form_user: saved_user,
+            form_host: "localhost".to_string(),
+            form_port: "5432".to_string(),
+            form_database: "".to_string(),
+            form_user: "postgres".to_string(),
             form_password: "".to_string(),
             form_use_unix_socket: false,
-            active_field: Some(FormField::Password),
+            active_field: Some(FormField::Host),
             show_password: false,
             test_result: None,
 
             // DBeaver Navigation Tree Defaults
-            nav_connection_expanded: true,
+            nav_connection_expanded: false,
             nav_databases_expanded: true,
             nav_database_expanded: true,
             nav_schemas_expanded: true,
@@ -134,7 +169,12 @@ impl Workspace {
                 s.insert("public".to_string());
                 s
             },
+            nav_table_expanded: HashSet::new(),
+            nav_subfolder_expanded: HashSet::new(),
             selected_table_name: None,
+            table_columns: HashMap::new(),
+            table_constraints: HashMap::new(),
+            table_indexes: HashMap::new(),
         }
     }
 
@@ -256,8 +296,10 @@ impl Workspace {
 
                         // Fast batch fetch all columns in 1 single query; fall back gracefully if schema discovery fails
                         let columns_info = driver.list_all_columns().await.unwrap_or_default();
+                        let constraints_info = driver.list_all_constraints().await.unwrap_or_default();
+                        let indexes_info = driver.list_all_indexes().await.unwrap_or_default();
 
-                        Ok::<_, String>((driver, tables, columns_info, config))
+                        Ok::<_, String>((driver, tables, columns_info, constraints_info, indexes_info, config))
                     }).await
                 });
 
@@ -271,16 +313,32 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 this.is_connecting = false;
                 match result {
-                    Ok((driver, tables, columns_info, config)) => {
+                    Ok((driver, tables, columns_info, constraints_info, indexes_info, config)) => {
                         let _ = this.schema_cache.clear();
                         for t in &tables {
                             let _ = this.schema_cache.add_table(&t.schema, &t.name, &t.table_type);
                         }
+
+                        let mut col_map = HashMap::new();
                         for (schema, table, cols) in columns_info {
-                            for c in cols {
+                            for c in &cols {
                                 let _ = this.schema_cache.add_column(&schema, &table, &c.name, c.data_type.display_name(), c.is_primary_key);
                             }
+                            col_map.insert((schema, table), cols);
                         }
+                        this.table_columns = col_map;
+
+                        let mut constr_map = HashMap::new();
+                        for (schema, table, cname, ctype) in constraints_info {
+                            constr_map.entry((schema, table)).or_insert_with(Vec::new).push((cname, ctype));
+                        }
+                        this.table_constraints = constr_map;
+
+                        let mut idx_map = HashMap::new();
+                        for (schema, table, iname) in indexes_info {
+                            idx_map.entry((schema, table)).or_insert_with(Vec::new).push(iname);
+                        }
+                        this.table_indexes = idx_map;
 
                         this.tables = tables;
                         this.driver = Some(driver);
@@ -288,13 +346,33 @@ impl Workspace {
                         this.show_connection_modal = false;
                         this.test_result = None;
 
+                        let saved = SavedConnection {
+                            driver: match config.driver {
+                                DbDriverKind::Postgres => "Postgres".to_string(),
+                                DbDriverKind::MySql => "MySql".to_string(),
+                                DbDriverKind::Sqlite => "Sqlite".to_string(),
+                            },
+                            host: config.host.clone(),
+                            port: config.port,
+                            database: config.database.clone(),
+                            user: config.user.clone(),
+                            password: config.password.clone(),
+                            use_unix_socket: config.use_unix_socket,
+                        };
+
                         let save_data = serde_json::json!({
-                            "host": config.host,
-                            "port": config.port.to_string(),
-                            "database": config.database,
-                            "user": config.user,
+                            "has_saved_connection": true,
+                            "driver": saved.driver,
+                            "host": saved.host,
+                            "port": saved.port.to_string(),
+                            "database": saved.database,
+                            "user": saved.user,
+                            "password": saved.password.clone().unwrap_or_default(),
+                            "use_unix_socket": saved.use_unix_socket,
                         });
                         let _ = std::fs::write(".fastdb_config.json", save_data.to_string());
+                        this.saved_connection = Some(saved);
+                        this.has_saved_connection = true;
 
                         for t in &this.tables {
                             this.nav_schema_expanded.insert(t.schema.clone());
@@ -306,6 +384,9 @@ impl Workspace {
 
                         let starter_sql = if let Some(first_table) = this.tables.first() {
                             this.selected_table_name = Some(first_table.name.clone());
+                            let t_key = format!("{}.{}", first_table.schema, first_table.name);
+                            this.nav_table_expanded.insert(t_key.clone());
+                            this.nav_subfolder_expanded.insert(format!("{}.columns", t_key));
                             match selected_driver_kind {
                                 DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", first_table.schema, first_table.name),
                                 DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", first_table.schema, first_table.name),
@@ -343,12 +424,76 @@ impl Workspace {
         let _ = self.schema_cache.clear();
         self.is_connected = false;
         self.selected_table_name = None;
-        self.status_message = "⚪ Disconnected from database.".to_string();
+        self.table_columns.clear();
+        self.table_constraints.clear();
+        self.table_indexes.clear();
+        self.nav_connection_expanded = false;
+        self.status_message = "⚪ Disconnected from database — Click connection in navigator to reconnect.".to_string();
         if !self.tabs.is_empty() {
             let tab = &mut self.tabs[self.active_tab];
             tab.grid = VirtualDataGrid::new(None, self.theme.clone());
             tab.execution_time_ms = None;
         }
+    }
+
+    pub fn open_new_connection_dialog(&mut self) {
+        self.selected_driver_kind = DbDriverKind::Postgres;
+        self.form_host = "localhost".to_string();
+        self.form_port = "5432".to_string();
+        self.form_database = "".to_string();
+        self.form_user = "postgres".to_string();
+        self.form_password = "".to_string();
+        self.form_use_unix_socket = false;
+        self.active_field = Some(FormField::Host);
+        self.show_password = false;
+        self.test_result = None;
+        self.show_connection_modal = true;
+    }
+
+    pub fn edit_saved_connection(&mut self) {
+        if let Some(ref saved) = self.saved_connection {
+            self.selected_driver_kind = match saved.driver.as_str() {
+                "MySql" => DbDriverKind::MySql,
+                "Sqlite" => DbDriverKind::Sqlite,
+                _ => DbDriverKind::Postgres,
+            };
+            self.form_host = saved.host.clone();
+            self.form_port = saved.port.to_string();
+            self.form_database = saved.database.clone();
+            self.form_user = saved.user.clone();
+            self.form_password = saved.password.clone().unwrap_or_default();
+            self.form_use_unix_socket = saved.use_unix_socket;
+            self.test_result = None;
+            self.active_field = Some(FormField::Password);
+            self.show_password = false;
+            self.show_connection_modal = true;
+        } else {
+            self.open_new_connection_dialog();
+        }
+    }
+
+    pub fn connect_saved(&mut self, cx: &mut Context<Self>) {
+        if self.is_connecting {
+            return;
+        }
+        let Some(ref saved) = self.saved_connection else {
+            self.open_new_connection_dialog();
+            return;
+        };
+
+        self.selected_driver_kind = match saved.driver.as_str() {
+            "MySql" => DbDriverKind::MySql,
+            "Sqlite" => DbDriverKind::Sqlite,
+            _ => DbDriverKind::Postgres,
+        };
+        self.form_host = saved.host.clone();
+        self.form_port = saved.port.to_string();
+        self.form_database = saved.database.clone();
+        self.form_user = saved.user.clone();
+        self.form_password = saved.password.clone().unwrap_or_default();
+        self.form_use_unix_socket = saved.use_unix_socket;
+        self.nav_connection_expanded = true;
+        self.connect_to_database(cx);
     }
 
     pub fn select_preset_postgres(&mut self) {
@@ -389,6 +534,11 @@ impl Workspace {
 
     pub fn query_table(&mut self, schema: &str, table: &str, cx: &mut Context<Self>) {
         self.selected_table_name = Some(table.to_string());
+        let t_key = format!("{}.{}", schema, table);
+        if !self.nav_table_expanded.contains(&t_key) {
+            self.nav_table_expanded.insert(t_key.clone());
+            self.nav_subfolder_expanded.insert(format!("{}.columns", t_key));
+        }
         let sql = match self.selected_driver_kind {
             DbDriverKind::Postgres => format!("SELECT * FROM \"{}\".\"{}\" LIMIT 100;", schema, table),
             DbDriverKind::MySql => format!("SELECT * FROM `{}`.`{}` LIMIT 100;", schema, table),
@@ -757,7 +907,7 @@ impl Render for Workspace {
                             )
                         })
                 )
-                // Toolbar Buttons
+                // Top Right Connection Status Badge
                 .child(
                     div()
                         .flex()
@@ -765,23 +915,28 @@ impl Render for Workspace {
                         .gap_2()
                         .child(
                             div()
-                                .id("btn-run-query")
+                                .id("btn-topbar-connection")
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .gap_2()
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
-                                .bg(if self.is_running_query { theme.bg_surface_hover } else { theme.text_accent })
-                                .text_color(if self.is_running_query { theme.text_muted } else { theme.bg_app })
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(px(12.0))
+                                .bg(theme.bg_surface_hover)
+                                .text_color(theme.text_secondary)
+                                .text_size(px(11.0))
                                 .cursor_pointer()
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.run_active_query(cx);
+                                    this.show_connection_modal = true;
                                     cx.notify();
                                 }))
-                                .child(if self.is_running_query { "⏳ Executing..." } else { "▶ Run Query (⌘↵)" })
+                                .child(if self.is_connected { "🟢" } else { "⚪" })
+                                .child(if self.is_connected {
+                                    format!("{} ({})", self.form_database, self.form_user)
+                                } else {
+                                    "Connect DB".to_string()
+                                })
+                                .child("⚙")
                         )
                 )
         );
@@ -842,7 +997,7 @@ impl Render for Workspace {
                                                 .text_color(theme.text_accent)
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.show_connection_modal = true;
+                                                    this.open_new_connection_dialog();
                                                     cx.notify();
                                                 }))
                                                 .child("➕")
@@ -879,7 +1034,7 @@ impl Render for Workspace {
                                 .overflow_y_scroll()
                                 .gap_0p5();
 
-                            if !self.is_connected {
+                            if !self.is_connected && !self.has_saved_connection {
                                 nav_tree = nav_tree.child(
                                     div()
                                         .p_4()
@@ -902,7 +1057,7 @@ impl Render for Workspace {
                                                 .font_weight(FontWeight::SEMIBOLD)
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.show_connection_modal = true;
+                                                    this.open_new_connection_dialog();
                                                     cx.notify();
                                                 }))
                                                 .child("➕ Connect to Database")
@@ -911,16 +1066,35 @@ impl Render for Workspace {
                             } else {
                                 // Level 0: Connection Node
                                 let is_conn_exp = self.nav_connection_expanded;
-                                let db_icon = match self.selected_driver_kind {
-                                    DbDriverKind::Postgres => "🐘",
-                                    DbDriverKind::MySql => "🐬",
-                                    DbDriverKind::Sqlite => "📁",
-                                };
-                                let conn_name = format!("{}-local", self.form_database);
-                                let conn_addr = if self.selected_driver_kind == DbDriverKind::Sqlite {
-                                    self.form_database.clone()
+                                let is_connected = self.is_connected;
+                                let is_connecting = self.is_connecting;
+
+                                let (db_icon, conn_name, conn_addr) = if let Some(ref saved) = self.saved_connection {
+                                    let icon = match saved.driver.as_str() {
+                                        "MySql" => "🐬",
+                                        "Sqlite" => "📁",
+                                        _ => "🐘",
+                                    };
+                                    let name = format!("{}-local", saved.database);
+                                    let addr = if saved.driver == "Sqlite" {
+                                        saved.database.clone()
+                                    } else {
+                                        format!("{}:{}", saved.host, saved.port)
+                                    };
+                                    (icon, name, addr)
                                 } else {
-                                    format!("{}:{}", self.form_host, self.form_port)
+                                    let icon = match self.selected_driver_kind {
+                                        DbDriverKind::Postgres => "🐘",
+                                        DbDriverKind::MySql => "🐬",
+                                        DbDriverKind::Sqlite => "📁",
+                                    };
+                                    let name = format!("{}-local", self.form_database);
+                                    let addr = if self.selected_driver_kind == DbDriverKind::Sqlite {
+                                        self.form_database.clone()
+                                    } else {
+                                        format!("{}:{}", self.form_host, self.form_port)
+                                    };
+                                    (icon, name, addr)
                                 };
 
                                 nav_tree = nav_tree.child(
@@ -936,7 +1110,13 @@ impl Render for Workspace {
                                         .hover(|s| s.bg(theme.bg_surface_hover))
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.nav_connection_expanded = !this.nav_connection_expanded;
+                                            if !this.is_connected {
+                                                if !this.is_connecting {
+                                                    this.connect_saved(cx);
+                                                }
+                                            } else {
+                                                this.nav_connection_expanded = !this.nav_connection_expanded;
+                                            }
                                             cx.notify();
                                         }))
                                         .child(
@@ -949,8 +1129,8 @@ impl Render for Workspace {
                                                     div()
                                                         .w(px(12.0))
                                                         .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .child(if is_conn_exp { "▾" } else { "▸" })
+                                                        .text_color(if is_connecting { theme.text_warning } else { theme.text_muted })
+                                                        .child(if is_connecting { "⏳" } else if is_conn_exp && is_connected { "▾" } else { "▸" })
                                                 )
                                                 .child(db_icon)
                                                 .child(
@@ -965,10 +1145,44 @@ impl Render for Workspace {
                                                         .text_color(theme.text_muted)
                                                         .child(conn_addr)
                                                 )
+                                                .child(
+                                                    if is_connecting {
+                                                        div()
+                                                            .text_size(px(10.0))
+                                                            .text_color(theme.text_warning)
+                                                            .child("(Connecting...)")
+                                                    } else if !is_connected {
+                                                        div()
+                                                            .text_size(px(10.0))
+                                                            .text_color(theme.text_muted)
+                                                            .child("(Click to connect)")
+                                                    } else {
+                                                        div()
+                                                            .text_size(px(9.0))
+                                                            .text_color(theme.text_success)
+                                                            .child("●")
+                                                    }
+                                                )
+                                        )
+                                        .child(
+                                            div()
+                                                .id("btn-edit-saved-conn")
+                                                .px_1()
+                                                .rounded_sm()
+                                                .hover(|s| s.bg(theme.bg_surface))
+                                                .text_size(px(11.0))
+                                                .text_color(theme.text_muted)
+                                                .hover(|s| s.text_color(theme.text_accent))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.edit_saved_connection();
+                                                    cx.notify();
+                                                }))
+                                                .child("⚙️")
                                         )
                                 );
 
-                                if is_conn_exp {
+                                if is_connected && is_conn_exp {
                                     // Level 1: "Databases" Folder
                                     let is_dbs_exp = self.nav_databases_expanded;
                                     nav_tree = nav_tree.child(
@@ -1189,8 +1403,14 @@ impl Render for Workspace {
                                                             for t in s_tables {
                                                                 let table_schema = t.schema.clone();
                                                                 let table_name = t.name.clone();
+                                                                let table_key = format!("{}.{}", table_schema, table_name);
+                                                                let is_table_exp = self.nav_table_expanded.contains(&table_key);
                                                                 let is_selected = self.selected_table_name.as_deref() == Some(&table_name);
                                                                 let item_id = format!("nav-table-{}-{}", table_schema, table_name);
+
+                                                                let t_schema_for_click = table_schema.clone();
+                                                                let t_name_for_click = table_name.clone();
+                                                                let t_key_for_click = table_key.clone();
 
                                                                 let mut row_div = div()
                                                                     .id(ElementId::Name(item_id.into()))
@@ -1204,41 +1424,554 @@ impl Render for Workspace {
                                                                     .hover(|s| s.bg(theme.bg_surface_hover))
                                                                     .cursor_pointer()
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                                                        this.query_table(&table_schema, &table_name, cx);
+                                                                        if !this.nav_table_expanded.contains(&t_key_for_click) {
+                                                                            this.nav_table_expanded.insert(t_key_for_click.clone());
+                                                                            this.nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_click));
+                                                                        }
+                                                                        this.query_table(&t_schema_for_click, &t_name_for_click, cx);
                                                                     }));
 
                                                                 if is_selected {
                                                                     row_div = row_div.bg(theme.bg_surface_selected);
                                                                 }
 
+                                                                let t_key_for_chev = table_key.clone();
                                                                 nav_tree = nav_tree.child(
-                                                                    row_div
-                                                                        .child(
+                                                                    row_div.child(
+                                                                        div()
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .gap_1p5()
+                                                                            .text_size(px(11.5))
+                                                                            .child(
+                                                                                div()
+                                                                                    .id(ElementId::Name(format!("nav-chev-{}-{}", table_schema, table_name).into()))
+                                                                                    .w(px(12.0))
+                                                                                    .text_size(px(10.0))
+                                                                                    .text_color(theme.text_muted)
+                                                                                    .hover(|s| s.text_color(theme.text_primary))
+                                                                                    .cursor_pointer()
+                                                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                        if this.nav_table_expanded.contains(&t_key_for_chev) {
+                                                                                            this.nav_table_expanded.remove(&t_key_for_chev);
+                                                                                        } else {
+                                                                                            this.nav_table_expanded.insert(t_key_for_chev.clone());
+                                                                                        }
+                                                                                        cx.notify();
+                                                                                    }))
+                                                                                    .child(if is_table_exp { "▾" } else { "▸" })
+                                                                            )
+                                                                            .child(
+                                                                                // Blue Table Icon
+                                                                                div()
+                                                                                    .w(px(14.0))
+                                                                                    .h(px(14.0))
+                                                                                    .rounded_sm()
+                                                                                    .bg(rgb(0x1976d2))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .justify_center()
+                                                                                    .text_size(px(9.5))
+                                                                                    .text_color(rgb(0xffffff))
+                                                                                    .font_weight(FontWeight::BOLD)
+                                                                                    .child("⊞")
+                                                                            )
+                                                                            .child(
+                                                                                div()
+                                                                                    .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
+                                                                                    .text_color(if is_selected { theme.text_accent } else { theme.text_primary })
+                                                                                    .child(t.name.clone())
+                                                                            )
+                                                                    )
+                                                                );
+
+                                                                // Level 7: Dropdown folders under table (Columns, Constraints, Foreign Keys, Indexes, Dependencies, References, Partitions, Triggers, Rules, Policies)
+                                                                if is_table_exp {
+                                                                    // 1. Columns
+                                                                    let col_key = format!("{}.columns", table_key);
+                                                                    let is_col_exp = self.nav_subfolder_expanded.contains(&col_key);
+                                                                    let col_key_toggle = col_key.clone();
+                                                                    let cols_for_table = self.table_columns.get(&(table_schema.clone(), table_name.clone()));
+
+                                                                    nav_tree = nav_tree.child(
+                                                                        div()
+                                                                            .id(ElementId::Name(format!("nav-cat-cols-{}-{}", table_schema, table_name).into()))
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .h(px(22.0))
+                                                                            .pl(px(86.0))
+                                                                            .pr_2()
+                                                                            .rounded_sm()
+                                                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                            .cursor_pointer()
+                                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                if this.nav_subfolder_expanded.contains(&col_key_toggle) {
+                                                                                    this.nav_subfolder_expanded.remove(&col_key_toggle);
+                                                                                } else {
+                                                                                    this.nav_subfolder_expanded.insert(col_key_toggle.clone());
+                                                                                }
+                                                                                cx.notify();
+                                                                            }))
+                                                                            .child(
+                                                                                div()
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .gap_1p5()
+                                                                                    .text_size(px(11.5))
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .w(px(10.0))
+                                                                                            .text_size(px(9.0))
+                                                                                            .text_color(theme.text_muted)
+                                                                                            .child(if is_col_exp { "▾" } else { "▸" })
+                                                                                    )
+                                                                                    .child(
+                                                                                        // Orange Document / Columns Icon
+                                                                                        div()
+                                                                                            .w(px(14.0))
+                                                                                            .h(px(14.0))
+                                                                                            .rounded_sm()
+                                                                                            .bg(rgb(0xf57c00))
+                                                                                            .flex()
+                                                                                            .items_center()
+                                                                                            .justify_center()
+                                                                                            .text_size(px(8.5))
+                                                                                            .text_color(rgb(0xffffff))
+                                                                                            .child("▤")
+                                                                                    )
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .text_color(theme.text_primary)
+                                                                                            .child("Columns")
+                                                                                    )
+                                                                            )
+                                                                    );
+
+                                                                    if is_col_exp {
+                                                                        if let Some(cols) = cols_for_table {
+                                                                            if cols.is_empty() {
+                                                                                nav_tree = nav_tree.child(
+                                                                                    div()
+                                                                                        .h(px(20.0))
+                                                                                        .pl(px(98.0))
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .text_size(px(11.0))
+                                                                                        .text_color(theme.text_muted)
+                                                                                        .child("(No columns)")
+                                                                                );
+                                                                            } else {
+                                                                                for c in cols {
+                                                                                    let col_name = c.name.clone();
+                                                                                    let is_pk = c.is_primary_key;
+                                                                                    let type_str = c.data_type.display_name().to_lowercase();
+                                                                                    let is_nullable = c.nullable;
+
+                                                                                    nav_tree = nav_tree.child(
+                                                                                        div()
+                                                                                            .id(ElementId::Name(format!("nav-col-{}-{}-{}", table_schema, table_name, col_name).into()))
+                                                                                            .flex()
+                                                                                            .items_center()
+                                                                                            .justify_between()
+                                                                                            .h(px(20.0))
+                                                                                            .pl(px(98.0))
+                                                                                            .pr_2()
+                                                                                            .rounded_sm()
+                                                                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .flex()
+                                                                                                    .items_center()
+                                                                                                    .gap_1p5()
+                                                                                                    .text_size(px(11.0))
+                                                                                                    .child(
+                                                                                                        if is_pk {
+                                                                                                            div()
+                                                                                                                .text_size(px(9.5))
+                                                                                                                .child("🔑")
+                                                                                                        } else {
+                                                                                                            div()
+                                                                                                                .text_size(px(9.5))
+                                                                                                                .text_color(theme.text_muted)
+                                                                                                                .child("📄")
+                                                                                                        }
+                                                                                                    )
+                                                                                                    .child(
+                                                                                                        div()
+                                                                                                            .font_weight(if is_pk { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                                                                                            .text_color(if is_pk { theme.text_accent } else { theme.text_primary })
+                                                                                                            .child(col_name)
+                                                                                                    )
+                                                                                                    .child(
+                                                                                                        div()
+                                                                                                            .text_color(theme.text_muted)
+                                                                                                            .child(format!(": {}", type_str))
+                                                                                                    )
+                                                                                            )
+                                                                                            .child(
+                                                                                                if !is_nullable {
+                                                                                                    div()
+                                                                                                        .text_size(px(9.0))
+                                                                                                        .text_color(theme.text_warning)
+                                                                                                        .child("NOT NULL")
+                                                                                                } else {
+                                                                                                    div()
+                                                                                                }
+                                                                                            )
+                                                                                    );
+                                                                                }
+                                                                            }
+                                                                        } else {
+                                                                            nav_tree = nav_tree.child(
+                                                                                div()
+                                                                                    .h(px(20.0))
+                                                                                    .pl(px(98.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .text_size(px(11.0))
+                                                                                    .text_color(theme.text_muted)
+                                                                                    .child("(No columns)")
+                                                                            );
+                                                                        }
+                                                                    }
+
+                                                                    // 2. Constraints
+                                                                    let constr_key = format!("{}.constraints", table_key);
+                                                                    let is_constr_exp = self.nav_subfolder_expanded.contains(&constr_key);
+                                                                    let constr_key_toggle = constr_key.clone();
+                                                                    let constraints_for_table = self.table_constraints.get(&(table_schema.clone(), table_name.clone()));
+
+                                                                    nav_tree = nav_tree.child(
+                                                                        div()
+                                                                            .id(ElementId::Name(format!("nav-cat-constr-{}-{}", table_schema, table_name).into()))
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .h(px(22.0))
+                                                                            .pl(px(86.0))
+                                                                            .pr_2()
+                                                                            .rounded_sm()
+                                                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                            .cursor_pointer()
+                                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                if this.nav_subfolder_expanded.contains(&constr_key_toggle) {
+                                                                                    this.nav_subfolder_expanded.remove(&constr_key_toggle);
+                                                                                } else {
+                                                                                    this.nav_subfolder_expanded.insert(constr_key_toggle.clone());
+                                                                                }
+                                                                                cx.notify();
+                                                                            }))
+                                                                            .child(
+                                                                                div()
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .gap_1p5()
+                                                                                    .text_size(px(11.5))
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .w(px(10.0))
+                                                                                            .text_size(px(9.0))
+                                                                                            .text_color(theme.text_muted)
+                                                                                            .child(if is_constr_exp { "▾" } else { "▸" })
+                                                                                    )
+                                                                                    .child(
+                                                                                        // Orange [ ] Icon
+                                                                                        div()
+                                                                                            .w(px(14.0))
+                                                                                            .h(px(14.0))
+                                                                                            .rounded_sm()
+                                                                                            .bg(rgb(0xf57c00))
+                                                                                            .flex()
+                                                                                            .items_center()
+                                                                                            .justify_center()
+                                                                                            .text_size(px(8.0))
+                                                                                            .font_weight(FontWeight::BOLD)
+                                                                                            .text_color(rgb(0xffffff))
+                                                                                            .child("[ ]")
+                                                                                    )
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .text_color(theme.text_primary)
+                                                                                            .child("Constraints")
+                                                                                    )
+                                                                            )
+                                                                    );
+
+                                                                    if is_constr_exp {
+                                                                        let mut rendered_any = false;
+                                                                        if let Some(constrs) = constraints_for_table {
+                                                                            for (cname, ctype) in constrs {
+                                                                                rendered_any = true;
+                                                                                nav_tree = nav_tree.child(
+                                                                                    div()
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .gap_1p5()
+                                                                                        .h(px(20.0))
+                                                                                        .pl(px(98.0))
+                                                                                        .text_size(px(11.0))
+                                                                                        .child(div().text_color(theme.text_muted).child("🔒"))
+                                                                                        .child(div().text_color(theme.text_primary).child(cname.clone()))
+                                                                                        .child(div().text_color(theme.text_muted).child(format!("({})", ctype)))
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                        if !rendered_any {
+                                                                            nav_tree = nav_tree.child(
+                                                                                div()
+                                                                                    .h(px(20.0))
+                                                                                    .pl(px(98.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .text_size(px(11.0))
+                                                                                    .text_color(theme.text_muted)
+                                                                                    .child("(No constraints)")
+                                                                            );
+                                                                        }
+                                                                    }
+
+                                                                    // 3. Foreign Keys
+                                                                    let fk_key = format!("{}.foreign_keys", table_key);
+                                                                    let is_fk_exp = self.nav_subfolder_expanded.contains(&fk_key);
+                                                                    let fk_key_toggle = fk_key.clone();
+                                                                    let fks_for_table: Vec<(String, String)> = constraints_for_table
+                                                                        .map(|v| v.iter().filter(|(_, ctype)| ctype.to_uppercase().contains("FOREIGN")).cloned().collect())
+                                                                        .unwrap_or_default();
+
+                                                                    nav_tree = nav_tree.child(
+                                                                        div()
+                                                                            .id(ElementId::Name(format!("nav-cat-fk-{}-{}", table_schema, table_name).into()))
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .h(px(22.0))
+                                                                            .pl(px(86.0))
+                                                                            .pr_2()
+                                                                            .rounded_sm()
+                                                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                            .cursor_pointer()
+                                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                if this.nav_subfolder_expanded.contains(&fk_key_toggle) {
+                                                                                    this.nav_subfolder_expanded.remove(&fk_key_toggle);
+                                                                                } else {
+                                                                                    this.nav_subfolder_expanded.insert(fk_key_toggle.clone());
+                                                                                }
+                                                                                cx.notify();
+                                                                            }))
+                                                                            .child(
+                                                                                div()
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .gap_1p5()
+                                                                                    .text_size(px(11.5))
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .w(px(10.0))
+                                                                                            .text_size(px(9.0))
+                                                                                            .text_color(theme.text_muted)
+                                                                                            .child(if is_fk_exp { "▾" } else { "▸" })
+                                                                                    )
+                                                                                    .child("📁")
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .text_color(theme.text_primary)
+                                                                                            .child("Foreign Keys")
+                                                                                    )
+                                                                            )
+                                                                    );
+
+                                                                    if is_fk_exp {
+                                                                        if fks_for_table.is_empty() {
+                                                                            nav_tree = nav_tree.child(
+                                                                                div()
+                                                                                    .h(px(20.0))
+                                                                                    .pl(px(98.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .text_size(px(11.0))
+                                                                                    .text_color(theme.text_muted)
+                                                                                    .child("(No foreign keys)")
+                                                                            );
+                                                                        } else {
+                                                                            for (fk_name, _) in &fks_for_table {
+                                                                                nav_tree = nav_tree.child(
+                                                                                    div()
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .gap_1p5()
+                                                                                        .h(px(20.0))
+                                                                                        .pl(px(98.0))
+                                                                                        .text_size(px(11.0))
+                                                                                        .child(div().text_color(theme.text_muted).child("🔑"))
+                                                                                        .child(div().text_color(theme.text_primary).child(fk_name.clone()))
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    // 4. Indexes
+                                                                    let idx_key = format!("{}.indexes", table_key);
+                                                                    let is_idx_exp = self.nav_subfolder_expanded.contains(&idx_key);
+                                                                    let idx_key_toggle = idx_key.clone();
+                                                                    let idxs_for_table = self.table_indexes.get(&(table_schema.clone(), table_name.clone()));
+
+                                                                    nav_tree = nav_tree.child(
+                                                                        div()
+                                                                            .id(ElementId::Name(format!("nav-cat-idx-{}-{}", table_schema, table_name).into()))
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .h(px(22.0))
+                                                                            .pl(px(86.0))
+                                                                            .pr_2()
+                                                                            .rounded_sm()
+                                                                            .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                            .cursor_pointer()
+                                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                if this.nav_subfolder_expanded.contains(&idx_key_toggle) {
+                                                                                    this.nav_subfolder_expanded.remove(&idx_key_toggle);
+                                                                                } else {
+                                                                                    this.nav_subfolder_expanded.insert(idx_key_toggle.clone());
+                                                                                }
+                                                                                cx.notify();
+                                                                            }))
+                                                                            .child(
+                                                                                div()
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .gap_1p5()
+                                                                                    .text_size(px(11.5))
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .w(px(10.0))
+                                                                                            .text_size(px(9.0))
+                                                                                            .text_color(theme.text_muted)
+                                                                                            .child(if is_idx_exp { "▾" } else { "▸" })
+                                                                                    )
+                                                                                    .child("📁")
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .text_color(theme.text_primary)
+                                                                                            .child("Indexes")
+                                                                                    )
+                                                                            )
+                                                                    );
+
+                                                                    if is_idx_exp {
+                                                                        let mut rendered_any = false;
+                                                                        if let Some(idxs) = idxs_for_table {
+                                                                            for iname in idxs {
+                                                                                rendered_any = true;
+                                                                                nav_tree = nav_tree.child(
+                                                                                    div()
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .gap_1p5()
+                                                                                        .h(px(20.0))
+                                                                                        .pl(px(98.0))
+                                                                                        .text_size(px(11.0))
+                                                                                        .child(div().text_color(theme.text_muted).child("⚡"))
+                                                                                        .child(div().text_color(theme.text_primary).child(iname.clone()))
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                        if !rendered_any {
+                                                                            nav_tree = nav_tree.child(
+                                                                                div()
+                                                                                    .h(px(20.0))
+                                                                                    .pl(px(98.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .text_size(px(11.0))
+                                                                                    .text_color(theme.text_muted)
+                                                                                    .child("(No indexes)")
+                                                                            );
+                                                                        }
+                                                                    }
+
+                                                                    // Remaining categories: Dependencies, References, Partitions, Triggers, Rules, Policies
+                                                                    let other_folders: [(&str, &str, &str, bool); 6] = [
+                                                                        ("dependencies", "Dependencies", "(No dependencies)", false),
+                                                                        ("references", "References", "(No references)", false),
+                                                                        ("partitions", "Partitions", "(No partitions)", true),
+                                                                        ("triggers", "Triggers", "(No triggers)", false),
+                                                                        ("rules", "Rules", "(No rules)", false),
+                                                                        ("policies", "Policies", "(No policies)", false),
+                                                                    ];
+
+                                                                    for (f_id, f_label, f_empty, is_partition) in other_folders {
+                                                                        let cat_key = format!("{}.{}", table_key, f_id);
+                                                                        let is_cat_exp = self.nav_subfolder_expanded.contains(&cat_key);
+                                                                        let cat_key_toggle = cat_key.clone();
+
+                                                                        nav_tree = nav_tree.child(
                                                                             div()
+                                                                                .id(ElementId::Name(format!("nav-cat-{}-{}-{}", f_id, table_schema, table_name).into()))
                                                                                 .flex()
                                                                                 .items_center()
-                                                                                .gap_1p5()
-                                                                                .text_size(px(11.5))
+                                                                                .h(px(22.0))
+                                                                                .pl(px(86.0))
+                                                                                .pr_2()
+                                                                                .rounded_sm()
+                                                                                .hover(|s| s.bg(theme.bg_surface_hover))
+                                                                                .cursor_pointer()
+                                                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                    if this.nav_subfolder_expanded.contains(&cat_key_toggle) {
+                                                                                        this.nav_subfolder_expanded.remove(&cat_key_toggle);
+                                                                                    } else {
+                                                                                        this.nav_subfolder_expanded.insert(cat_key_toggle.clone());
+                                                                                    }
+                                                                                    cx.notify();
+                                                                                }))
                                                                                 .child(
                                                                                     div()
-                                                                                        .w(px(8.0))
-                                                                                        .text_size(px(9.0))
-                                                                                        .text_color(theme.text_muted)
-                                                                                        .child("›")
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .gap_1p5()
+                                                                                        .text_size(px(11.5))
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .w(px(10.0))
+                                                                                                .text_size(px(9.0))
+                                                                                                .text_color(theme.text_muted)
+                                                                                                .child(if is_cat_exp { "▾" } else { "▸" })
+                                                                                        )
+                                                                                        .child(
+                                                                                            if is_partition {
+                                                                                                div()
+                                                                                                    .w(px(14.0))
+                                                                                                    .h(px(14.0))
+                                                                                                    .rounded_sm()
+                                                                                                    .bg(rgb(0xf57c00))
+                                                                                                    .flex()
+                                                                                                    .items_center()
+                                                                                                    .justify_center()
+                                                                                                    .text_size(px(8.5))
+                                                                                                    .text_color(rgb(0xffffff))
+                                                                                                    .child("☷")
+                                                                                            } else {
+                                                                                                div().child("📁")
+                                                                                            }
+                                                                                        )
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .text_color(theme.text_primary)
+                                                                                                .child(f_label)
+                                                                                        )
                                                                                 )
-                                                                                .child(
-                                                                                    div()
-                                                                                        .text_color(theme.text_accent)
-                                                                                        .child("⊞")
-                                                                                )
-                                                                                .child(
-                                                                                    div()
-                                                                                        .font_weight(if is_selected { FontWeight::BOLD } else { FontWeight::NORMAL })
-                                                                                        .text_color(if is_selected { theme.text_accent } else { theme.text_primary })
-                                                                                        .child(t.name.clone())
-                                                                                )
-                                                                        )
-                                                                );
+                                                                        );
+
+                                                                        if is_cat_exp {
+                                                                            nav_tree = nav_tree.child(
+                                                                                div()
+                                                                                    .h(px(20.0))
+                                                                                    .pl(px(98.0))
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .text_size(px(11.0))
+                                                                                    .text_color(theme.text_muted)
+                                                                                    .child(f_empty)
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -1275,15 +2008,62 @@ impl Render for Workspace {
                                         .flex()
                                         .items_center()
                                         .justify_between()
-                                        .h(px(24.0))
+                                        .h(px(32.0))
                                         .bg(theme.bg_surface)
                                         .border_b_1()
                                         .border_color(theme.border)
                                         .px_3()
-                                        .text_size(px(11.0))
-                                        .text_color(theme.text_muted)
-                                        .child("SQL Editor — Tree-sitter Syntax Highlighting")
-                                        .child("Press ⌘↵ to Execute Statement")
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_size(px(12.0))
+                                                        .text_color(theme.text_primary)
+                                                        .child("SQL Editor")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child("Tree-sitter Syntax Highlighting")
+                                                )
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_3()
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child("Press ⌘↵ to Execute")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("btn-run-query")
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .px_3()
+                                                        .py_1()
+                                                        .rounded_md()
+                                                        .bg(if self.is_running_query { theme.bg_surface_hover } else { rgb(0x238636) })
+                                                        .text_color(rgb(0xffffff))
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_size(px(12.0))
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.run_active_query(cx);
+                                                            cx.notify();
+                                                        }))
+                                                        .child(if self.is_running_query { "⏳ Executing..." } else { "▶ Run Query (⌘↵)" })
+                                                )
+                                        )
                                 )
                                 .child({
                                     let tab = &mut self.tabs[active_tab_idx];

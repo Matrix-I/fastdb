@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
-use mem_engine::{ColumnMeta, QueryResultPager};
+pub use mem_engine::{ColumnMeta, QueryResultPager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbDriverKind {
@@ -99,5 +99,15 @@ pub trait DatabaseDriver: Send + Sync {
             }
         }
         Ok(results)
+    }
+
+    /// Batch list all constraints across all tables: (schema, table, constraint_name, constraint_type)
+    async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
+        Ok(Vec::new())
+    }
+
+    /// Batch list all indexes across all tables: (schema, table, index_name)
+    async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
+        Ok(Vec::new())
     }
 }

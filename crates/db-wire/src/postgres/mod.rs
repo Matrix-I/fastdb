@@ -190,22 +190,19 @@ impl DatabaseDriver for PostgresDriver {
         let num_cols = columns.len();
         let pager = Arc::new(QueryResultPager::new(columns)?);
 
-        let row_stream = client.query_raw(&statement, std::iter::empty::<i32>()).await
-            .with_context(|| format!("Query execution error"))?;
-
-        futures::pin_mut!(row_stream);
+        let rows = client.query(&statement, &[]).await
+            .with_context(|| format!("Query execution error: {clean_sql}"))?;
 
         let mut total_rows = 0u64;
         let mut cell_buffers: Vec<Option<Vec<u8>>> = vec![None; num_cols];
 
-        while let Some(row_res) = row_stream.next().await {
-            let row = row_res.with_context(|| format!("Row stream error"))?;
+        for row in &rows {
             for col_idx in 0..num_cols {
-                cell_buffers[col_idx] = decode_pg_cell(&row, col_idx);
+                cell_buffers[col_idx] = decode_pg_cell(row, col_idx);
             }
             let cell_slices: Vec<Option<&[u8]>> = cell_buffers.iter().map(|c| c.as_deref()).collect();
-            let (rows, _) = pager.append_row(cell_slices)?;
-            total_rows = rows;
+            let (r, _) = pager.append_row(cell_slices)?;
+            total_rows = r;
         }
 
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
@@ -282,10 +279,21 @@ impl DatabaseDriver for PostgresDriver {
     async fn list_all_columns(&self) -> Result<Vec<(String, String, Vec<ColumnMeta>)>> {
         let client = self.get_or_connect().await?;
         let sql = r#"
-            SELECT table_schema, table_name, column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-            ORDER BY table_schema, table_name, ordinal_position;
+            SELECT c.table_schema, c.table_name, c.column_name, c.data_type, c.is_nullable,
+                   COALESCE((
+                       SELECT 1 FROM information_schema.table_constraints tc
+                       JOIN information_schema.key_column_usage kcu
+                         ON tc.constraint_name = kcu.constraint_name
+                        AND tc.table_schema = kcu.table_schema
+                       WHERE tc.constraint_type = 'PRIMARY KEY'
+                         AND tc.table_schema = c.table_schema
+                         AND tc.table_name = c.table_name
+                         AND kcu.column_name = c.column_name
+                       LIMIT 1
+                   ), 0) as is_pk
+            FROM information_schema.columns c
+            WHERE c.table_schema NOT IN ('information_schema', 'pg_catalog')
+            ORDER BY c.table_schema, c.table_name, c.ordinal_position;
         "#;
 
         let rows = client.query(sql, &[]).await?;
@@ -296,6 +304,7 @@ impl DatabaseDriver for PostgresDriver {
             let name: String = r.get(2);
             let dtype_str: String = r.get(3);
             let is_null_str: String = r.get(4);
+            let is_pk: i32 = r.get(5);
             let data_type = match dtype_str.to_lowercase().as_str() {
                 "integer" | "int" => mem_engine::DataType::Int4,
                 "bigint" => mem_engine::DataType::Int8,
@@ -308,10 +317,36 @@ impl DatabaseDriver for PostgresDriver {
                 "uuid" => mem_engine::DataType::Uuid,
                 _ => mem_engine::DataType::Text,
             };
-            let col = ColumnMeta::new(name, data_type).with_nullable(is_null_str == "YES");
+            let col = ColumnMeta::new(name, data_type)
+                .with_nullable(is_null_str == "YES")
+                .with_pk(is_pk > 0);
             map.entry((schema, table)).or_default().push(col);
         }
 
         Ok(map.into_iter().map(|((s, t), cols)| (s, t, cols)).collect())
+    }
+
+    async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
+        let client = self.get_or_connect().await?;
+        let sql = r#"
+            SELECT table_schema, table_name, constraint_name, constraint_type
+            FROM information_schema.table_constraints
+            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+            ORDER BY table_schema, table_name, constraint_name;
+        "#;
+        let rows = client.query(sql, &[]).await?;
+        Ok(rows.into_iter().map(|r| (r.get(0), r.get(1), r.get(2), r.get(3))).collect())
+    }
+
+    async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
+        let client = self.get_or_connect().await?;
+        let sql = r#"
+            SELECT schemaname, tablename, indexname
+            FROM pg_indexes
+            WHERE schemaname NOT IN ('information_schema', 'pg_catalog')
+            ORDER BY schemaname, tablename, indexname;
+        "#;
+        let rows = client.query(sql, &[]).await?;
+        Ok(rows.into_iter().map(|r| (r.get(0), r.get(1), r.get(2))).collect())
     }
 }

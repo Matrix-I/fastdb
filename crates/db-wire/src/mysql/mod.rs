@@ -302,4 +302,30 @@ impl DatabaseDriver for MySqlDriver {
 
         Ok(map.into_iter().map(|((s, t), cols)| (s, t, cols)).collect())
     }
+
+    async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
+        let pool = self.get_pool().await?;
+        let mut conn = pool.get_conn().await?;
+        let sql = r#"
+            SELECT table_schema, table_name, constraint_name, constraint_type
+            FROM information_schema.table_constraints
+            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+            ORDER BY table_schema, table_name, constraint_name;
+        "#;
+        let rows: Vec<(String, String, String, String)> = conn.query(sql).await?;
+        Ok(rows)
+    }
+
+    async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
+        let pool = self.get_pool().await?;
+        let mut conn = pool.get_conn().await?;
+        let sql = r#"
+            SELECT DISTINCT table_schema, table_name, index_name
+            FROM information_schema.statistics
+            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+            ORDER BY table_schema, table_name, index_name;
+        "#;
+        let rows: Vec<(String, String, String)> = conn.query(sql).await?;
+        Ok(rows)
+    }
 }

@@ -78,10 +78,6 @@ impl VirtualDataGrid {
         let total_rows = self.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
         let num_cols = self.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
 
-        // 2D Viewport Row Culling: compute only visible rows
-        let first_row = (self.scroll_top / row_height).floor() as u64;
-        let visible_count = (self.viewport_height / row_height).ceil() as u64 + 2;
-        let last_row = (first_row + visible_count).min(total_rows);
 
         let mut grid_container = div()
             .flex()
@@ -150,16 +146,18 @@ impl VirtualDataGrid {
 
         grid_container = grid_container.child(header_row);
 
-        // 2. Visible Data Rows (Zero-allocation / Culled)
+        // 2. Data Rows with full vertical scroll support
         let mut body = div()
+            .id("grid-data-body")
             .flex()
             .flex_col()
             .flex_1()
             .w_full()
-            .overflow_hidden();
+            .overflow_y_scroll();
 
         if let Some(ref pager) = self.pager {
-            for r in first_row..last_row {
+            let render_count = total_rows.min(2000);
+            for r in 0..render_count {
                 let is_alt = r % 2 == 1;
                 let row_bg = if is_alt { theme.bg_grid_alt } else { theme.bg_grid };
 
