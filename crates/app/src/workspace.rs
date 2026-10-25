@@ -47,6 +47,7 @@ pub struct Workspace {
     pub form_password: String,
     pub form_use_unix_socket: bool,
     pub active_field: Option<FormField>,
+    pub show_password: bool,
     pub test_result: Option<Result<String, String>>,
 }
 
@@ -89,6 +90,7 @@ impl Workspace {
             form_password: "".to_string(),
             form_use_unix_socket: true,
             active_field: Some(FormField::Host),
+            show_password: false,
             test_result: None,
         }
     }
@@ -387,9 +389,13 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &self.theme;
         let active_tab_idx = self.active_tab;
+
+        if self.show_connection_modal {
+            window.focus(&self.focus_handle);
+        }
 
         #[cfg(target_os = "macos")]
         let top_bar_left_pad = 80.0;
@@ -427,6 +433,45 @@ impl Render for Workspace {
                         cx.notify();
                         return;
                     }
+                    // Clipboard paste (Cmd+V on macOS or Ctrl+V on Linux/Windows)
+                    if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                        && event.keystroke.key.eq_ignore_ascii_case("v")
+                    {
+                        if let Some(item) = cx.read_from_clipboard() {
+                            if let Some(pasted) = item.text() {
+                                let clean = pasted.trim_matches(|c| c == '\r' || c == '\n');
+                                if let Some(field) = this.active_field {
+                                    match field {
+                                        FormField::Host => this.form_host.push_str(clean),
+                                        FormField::Port => {
+                                            let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
+                                            this.form_port.push_str(&digits);
+                                        }
+                                        FormField::Database => this.form_database.push_str(clean),
+                                        FormField::User => this.form_user.push_str(clean),
+                                        FormField::Password => this.form_password.push_str(clean),
+                                    }
+                                    cx.notify();
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    // Cmd+Backspace = clear entire field
+                    if event.keystroke.modifiers.platform && event.keystroke.key == "backspace" {
+                        if let Some(field) = this.active_field {
+                            match field {
+                                FormField::Host => this.form_host.clear(),
+                                FormField::Port => this.form_port.clear(),
+                                FormField::Database => this.form_database.clear(),
+                                FormField::User => this.form_user.clear(),
+                                FormField::Password => this.form_password.clear(),
+                            }
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    // Backspace = delete single character
                     if event.keystroke.key == "backspace" {
                         if let Some(field) = this.active_field {
                             match field {
@@ -440,7 +485,20 @@ impl Render for Workspace {
                         }
                         return;
                     }
-                    if let Some(ref char_str) = event.keystroke.key_char {
+                    // Printable character insertion
+                    let input_char = if let Some(ref kc) = event.keystroke.key_char {
+                        if kc.chars().count() == 1 {
+                            Some(kc.as_str())
+                        } else {
+                            None
+                        }
+                    } else if event.keystroke.key.chars().count() == 1 {
+                        Some(event.keystroke.key.as_str())
+                    } else {
+                        None
+                    };
+
+                    if let Some(char_str) = input_char {
                         if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
                             if let Some(field) = this.active_field {
                                 match field {
@@ -1048,8 +1106,9 @@ impl Render for Workspace {
                                                         .border_color(if is_host_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
                                                         .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                        .on_click(cx.listener(|this, _, window, cx| {
                                                             this.active_field = Some(FormField::Host);
+                                                            window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
                                                         .child(format!("{}{}", self.form_host, if is_host_active { "|" } else { "" }))
@@ -1068,8 +1127,9 @@ impl Render for Workspace {
                                                                 .text_size(px(10.0))
                                                                 .text_color(theme.text_muted)
                                                                 .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                .on_click(cx.listener(|this, _, window, cx| {
                                                                     this.form_host = "localhost".to_string();
+                                                                    window.focus(&this.focus_handle);
                                                                     cx.notify();
                                                                 }))
                                                                 .child("localhost")
@@ -1084,8 +1144,9 @@ impl Render for Workspace {
                                                                 .text_size(px(10.0))
                                                                 .text_color(theme.text_muted)
                                                                 .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                .on_click(cx.listener(|this, _, window, cx| {
                                                                     this.form_host = "127.0.0.1".to_string();
+                                                                    window.focus(&this.focus_handle);
                                                                     cx.notify();
                                                                 }))
                                                                 .child("127.0.0.1")
@@ -1109,8 +1170,9 @@ impl Render for Workspace {
                                                         .border_color(if is_port_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
                                                         .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                        .on_click(cx.listener(|this, _, window, cx| {
                                                             this.active_field = Some(FormField::Port);
+                                                            window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
                                                         .child(format!("{}{}", self.form_port, if is_port_active { "|" } else { "" }))
@@ -1180,8 +1242,9 @@ impl Render for Workspace {
                                                         .border_color(if is_db_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
                                                         .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                        .on_click(cx.listener(|this, _, window, cx| {
                                                             this.active_field = Some(FormField::Database);
+                                                            window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
                                                         .child(format!("{}{}", self.form_database, if is_db_active { "|" } else { "" }))
@@ -1200,8 +1263,9 @@ impl Render for Workspace {
                                                                     .text_size(px(10.0))
                                                                     .text_color(theme.text_muted)
                                                                     .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                    .on_click(cx.listener(|this, _, window, cx| {
                                                                         this.form_database = "fastdb.sqlite".to_string();
+                                                                        window.focus(&this.focus_handle);
                                                                         cx.notify();
                                                                     }))
                                                                     .child("fastdb.sqlite")
@@ -1216,8 +1280,9 @@ impl Render for Workspace {
                                                                     .text_size(px(10.0))
                                                                     .text_color(theme.text_muted)
                                                                     .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                    .on_click(cx.listener(|this, _, window, cx| {
                                                                         this.form_database = ":memory:".to_string();
+                                                                        window.focus(&this.focus_handle);
                                                                         cx.notify();
                                                                     }))
                                                                     .child(":memory:")
@@ -1234,8 +1299,9 @@ impl Render for Workspace {
                                                                     .text_size(px(10.0))
                                                                     .text_color(theme.text_muted)
                                                                     .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                    .on_click(cx.listener(|this, _, window, cx| {
                                                                         this.form_database = "postgres".to_string();
+                                                                        window.focus(&this.focus_handle);
                                                                         cx.notify();
                                                                     }))
                                                                     .child("postgres")
@@ -1250,8 +1316,9 @@ impl Render for Workspace {
                                                                     .text_size(px(10.0))
                                                                     .text_color(theme.text_muted)
                                                                     .cursor_pointer()
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                    .on_click(cx.listener(|this, _, window, cx| {
                                                                         this.form_database = "mysql".to_string();
+                                                                        window.focus(&this.focus_handle);
                                                                         cx.notify();
                                                                     }))
                                                                     .child("mysql")
@@ -1277,8 +1344,9 @@ impl Render for Workspace {
                                                         .border_color(if is_user_active { theme.text_accent } else { theme.border })
                                                         .text_size(px(13.0))
                                                         .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                        .on_click(cx.listener(|this, _, window, cx| {
                                                             this.active_field = Some(FormField::User);
+                                                            window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
                                                         .child(format!("{}{}", self.form_user, if is_user_active { "|" } else { "" }))
@@ -1297,8 +1365,9 @@ impl Render for Workspace {
                                                                 .text_size(px(10.0))
                                                                 .text_color(theme.text_muted)
                                                                 .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                .on_click(cx.listener(|this, _, window, cx| {
                                                                     this.form_user = "postgres".to_string();
+                                                                    window.focus(&this.focus_handle);
                                                                     cx.notify();
                                                                 }))
                                                                 .child("postgres")
@@ -1313,8 +1382,9 @@ impl Render for Workspace {
                                                                 .text_size(px(10.0))
                                                                 .text_color(theme.text_muted)
                                                                 .cursor_pointer()
-                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                .on_click(cx.listener(|this, _, window, cx| {
                                                                     this.form_user = "root".to_string();
+                                                                    window.focus(&this.focus_handle);
                                                                     cx.notify();
                                                                 }))
                                                                 .child("root")
@@ -1330,10 +1400,31 @@ impl Render for Workspace {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(div().text_size(px(11.0)).text_color(theme.text_muted).child("Password"))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(div().text_size(px(11.0)).text_color(theme.text_muted).child("Password"))
+                                                .child(
+                                                    div()
+                                                        .id("btn-toggle-show-pass")
+                                                        .text_size(px(11.0))
+                                                        .text_color(theme.text_accent)
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.show_password = !this.show_password;
+                                                            cx.notify();
+                                                        }))
+                                                        .child(if self.show_password { "🙈 Hide" } else { "👁 Show" })
+                                                )
+                                        )
                                         .child(
                                             div()
                                                 .id("input-field-pass")
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
                                                 .p_2()
                                                 .rounded_md()
                                                 .bg(theme.bg_app)
@@ -1341,20 +1432,46 @@ impl Render for Workspace {
                                                 .border_color(if is_pass_active { theme.text_accent } else { theme.border })
                                                 .text_size(px(13.0))
                                                 .cursor_pointer()
-                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                .on_click(cx.listener(|this, _, window, cx| {
                                                     this.active_field = Some(FormField::Password);
+                                                    window.focus(&this.focus_handle);
                                                     cx.notify();
                                                 }))
                                                 .child(if self.form_password.is_empty() {
-                                                    if is_pass_active { "| (type password)".to_string() } else { "(empty / no password)".to_string() }
+                                                    if is_pass_active { "| (type or paste password)".to_string() } else { "(empty / no password)".to_string() }
+                                                } else if self.show_password {
+                                                    format!("{}{}", self.form_password, if is_pass_active { "|" } else { "" })
                                                 } else {
-                                                    format!("••••••••{}", if is_pass_active { "|" } else { "" })
+                                                    format!("{}{}", "•".repeat(self.form_password.chars().count()), if is_pass_active { "|" } else { "" })
                                                 })
                                         )
                                         .child(
                                             div()
                                                 .flex()
+                                                .items_center()
                                                 .gap_1()
+                                                .child(
+                                                    div()
+                                                        .id("chip-pass-paste")
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(theme.bg_surface)
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_accent)
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            if let Some(item) = cx.read_from_clipboard() {
+                                                                if let Some(pasted) = item.text() {
+                                                                    this.form_password = pasted.trim_matches(|c| c == '\r' || c == '\n').to_string();
+                                                                    this.active_field = Some(FormField::Password);
+                                                                    window.focus(&this.focus_handle);
+                                                                    cx.notify();
+                                                                }
+                                                            }
+                                                        }))
+                                                        .child("📋 Paste")
+                                                )
                                                 .child(
                                                     div()
                                                         .id("chip-pass-clear")
@@ -1365,11 +1482,103 @@ impl Render for Workspace {
                                                         .text_size(px(10.0))
                                                         .text_color(theme.text_muted)
                                                         .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                        .on_click(cx.listener(|this, _, window, cx| {
                                                             this.form_password.clear();
+                                                            this.active_field = Some(FormField::Password);
+                                                            window.focus(&this.focus_handle);
                                                             cx.notify();
                                                         }))
                                                         .child("Clear")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("chip-pass-pg")
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(theme.bg_surface)
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.form_password = "postgres".to_string();
+                                                            this.active_field = Some(FormField::Password);
+                                                            window.focus(&this.focus_handle);
+                                                            cx.notify();
+                                                        }))
+                                                        .child("postgres")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("chip-pass-root")
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(theme.bg_surface)
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.form_password = "root".to_string();
+                                                            this.active_field = Some(FormField::Password);
+                                                            window.focus(&this.focus_handle);
+                                                            cx.notify();
+                                                        }))
+                                                        .child("root")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("chip-pass-admin")
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(theme.bg_surface)
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.form_password = "admin".to_string();
+                                                            this.active_field = Some(FormField::Password);
+                                                            window.focus(&this.focus_handle);
+                                                            cx.notify();
+                                                        }))
+                                                        .child("admin")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("chip-pass-pwd")
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(theme.bg_surface)
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.form_password = "password".to_string();
+                                                            this.active_field = Some(FormField::Password);
+                                                            window.focus(&this.focus_handle);
+                                                            cx.notify();
+                                                        }))
+                                                        .child("password")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("chip-pass-123")
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(theme.bg_surface)
+                                                        .text_size(px(10.0))
+                                                        .text_color(theme.text_muted)
+                                                        .cursor_pointer()
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.form_password = "123456".to_string();
+                                                            this.active_field = Some(FormField::Password);
+                                                            window.focus(&this.focus_handle);
+                                                            cx.notify();
+                                                        }))
+                                                        .child("123456")
                                                 )
                                         )
                                 } else {
@@ -1404,7 +1613,7 @@ impl Render for Workspace {
                             div()
                                 .text_size(px(11.0))
                                 .text_color(theme.text_muted)
-                                .child("💡 Click field to type (Backspace to delete, Tab to next, Enter to connect)")
+                                .child("💡 Click field to edit (Type / ⌘V paste, Backspace delete, ⌘⌫ clear, Tab next, Enter connect)")
                         )
                         // Test Result Notification Banner
                         .child({
