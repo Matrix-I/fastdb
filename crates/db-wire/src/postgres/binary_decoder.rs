@@ -60,6 +60,30 @@ pub fn decode_pg_cell(row: &Row, col_idx: usize) -> Option<Vec<u8>> {
             row.try_get::<_, Option<&[u8]>>(col_idx).ok().flatten()
                 .map(|b| b.to_vec())
         }
+        Type::UUID => {
+            row.try_get::<_, Option<uuid::Uuid>>(col_idx).ok().flatten()
+                .map(|u| u.to_string().into_bytes())
+        }
+        Type::TIMESTAMP => {
+            row.try_get::<_, Option<chrono::NaiveDateTime>>(col_idx).ok().flatten()
+                .map(|dt| dt.to_string().into_bytes())
+        }
+        Type::TIMESTAMPTZ => {
+            row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(col_idx).ok().flatten()
+                .map(|dt| dt.to_string().into_bytes())
+        }
+        Type::DATE => {
+            row.try_get::<_, Option<chrono::NaiveDate>>(col_idx).ok().flatten()
+                .map(|d| d.to_string().into_bytes())
+        }
+        Type::TIME => {
+            row.try_get::<_, Option<chrono::NaiveTime>>(col_idx).ok().flatten()
+                .map(|t| t.to_string().into_bytes())
+        }
+        Type::JSON | Type::JSONB => {
+            row.try_get::<_, Option<serde_json::Value>>(col_idx).ok().flatten()
+                .map(|j| j.to_string().into_bytes())
+        }
         _ => {
             if let Ok(val) = row.try_get::<_, Option<&str>>(col_idx) {
                 if let Some(s) = val {

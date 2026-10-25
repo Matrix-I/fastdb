@@ -77,6 +77,22 @@ impl Workspace {
             execution_time_ms: None,
         };
 
+        let (mut saved_host, mut saved_port, mut saved_db, mut saved_user) = (
+            "ubiid.ubitec.local".to_string(),
+            "8091".to_string(),
+            "signeer_local".to_string(),
+            "postgres".to_string(),
+        );
+
+        if let Ok(content) = std::fs::read_to_string(".fastdb_config.json") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(h) = v["host"].as_str() { saved_host = h.to_string(); }
+                if let Some(p) = v["port"].as_str() { saved_port = p.to_string(); }
+                if let Some(d) = v["database"].as_str() { saved_db = d.to_string(); }
+                if let Some(u) = v["user"].as_str() { saved_user = u.to_string(); }
+            }
+        }
+
         Self {
             theme,
             focus_handle,
@@ -93,13 +109,13 @@ impl Workspace {
             is_connecting: false,
             show_connection_modal: true,
             selected_driver_kind: DbDriverKind::Postgres,
-            form_host: "localhost".to_string(),
-            form_port: "5432".to_string(),
-            form_database: "postgres".to_string(),
-            form_user: "postgres".to_string(),
+            form_host: saved_host,
+            form_port: saved_port,
+            form_database: saved_db,
+            form_user: saved_user,
             form_password: "".to_string(),
-            form_use_unix_socket: true,
-            active_field: Some(FormField::Host),
+            form_use_unix_socket: false,
+            active_field: Some(FormField::Password),
             show_password: false,
             test_result: None,
 
@@ -271,6 +287,14 @@ impl Workspace {
                         this.is_connected = true;
                         this.show_connection_modal = false;
                         this.test_result = None;
+
+                        let save_data = serde_json::json!({
+                            "host": config.host,
+                            "port": config.port.to_string(),
+                            "database": config.database,
+                            "user": config.user,
+                        });
+                        let _ = std::fs::write(".fastdb_config.json", save_data.to_string());
 
                         for t in &this.tables {
                             this.nav_schema_expanded.insert(t.schema.clone());

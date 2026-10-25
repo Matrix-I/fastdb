@@ -177,7 +177,7 @@ impl DatabaseDriver for PostgresDriver {
         let client = self.get_or_connect().await?;
         *self.cancel_token.lock() = Some(client.cancel_token());
 
-        let clean_sql = sql.trim();
+        let clean_sql = sql.trim().trim_end_matches(';').trim();
         let statement = client.prepare(clean_sql).await
             .with_context(|| format!("SQL Preparation Error: {clean_sql}"))?;
 
@@ -209,7 +209,7 @@ impl DatabaseDriver for PostgresDriver {
         }
 
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        debug!("Postgres execute_query completed: {} rows in {}ms", total_rows, elapsed_ms);
+        info!("Postgres execute_query completed: {} rows in {}ms", total_rows, elapsed_ms);
         Ok((pager, total_rows, elapsed_ms))
     }
 

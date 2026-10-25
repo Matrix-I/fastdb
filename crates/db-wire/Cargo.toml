@@ -22,3 +22,5 @@ tracing.workspace = true
 mem-engine.workspace = true
 platform-hal.workspace = true
 uuid.workspace = true
+chrono = "0.4"
+serde_json = "1.0"

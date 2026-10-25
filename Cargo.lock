@@ -1599,6 +1599,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "flume",
  "futures",
  "mem-engine",
@@ -1609,6 +1610,7 @@ dependencies = [
  "rusqlite",
  "russh",
  "russh-keys",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tokio-postgres",
@@ -2115,6 +2117,7 @@ dependencies = [
  "mem-engine",
  "platform-hal",
  "rust-embed",
+ "serde_json",
  "sql-intel",
  "tokio",
  "tracing",
@@ -5028,8 +5031,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "851ca9db4932932d69f3ea811b1abe63087a0f740a47692619dd40d4899b68be"
 dependencies = [
  "bytes",
+ "chrono",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
  "uuid",
 ]
 
