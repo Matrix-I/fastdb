@@ -8,7 +8,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 
 use crate::stream::{report_error, RowSink};
-use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
+use crate::traits::{row_count_error, ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
 
 pub struct SqliteDriver {
     pub config: ConnectionConfig,
@@ -103,6 +103,27 @@ impl DatabaseDriver for SqliteDriver {
         // rusqlite is synchronous; keep it off the async workers so cancel_active_query can interrupt it
         crate::get_runtime()
             .spawn_blocking(move || Self::stream_blocking(&conn, &sql, &event_tx))
+            .await
+            .map_err(|e| anyhow::anyhow!("SQLite worker failed: {e}"))?
+    }
+
+    async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
+        let conn = Arc::clone(&self.conn);
+        let statements = statements.to_vec();
+        crate::get_runtime()
+            .spawn_blocking(move || {
+                let mut conn = conn.lock();
+                // Dropping the transaction without commit rolls it back
+                let tx = conn.transaction()?;
+                for sql in &statements {
+                    let affected = tx.execute(sql, [])? as u64;
+                    if affected != 1 {
+                        return Err(row_count_error(sql, affected));
+                    }
+                }
+                tx.commit()?;
+                Ok(statements.len() as u64)
+            })
             .await
             .map_err(|e| anyhow::anyhow!("SQLite worker failed: {e}"))?
     }

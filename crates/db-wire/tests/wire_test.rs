@@ -101,3 +101,35 @@ async fn test_sqlite_ping_succeeds() {
     let driver = SqliteDriver::new_memory();
     driver.ping().await.expect("SQLite ping must succeed on a healthy connection");
 }
+
+#[tokio::test]
+async fn test_sqlite_apply_row_changes_is_all_or_nothing() {
+    let driver = SqliteDriver::new_memory();
+    driver.execute_query("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);").await.unwrap();
+    driver.execute_query("INSERT INTO t (id, name) VALUES (1, 'a'), (2, 'b');").await.unwrap();
+
+    let applied = driver
+        .apply_row_changes(&[
+            "UPDATE \"t\" SET \"name\" = 'z' WHERE \"id\" = '1';".to_string(),
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES ('3', 'c');".to_string(),
+            "DELETE FROM \"t\" WHERE \"id\" = '2';".to_string(),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(applied, 3);
+
+    // The second statement matches no row, so the first one is rolled back too
+    let err = driver
+        .apply_row_changes(&[
+            "UPDATE \"t\" SET \"name\" = 'y' WHERE \"id\" = '1';".to_string(),
+            "UPDATE \"t\" SET \"name\" = 'y' WHERE \"id\" = '99';".to_string(),
+        ])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not found"));
+
+    let (pager, total, _) = driver.execute_query("SELECT id, name FROM t ORDER BY id;").await.unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(pager.get_cell(0, 1).as_deref(), Some(&b"z"[..]));
+    assert_eq!(pager.get_cell(1, 0).as_deref(), Some(&b"3"[..]));
+}

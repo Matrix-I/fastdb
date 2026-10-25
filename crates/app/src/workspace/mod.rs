@@ -11,6 +11,7 @@ use ui_grid::VirtualDataGrid;
 
 mod connection_dialog;
 mod connections;
+mod data_edit;
 mod data_panel;
 mod ddl;
 mod diagram_panel;

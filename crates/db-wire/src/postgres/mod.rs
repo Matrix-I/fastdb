@@ -12,7 +12,7 @@ use tokio_postgres::{CancelToken, Client, NoTls};
 use tracing::{debug, info, warn};
 
 use crate::stream::{report_error, RowSink};
-use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
+use crate::traits::{row_count_error, ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
 use binary_decoder::{decode_pg_cell, pg_type_to_data_type};
 
 pub struct PostgresDriver {
@@ -188,6 +188,26 @@ impl DatabaseDriver for PostgresDriver {
         let total_rows = sink.finish();
         debug!("Postgres query streaming completed: {} rows in {}ms", total_rows, start_time.elapsed().as_millis());
         Ok(())
+    }
+
+    async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
+        let client = self.get_or_connect().await?;
+        client.batch_execute("BEGIN").await.map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+        for sql in statements {
+            let outcome = match client.execute(sql.as_str(), &[]).await {
+                Ok(1) => Ok(()),
+                Ok(n) => Err(row_count_error(sql, n)),
+                Err(e) => Err(anyhow::anyhow!(pg_error_message(&e))),
+            };
+            if let Err(e) = outcome {
+                if let Err(rb) = client.batch_execute("ROLLBACK").await {
+                    warn!("PostgreSQL rollback failed: {}", rb);
+                }
+                return Err(e);
+            }
+        }
+        client.batch_execute("COMMIT").await.map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+        Ok(statements.len() as u64)
     }
 
     async fn cancel_active_query(&self) -> Result<()> {

@@ -250,6 +250,7 @@ impl Workspace {
         let workspace = cx.entity().downgrade();
         Rc::new(move |index, clicks, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
+                this.commit_cell_edit();
                 this.blur_fetch_size();
                 this.is_filter_focused = true;
                 this.filter_selected_all = clicks >= 2;
@@ -275,6 +276,7 @@ impl Workspace {
 
     /// Moves keyboard input to the fetch size box, leaving the filter bar
     pub(super) fn focus_fetch_size(&mut self, select_all: bool, caret: usize) {
+        self.commit_cell_edit();
         self.is_filter_focused = false;
         self.is_fetch_size_focused = true;
         self.fetch_size_selected_all = select_all;

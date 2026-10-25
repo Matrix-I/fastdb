@@ -5,12 +5,12 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use mem_engine::{ColumnMeta, DataType};
 use mysql_async::prelude::*;
-use mysql_async::{Opts, OptsBuilder, Params, Pool, Value};
+use mysql_async::{Opts, OptsBuilder, Params, Pool, TxOpts, Value};
 use parking_lot::Mutex;
 use platform_hal::socket::{detect_local_unix_socket, DbKind};
 
 use crate::stream::{report_error, RowSink};
-use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
+use crate::traits::{row_count_error, ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
 
 pub struct MySqlDriver {
     pub config: ConnectionConfig,
@@ -224,6 +224,29 @@ impl DatabaseDriver for MySqlDriver {
         let sql = sql.to_string();
         let active_conn_id = Arc::clone(&self.active_conn_id);
         crate::run_on_shared_runtime(Self::stream_query(pool, sql, event_tx, active_conn_id)).await
+    }
+
+    async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
+        let pool = self.get_pool()?;
+        let statements = statements.to_vec();
+        crate::run_on_shared_runtime(async move {
+            let mut conn = pool.get_conn().await?;
+            let mut tx = conn.start_transaction(TxOpts::default()).await?;
+            for sql in &statements {
+                let outcome = match tx.query_drop(sql.as_str()).await {
+                    Ok(()) if tx.affected_rows() == 1 => Ok(()),
+                    Ok(()) => Err(row_count_error(sql, tx.affected_rows())),
+                    Err(e) => Err(anyhow::anyhow!("MySQL error: {e}")),
+                };
+                if let Err(e) = outcome {
+                    tx.rollback().await?;
+                    return Err(e);
+                }
+            }
+            tx.commit().await?;
+            Ok(statements.len() as u64)
+        })
+        .await
     }
 
     async fn cancel_active_query(&self) -> Result<()> {

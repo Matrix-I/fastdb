@@ -81,6 +81,13 @@ impl Workspace {
                     cx.notify();
                 }
             }
+        } else if self.tabs.get(self.active_tab).is_some_and(|t| t.grid.editing_cell.is_some()) {
+            self.handle_cell_edit_key(event, cx);
+        } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && event.keystroke.key.eq_ignore_ascii_case("s")
+        {
+            self.save_pending_edits(cx);
+            cx.notify();
         } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && (event.keystroke.key == "enter" || event.keystroke.key == "return")
         {
@@ -127,6 +134,15 @@ impl Workspace {
                         cx.notify();
                     }
                 }
+            } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                && event.keystroke.key.eq_ignore_ascii_case("c")
+            {
+                if let Some(text) = tab.grid.selection_text() {
+                    let cells = text.split('\n').map(|l| l.split('\t').count()).sum::<usize>();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.status_message = format!("📋 Copied {} cell(s) to clipboard", cells);
+                    cx.notify();
+                }
             } else if tab.table_name.is_none() {
                 if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                     && event.keystroke.key.eq_ignore_ascii_case("v")
@@ -168,5 +184,43 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Keys while a grid cell is edited in place: Enter keeps the text, Escape drops it,
+    /// Tab moves on to the next column, Cmd+S keeps it and saves; the rest edit the text
+    fn handle_cell_edit_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let cmd = keystroke.modifiers.platform || keystroke.modifiers.control;
+        match keystroke.key.as_str() {
+            "enter" | "return" => self.commit_cell_edit(),
+            "escape" => self.cancel_cell_edit(),
+            "tab" => {
+                let next = self.tabs.get(self.active_tab).and_then(|t| {
+                    let edit = t.grid.editing_cell.as_ref()?;
+                    let num_cols = t.grid.pager.as_ref()?.num_cols() as usize;
+                    let col = if keystroke.modifiers.shift { edit.col.checked_sub(1)? } else { edit.col + 1 };
+                    (col < num_cols).then_some((edit.row, col))
+                });
+                self.commit_cell_edit();
+                if let Some((row, col)) = next {
+                    self.begin_cell_edit(row, col);
+                }
+            }
+            "s" if cmd => self.save_pending_edits(cx),
+            _ => {
+                let Some(edit) = self.tabs.get_mut(self.active_tab).and_then(|t| t.grid.editing_cell.as_mut()) else { return };
+                let input = LineInput {
+                    text: &mut edit.text,
+                    caret: &mut edit.caret,
+                    selected_all: &mut edit.selected_all,
+                    digits_only: false,
+                };
+                if !handle_line_key(input, keystroke, cx) {
+                    return;
+                }
+                self.cursor_visible = true;
+            }
+        }
+        cx.notify();
     }
 }

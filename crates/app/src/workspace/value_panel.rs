@@ -1,4 +1,5 @@
 use super::*;
+use ui_grid::RowRef;
 use gpui::prelude::FluentBuilder;
 use super::value_format::{detect_format, format_value, FormattedValue, ValueFormat};
 
@@ -54,6 +55,9 @@ struct CellValue {
 impl Workspace {
     /// Click on a grid cell: selects it, or extends the selection with Shift
     pub(super) fn select_grid_cell(&mut self, row: u64, col: usize, extend: bool, cx: &mut Context<Self>) {
+        if self.tabs.get(self.active_tab).and_then(|t| t.grid.editing_cell.as_ref()).is_some_and(|e| (e.row, e.col) != (row, col)) {
+            self.commit_cell_edit();
+        }
         let Some(tab) = self.tabs.get_mut(self.active_tab) else { return };
         let coord = ui_grid::GridCoord { row, col };
         let prev_col = tab.grid.selection.focus.map(|f| f.col);
@@ -73,12 +77,13 @@ impl Workspace {
         let focus = grid.selection.focus?;
         let pager = grid.pager.as_ref()?;
         let col = pager.columns.get(focus.col)?;
-        if focus.row >= pager.total_rows() {
+        if focus.row >= grid.row_count() {
             return None;
         }
-        let bytes = match grid.changeset.get_modified_value(focus.row, focus.col) {
-            Some(v) => Some(v.as_bytes().to_vec()),
-            None => pager.get_cell(focus.row, focus.col),
+        // Fetched values keep their raw bytes (binary data); staged edits are text
+        let bytes = match grid.changeset.resolve_row(focus.row) {
+            RowRef::Fetched(f) if !grid.changeset.is_modified(f, focus.col) => pager.get_cell(f, focus.col),
+            _ => grid.cell_value(focus.row, focus.col).map(String::into_bytes),
         };
         Some(CellValue {
             column: col.name.clone(),

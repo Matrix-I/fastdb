@@ -229,6 +229,7 @@ impl Workspace {
                                     .px_2()
                                     .cursor_text()
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                        this.commit_cell_edit();
                                         this.blur_fetch_size();
                                         this.is_filter_focused = true;
                                         this.filter_selected_all = event.click_count() >= 2;
@@ -474,6 +475,7 @@ impl Workspace {
                             .px_2()
                             .text_size(px(11.0))
                             .text_color(theme.text_muted)
+                            .child(self.render_edit_toolbar(cx))
                             .child(
                                 div()
                                     .id("fetch-size-input-box")

@@ -5,7 +5,7 @@ use gpui::*;
 use mem_engine::QueryResultPager;
 use ui_core::theme::Theme;
 
-use crate::changeset::Changeset;
+use crate::changeset::{Changeset, RowRef};
 use crate::selection::GridSelection;
 
 pub const MIN_COL_WIDTH: f32 = 75.0;
@@ -17,6 +17,30 @@ pub const WIDTH_SAMPLE_ROWS: u64 = 100;
 
 /// Called with (row, col) when a data cell is pressed
 pub type CellMouseDownHandler = Rc<dyn Fn(u64, usize, &MouseDownEvent, &mut Window, &mut App)>;
+
+/// A cell being edited in place: its text and caret, as a char index
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellEdit {
+    pub row: u64,
+    pub col: usize,
+    pub text: String,
+    pub caret: usize,
+    pub selected_all: bool,
+}
+
+/// Draws the content of the cell being edited; the grid supplies the cell box around it
+pub type CellEditorRenderer = Rc<dyn Fn() -> AnyElement>;
+
+/// Text of the cell at grid row `row`, staged edits and new rows included; `None` for SQL NULL
+pub fn resolve_cell(pager: &QueryResultPager, changeset: &Changeset, row: u64, col: usize) -> Option<String> {
+    match changeset.resolve_row(row) {
+        RowRef::New(i) => changeset.inserted_rows.get(i).and_then(|r| r.values.get(col).cloned().flatten()),
+        RowRef::Fetched(f) => match changeset.edited_value(f, col) {
+            Some(v) => v.map(str::to_string),
+            None => pager.get_cell(f, col).map(|b| String::from_utf8_lossy(&b).into_owned()),
+        },
+    }
+}
 
 pub fn dbeaver_type_badge(data_type: mem_engine::DataType) -> &'static str {
     match data_type {
@@ -55,7 +79,7 @@ pub struct VirtualDataGrid {
     pub width_sampled_rows: u64,
     pub selection: GridSelection,
     pub changeset: Changeset,
-    pub editing_cell: Option<(u64, usize, String)>,
+    pub editing_cell: Option<CellEdit>,
     pub horizontal_scroll_handle: ScrollHandle,
     pub vertical_scroll_handle: UniformListScrollHandle,
 }
@@ -96,6 +120,38 @@ impl VirtualDataGrid {
         self.scroll_left = 0.0;
         self.horizontal_scroll_handle = ScrollHandle::new();
         self.vertical_scroll_handle = UniformListScrollHandle::new();
+    }
+
+    /// Rows shown in the grid: the fetched rows and the rows added between them
+    pub fn row_count(&self) -> u64 {
+        self.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0) + self.changeset.inserted_rows.len() as u64
+    }
+
+    /// Text of a cell as shown, staged edits included; `None` for NULL or out of range
+    pub fn cell_value(&self, row: u64, col: usize) -> Option<String> {
+        resolve_cell(self.pager.as_ref()?, &self.changeset, row, col)
+    }
+
+    /// Text of the selected cells for the clipboard: one cell as its bare value,
+    /// a range as tab-separated columns and newline-separated rows. Edited cells
+    /// copy their new value, NULL copies as empty. `None` without a selection.
+    pub fn selection_text(&self) -> Option<String> {
+        let pager = self.pager.as_ref()?;
+        let (min_r, max_r, min_c, max_c) = self.selection.bounding_box()?;
+        let max_r = max_r.min(self.row_count().checked_sub(1)?);
+        let max_c = max_c.min(pager.columns.len().checked_sub(1)?);
+        if min_r > max_r || min_c > max_c {
+            return None;
+        }
+
+        let mut rows = Vec::new();
+        for r in min_r..=max_r {
+            let cells: Vec<String> = (min_c..=max_c)
+                .map(|c| resolve_cell(pager, &self.changeset, r, c).unwrap_or_default())
+                .collect();
+            rows.push(cells.join("\t"));
+        }
+        Some(rows.join("\n"))
     }
 
     pub fn set_table_name(&mut self, name: impl Into<String>) {
@@ -151,13 +207,7 @@ impl VirtualDataGrid {
             // 2. Data sample width across up to 100 rows
             let mut max_cell_w = 0.0f32;
             for r in 0..sample_rows {
-                let cell_str = if let Some(mod_val) = self.changeset.get_modified_value(r, col_idx) {
-                    mod_val.to_string()
-                } else if let Some(cell_bytes) = pager.get_cell(r, col_idx) {
-                    String::from_utf8_lossy(&cell_bytes).into_owned()
-                } else {
-                    "NULL".to_string()
-                };
+                let cell_str = resolve_cell(pager, &self.changeset, r, col_idx).unwrap_or_else(|| "NULL".to_string());
 
                 let sample = if cell_str.len() > 500 {
                     let idx = cell_str.char_indices().nth(500).map(|(i, _)| i).unwrap_or(cell_str.len());
@@ -297,7 +347,7 @@ impl VirtualDataGrid {
     }
 
     pub fn scroll_by(&mut self, delta_y: f32, delta_x: f32) {
-        let total_rows = self.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
+        let total_rows = self.row_count();
         let max_scroll_y = (total_rows as f32 * self.theme.row_height - self.viewport_height).max(0.0);
 
         self.scroll_top = (self.scroll_top + delta_y).clamp(0.0, max_scroll_y);
@@ -305,7 +355,7 @@ impl VirtualDataGrid {
     }
 
     pub fn render_grid(&mut self) -> impl IntoElement {
-        self.render_grid_interactive(None, None, |_col_idx, _width| {
+        self.render_grid_interactive(None, None, None, |_col_idx, _width| {
             div()
                 .w(px(8.0))
                 .h_full()
@@ -318,6 +368,7 @@ impl VirtualDataGrid {
         &mut self,
         resizing_col: Option<usize>,
         on_cell_mouse_down: Option<CellMouseDownHandler>,
+        cell_editor: Option<(u64, usize, CellEditorRenderer)>,
         mut make_resizer: F,
     ) -> impl IntoElement
     where
@@ -328,7 +379,7 @@ impl VirtualDataGrid {
         let header_height = theme.header_height;
         let gutter_width = GUTTER_WIDTH;
 
-        let total_rows = self.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0);
+        let total_rows = self.row_count();
         let num_cols = self.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
 
         let total_cols_width: f32 = self.column_widths.iter().sum();
@@ -460,8 +511,13 @@ impl VirtualDataGrid {
         let theme_bg_grid = theme.bg_grid;
         let theme_border = theme.border;
         let theme_text_muted = theme.text_muted;
+        let theme_text_primary = theme.text_primary;
         let theme_bg_cell_selected = theme.bg_grid_cell_selected;
         let theme_bg_cell_modified = theme.bg_grid_cell_modified;
+        let theme_border_focused = theme.border_focused;
+        let theme_bg_editor = theme.bg_editor;
+        let theme_text_success = theme.text_success;
+        let theme_text_error = theme.text_error;
 
         let body = div()
             .id("grid-data-body-container")
@@ -480,7 +536,18 @@ impl VirtualDataGrid {
                         for r in range {
                             let r_u64 = r as u64;
                             let is_alt = r % 2 == 1;
-                            let row_bg = if is_alt { theme_bg_grid_alt } else { theme_bg_grid };
+                            let row_ref = changeset_clone.resolve_row(r_u64);
+                            let is_new = matches!(row_ref, RowRef::New(_));
+                            let is_deleted = matches!(row_ref, RowRef::Fetched(f) if changeset_clone.is_deleted(f));
+                            let row_bg = if is_new {
+                                Rgba { a: 0.14, ..theme_text_success }
+                            } else if is_deleted {
+                                Rgba { a: 0.16, ..theme_text_error }
+                            } else if is_alt {
+                                theme_bg_grid_alt
+                            } else {
+                                theme_bg_grid
+                            };
 
                             let mut row_div = div()
                                 .id(("grid-row", r))
@@ -503,14 +570,17 @@ impl VirtualDataGrid {
                                         .border_r_1()
                                         .border_color(theme_border)
                                         .text_size(px(10.0))
-                                        .text_color(theme_text_muted)
-                                        .child(format!("{}", r + 1))
+                                        .text_color(if is_new { theme_text_success } else if is_deleted { theme_text_error } else { theme_text_muted })
+                                        .child(match row_ref {
+                                            RowRef::New(_) => "+".to_string(),
+                                            RowRef::Fetched(f) => format!("{}", f + 1),
+                                        })
                                 );
 
                             for c in 0..num_cols {
                                 let width = column_widths_clone.get(c).copied().unwrap_or(MIN_COL_WIDTH);
                                 let is_selected = selection_clone.is_selected(r_u64, c);
-                                let is_modified = changeset_clone.is_modified(r_u64, c);
+                                let is_modified = matches!(row_ref, RowRef::Fetched(f) if changeset_clone.is_modified(f, c));
 
                                 let mut cell_div = div()
                                     .flex()
@@ -531,33 +601,39 @@ impl VirtualDataGrid {
                                     });
                                 }
 
+                                if let Some((_, _, render_editor)) = cell_editor.as_ref().filter(|(er, ec, _)| *er == r_u64 && *ec == c) {
+                                    cell_div = cell_div
+                                        .bg(theme_bg_editor)
+                                        .border_1()
+                                        .border_color(theme_border_focused)
+                                        .text_color(theme_text_primary)
+                                        .child(render_editor());
+                                    row_div = row_div.child(cell_div);
+                                    continue;
+                                }
+
                                 if is_selected {
                                     cell_div = cell_div.bg(theme_bg_cell_selected);
                                 } else if is_modified {
                                     cell_div = cell_div.bg(theme_bg_cell_modified);
                                 }
 
-                                let (display_text, is_null) = if let Some(mod_val) = changeset_clone.get_modified_value(r_u64, c) {
-                                    (mod_val.to_string(), false)
-                                } else if let Some(ref p) = pager_clone {
-                                    if let Some(cell_bytes) = p.get_cell(r_u64, c) {
-                                        let s = String::from_utf8_lossy(&cell_bytes);
-                                        if s.len() > 3000 {
-                                            let truncate_idx = s.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(s.len());
-                                            (format!("{}…", &s[..truncate_idx]), false)
-                                        } else {
-                                            (s.into_owned(), false)
-                                        }
-                                    } else {
-                                        ("NULL".to_string(), true)
+                                let value = pager_clone.as_ref().and_then(|p| resolve_cell(p, &changeset_clone, r_u64, c));
+                                let (display_text, is_null) = match value {
+                                    Some(s) if s.len() > 3000 => {
+                                        let truncate_idx = s.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(s.len());
+                                        (format!("{}…", &s[..truncate_idx]), false)
                                     }
-                                } else {
-                                    ("NULL".to_string(), true)
+                                    Some(s) => (s, false),
+                                    None => ("NULL".to_string(), true),
                                 };
 
-                                let text_el = div().truncate().child(display_text);
+                                let mut text_el = div().truncate().child(display_text);
+                                if is_deleted {
+                                    text_el = text_el.line_through();
+                                }
 
-                                if is_null {
+                                if is_null || is_deleted {
                                     cell_div = cell_div
                                         .text_color(theme_text_muted)
                                         .child(text_el);
@@ -860,6 +936,44 @@ mod tests {
     use super::*;
     use mem_engine::{ColumnMeta, DataType};
     use core::prelude::v1::test;
+
+    #[test]
+    fn test_selection_text_copies_cell_or_range() {
+        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let pager = Arc::new(QueryResultPager::new(cols).unwrap());
+        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+        pager.append_row(vec![Some(&b"2"[..]), None]).unwrap();
+
+        let mut grid = VirtualDataGrid::new(None, Theme::dark());
+        grid.set_pager(Arc::clone(&pager));
+        assert_eq!(grid.selection_text(), None);
+
+        grid.selection = GridSelection::single(0, 1);
+        assert_eq!(grid.selection_text().as_deref(), Some("Alice"));
+
+        grid.changeset.set_cell(0, 1, Some(b"Alice".to_vec()), Some("Alicia".to_string()));
+        grid.selection.set_range(crate::GridCoord { row: 0, col: 0 }, crate::GridCoord { row: 1, col: 1 });
+        assert_eq!(grid.selection_text().as_deref(), Some("1\tAlicia\n2\t"));
+    }
+
+    #[test]
+    fn test_staged_rows_and_edits_are_shown() {
+        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let pager = Arc::new(QueryResultPager::new(cols).unwrap());
+        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+
+        let mut grid = VirtualDataGrid::new(None, Theme::dark());
+        grid.set_pager(Arc::clone(&pager));
+        grid.changeset.set_cell(0, 1, Some(b"Alice".to_vec()), None);
+        grid.changeset.insert_row_at(1, vec![None, Some("Bob".to_string())]);
+
+        assert_eq!(grid.row_count(), 2);
+        assert_eq!(grid.cell_value(0, 0).as_deref(), Some("1"));
+        assert_eq!(grid.cell_value(0, 1), None, "a cell set to NULL shows as NULL");
+        assert_eq!(grid.cell_value(1, 0), None, "an unset cell of a new row is NULL");
+        assert_eq!(grid.cell_value(1, 1).as_deref(), Some("Bob"));
+        assert_eq!(grid.cell_value(2, 1), None);
+    }
 
     #[test]
     fn test_widths_follow_rows_streamed_after_schema() {

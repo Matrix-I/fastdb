@@ -118,10 +118,15 @@ impl Workspace {
                             let on_cell_mouse_down: ui_grid::CellMouseDownHandler = std::rc::Rc::new(move |row, col, event, _window, app| {
                                 let _ = cell_view.update(app, |this, cx| {
                                     this.select_grid_cell(row, col, event.modifiers.shift, cx);
+                                    if event.click_count >= 2 && !event.modifiers.shift {
+                                        this.begin_cell_edit(row, col);
+                                    }
                                 });
                             });
+                            let cell_editor = self.cell_editor_renderer(cx);
+                            let tab = &mut self.tabs[active_tab_idx];
 
-                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), move |col_idx, cur_width| {
+                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), cell_editor, move |col_idx, cur_width| {
                                 let is_active = active_resizing_col == Some(col_idx);
                                 let bg_color = if is_active {
                                     Rgba { a: 0.85, ..theme_border_focused }

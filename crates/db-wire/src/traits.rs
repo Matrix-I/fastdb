@@ -111,6 +111,11 @@ pub trait DatabaseDriver: Send + Sync {
         }
     }
 
+    /// Runs row edits (UPDATE / INSERT / DELETE) in one transaction. Every statement must
+    /// touch exactly one row; otherwise everything is rolled back and an error is returned.
+    /// Returns the number of statements applied.
+    async fn apply_row_changes(&self, statements: &[String]) -> Result<u64>;
+
     /// Cancel actively running query out-of-band immediately
     async fn cancel_active_query(&self) -> Result<()>;
 
@@ -140,5 +145,14 @@ pub trait DatabaseDriver: Send + Sync {
     /// Batch list all indexes across all tables: (schema, table, index_name)
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
         Ok(Vec::new())
+    }
+}
+
+/// Error for a row edit that touched no row or several rows
+pub fn row_count_error(statement: &str, affected: u64) -> anyhow::Error {
+    if affected == 0 {
+        anyhow::anyhow!("The row was not found (changed or deleted by someone else?): {statement}")
+    } else {
+        anyhow::anyhow!("The statement would change {affected} rows instead of one, so nothing was saved: {statement}")
     }
 }
