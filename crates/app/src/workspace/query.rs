@@ -14,6 +14,7 @@ pub struct TabState {
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
     pub filter_sql: String,
+    pub filter_history: LineHistory,
     pub active_subtab: TableSubTab,
     pub active_property_section: PropertySection,
     pub properties_header_collapsed: bool,
@@ -32,6 +33,7 @@ pub struct FetchState {
     pub size: usize,
     /// Text of the fetch size box in the result footer
     pub size_text: String,
+    pub size_history: LineHistory,
     /// The current result was read with our own LIMIT, so more chunks can follow
     pub paged: bool,
     /// The last chunk came back full, so the table may hold more rows
@@ -48,6 +50,7 @@ impl Default for FetchState {
         Self {
             size: DEFAULT_FETCH_SIZE,
             size_text: DEFAULT_FETCH_SIZE.to_string(),
+            size_history: LineHistory::new(),
             paged: false,
             has_more: false,
             append: None,
@@ -70,7 +73,12 @@ impl FetchState {
 
     /// Forgets everything about the displayed result, keeping the fetch size
     pub fn reset_result(&mut self) {
-        *self = Self { size: self.size, size_text: std::mem::take(&mut self.size_text), ..Self::default() };
+        *self = Self {
+            size: self.size,
+            size_text: std::mem::take(&mut self.size_text),
+            size_history: std::mem::take(&mut self.size_history),
+            ..Self::default()
+        };
     }
 
     pub fn is_appending(&self) -> bool {
@@ -307,6 +315,7 @@ impl Workspace {
                 schema_name: Some(schema.to_string()),
                 table_name: Some(table.to_string()),
                 filter_sql: String::new(),
+                filter_history: Default::default(),
                 active_subtab: TableSubTab::Data,
                 active_property_section: PropertySection::Columns,
                 properties_header_collapsed: false,
@@ -514,6 +523,7 @@ impl Workspace {
             schema_name: None,
             table_name: None,
             filter_sql: String::new(),
+            filter_history: Default::default(),
             active_subtab: TableSubTab::Data,
             active_property_section: PropertySection::Columns,
             properties_header_collapsed: false,

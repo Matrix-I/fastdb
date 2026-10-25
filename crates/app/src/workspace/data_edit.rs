@@ -36,6 +36,7 @@ impl Workspace {
         let text = tab.grid.cell_value(row, col).unwrap_or_default();
         tab.grid.selection = ui_grid::GridSelection::single(row, col);
         tab.grid.editing_cell = Some(CellEdit { row, col, text, caret: usize::MAX, selected_all: true });
+        self.cell_edit_history.clear();
         self.is_filter_focused = false;
         self.blur_fetch_size();
         self.cursor_visible = true;
@@ -50,27 +51,28 @@ impl Workspace {
         }
     }
 
-    /// Closes the in-place editor, staging its text in the changeset
+    /// Closes the in-place editor, staging its text in the changeset as one undo step
     pub(super) fn commit_cell_edit(&mut self) {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else { return };
         let Some(edit) = tab.grid.editing_cell.take() else { return };
         let Some(pager) = tab.grid.pager.clone() else { return };
-        let row = match tab.grid.changeset.resolve_row(edit.row) {
+        let unchanged_text = tab.grid.cell_value(edit.row, edit.col).as_deref() == Some(edit.text.as_str());
+        tab.grid.stage(|changeset| match changeset.resolve_row(edit.row) {
             RowRef::New(i) => {
-                if let Some(cell) = tab.grid.changeset.inserted_rows.get_mut(i).and_then(|r| r.values.get_mut(edit.col)) {
+                if let Some(cell) = changeset.inserted_rows.get_mut(i).and_then(|r| r.values.get_mut(edit.col)) {
                     *cell = Some(edit.text);
                 }
-                return;
             }
-            RowRef::Fetched(f) => f,
-        };
-        let original = pager.get_cell(row, edit.col);
-        let unchanged = original.as_deref().map(|b| String::from_utf8_lossy(b) == edit.text.as_str()).unwrap_or(false);
-        if unchanged {
-            tab.grid.changeset.revert_cell(row, edit.col);
-        } else if tab.grid.cell_value(edit.row, edit.col).as_deref() != Some(edit.text.as_str()) {
-            tab.grid.changeset.set_cell(row, edit.col, original, Some(edit.text));
-        }
+            RowRef::Fetched(row) => {
+                let original = pager.get_cell(row, edit.col);
+                let unchanged = original.as_deref().map(|b| String::from_utf8_lossy(b) == edit.text.as_str()).unwrap_or(false);
+                if unchanged {
+                    changeset.revert_cell(row, edit.col);
+                } else if !unchanged_text {
+                    changeset.set_cell(row, edit.col, original, Some(edit.text));
+                }
+            }
+        });
     }
 
     /// Closes the in-place editor without keeping what was typed
@@ -91,7 +93,7 @@ impl Workspace {
         let num_cols = tab.grid.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
         let row_count = tab.grid.row_count();
         let row = tab.grid.selection.focus.map(|f| (f.row + 1).min(row_count)).unwrap_or(row_count);
-        tab.grid.changeset.insert_row_at(row, vec![None; num_cols]);
+        tab.grid.stage(|changeset| changeset.insert_row_at(row, vec![None; num_cols]));
         tab.grid.vertical_scroll_handle.scroll_to_item(row as usize, ScrollStrategy::Bottom);
         let col = tab.grid.selection.focus.map(|f| f.col).unwrap_or(0).min(num_cols.saturating_sub(1));
         self.begin_cell_edit(row, col);
@@ -115,9 +117,11 @@ impl Workspace {
             .collect();
         let first_new = max_r + 1;
         let added = copies.len() as u64;
-        for (i, values) in copies.into_iter().enumerate() {
-            tab.grid.changeset.insert_row_at(first_new + i as u64, values);
-        }
+        tab.grid.stage(|changeset| {
+            for (i, values) in copies.into_iter().enumerate() {
+                changeset.insert_row_at(first_new + i as u64, values);
+            }
+        });
         tab.grid.selection.set_range(
             ui_grid::GridCoord { row: first_new, col: 0 },
             ui_grid::GridCoord { row: first_new + added - 1, col: num_cols.saturating_sub(1) },
@@ -138,35 +142,48 @@ impl Workspace {
             return;
         };
         let max_r = max_r.min(tab.grid.row_count().saturating_sub(1));
-        let mut dropped_new_rows = false;
-        // Bottom up, so dropping a new row does not move the rows still to visit
-        for r in (min_r..=max_r).rev() {
-            match tab.grid.changeset.resolve_row(r) {
-                RowRef::Fetched(f) => {
-                    tab.grid.changeset.deleted_rows.insert(f);
-                }
-                RowRef::New(i) => {
-                    tab.grid.changeset.remove_inserted_row(i);
-                    dropped_new_rows = true;
+        let dropped_new_rows = tab.grid.stage(|changeset| {
+            let mut dropped_new_rows = false;
+            // Bottom up, so dropping a new row does not move the rows still to visit
+            for r in (min_r..=max_r).rev() {
+                match changeset.resolve_row(r) {
+                    RowRef::Fetched(f) => {
+                        changeset.deleted_rows.insert(f);
+                    }
+                    RowRef::New(i) => {
+                        changeset.remove_inserted_row(i);
+                        dropped_new_rows = true;
+                    }
                 }
             }
-        }
+            dropped_new_rows
+        });
         if dropped_new_rows {
             tab.grid.selection.clear();
         }
         self.status_message = "Rows marked for deletion — Save to delete them from the table.".to_string();
     }
 
-    /// Drops every staged edit of the active tab (the Cancel button)
+    /// Drops every staged edit of the active tab (the Cancel button); Cmd+Z brings them back
     pub(super) fn discard_pending_edits(&mut self) {
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.grid.editing_cell = None;
             let had_rows = !tab.grid.changeset.inserted_rows.is_empty();
-            tab.grid.changeset.clear();
+            tab.grid.stage(|changeset| changeset.clear());
             if had_rows {
                 tab.grid.selection.clear();
             }
             self.status_message = "Changes cancelled.".to_string();
+        }
+    }
+
+    /// Undoes (`redo == false`) or redoes the last staged change of the active table:
+    /// a cell edit, added, duplicated or deleted rows, or Cancel
+    pub(super) fn step_pending_edits(&mut self, redo: bool) {
+        self.commit_cell_edit();
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else { return };
+        if tab.grid.step_staged_edits(redo) {
+            self.status_message = format!("{} — {} pending change(s).", if redo { "Redo" } else { "Undo" }, tab.grid.changeset.count());
         }
     }
 
@@ -222,6 +239,7 @@ impl Workspace {
                 match result {
                     Ok(applied) => {
                         this.tabs[idx].grid.changeset.clear();
+                        this.tabs[idx].grid.changeset_history.clear();
                         this.tabs[idx].grid.selection.clear();
                         this.status_message = format!("✅ Saved {} change(s).", applied);
                         if idx == this.active_tab {

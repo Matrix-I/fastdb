@@ -36,7 +36,7 @@ pub use query::{group_thousands, TabState};
 #[cfg(test)]
 pub use query::QueryStatus;
 use ddl::render_dbeaver_col_badge;
-use text_input::{handle_line_key, render_caret_text, CaretPick, LineInput};
+use text_input::{handle_line_key, render_caret_text, CaretPick, LineHistory, LineInput};
 use panel_resize::{PanelDrag, PanelSplitter, CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH};
 use value_panel::{ValuePanelState, VALUE_PANEL_WIDTH};
 use widgets::{dbeaver_driver_icon, render_field_content};
@@ -73,7 +73,7 @@ pub enum DataViewMode {
     Text,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormField {
     Name,
     Host,
@@ -118,6 +118,8 @@ pub struct Workspace {
     pub form_password: String,
     pub form_use_unix_socket: bool,
     pub active_field: Option<FormField>,
+    /// Undo history of each connection form field, reset whenever the form is opened
+    pub form_history: HashMap<FormField, LineHistory>,
     pub show_password: bool,
     pub test_result: Option<Result<String, String>>,
 
@@ -153,6 +155,8 @@ pub struct Workspace {
     pub fetch_size_selected_all: bool,
     /// Caret of the fetch size box, as a char index (clamped; `usize::MAX` = end)
     pub fetch_size_cursor: usize,
+    /// Undo history of the text of the grid cell being edited, reset for each cell
+    pub cell_edit_history: LineHistory,
     /// Right-click menu of a navigator connection, if open
     pub nav_context_menu: Option<NavContextMenu>,
 }
@@ -242,6 +246,7 @@ impl Workspace {
             form_password,
             form_use_unix_socket: form_sock,
             active_field: Some(FormField::Name),
+            form_history: HashMap::new(),
             show_password: false,
             test_result: None,
 
@@ -281,6 +286,7 @@ impl Workspace {
             is_fetch_size_focused: false,
             fetch_size_selected_all: false,
             fetch_size_cursor: usize::MAX,
+            cell_edit_history: LineHistory::new(),
             nav_context_menu: None,
         };
 

@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use gpui::*;
 use mem_engine::QueryResultPager;
+use ui_core::history::{EditKind, History};
 use ui_core::theme::Theme;
 
 use crate::changeset::{Changeset, RowRef};
@@ -79,6 +80,8 @@ pub struct VirtualDataGrid {
     pub width_sampled_rows: u64,
     pub selection: GridSelection,
     pub changeset: Changeset,
+    /// Undo history of the staged edits; each change made through `stage` is one step
+    pub changeset_history: History<Changeset>,
     pub editing_cell: Option<CellEdit>,
     pub horizontal_scroll_handle: ScrollHandle,
     pub vertical_scroll_handle: UniformListScrollHandle,
@@ -101,6 +104,7 @@ impl VirtualDataGrid {
             width_sampled_rows: 0,
             selection: GridSelection::new(),
             changeset: Changeset::new(),
+            changeset_history: History::new(),
             editing_cell: None,
             horizontal_scroll_handle: ScrollHandle::new(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
@@ -115,11 +119,39 @@ impl VirtualDataGrid {
         self.recalculate_all_widths();
         self.selection.clear();
         self.changeset.clear();
+        self.changeset_history.clear();
         self.editing_cell = None;
         self.scroll_top = 0.0;
         self.scroll_left = 0.0;
         self.horizontal_scroll_handle = ScrollHandle::new();
         self.vertical_scroll_handle = UniformListScrollHandle::new();
+    }
+
+    /// Applies `change` to the staged edits as one undo step; a change that leaves them
+    /// as they were records nothing
+    pub fn stage<R>(&mut self, change: impl FnOnce(&mut Changeset) -> R) -> R {
+        let before = self.changeset.clone();
+        let result = change(&mut self.changeset);
+        if self.changeset != before {
+            self.changeset_history.record(before, EditKind::Other);
+        }
+        result
+    }
+
+    /// Steps the staged edits back (`redo == false`) or forward through their history.
+    /// Returns `false` when there is no step to take.
+    pub fn step_staged_edits(&mut self, redo: bool) -> bool {
+        let current = self.changeset.clone();
+        let restored = if redo { self.changeset_history.redo(current) } else { self.changeset_history.undo(current) };
+        let Some(restored) = restored else { return false };
+        let rows_moved = restored.inserted_rows.len() != self.changeset.inserted_rows.len();
+        self.changeset = restored;
+        self.editing_cell = None;
+        // Added or dropped rows shift the rows below them, so the selection no longer fits
+        if rows_moved {
+            self.selection.clear();
+        }
+        true
     }
 
     /// Rows shown in the grid: the fetched rows and the rows added between them
@@ -973,6 +1005,32 @@ mod tests {
         assert_eq!(grid.cell_value(1, 0), None, "an unset cell of a new row is NULL");
         assert_eq!(grid.cell_value(1, 1).as_deref(), Some("Bob"));
         assert_eq!(grid.cell_value(2, 1), None);
+    }
+
+    #[test]
+    fn test_staged_edits_undo_and_redo() {
+        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let pager = Arc::new(QueryResultPager::new(cols).unwrap());
+        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+
+        let mut grid = VirtualDataGrid::new(None, Theme::dark());
+        grid.set_pager(Arc::clone(&pager));
+        grid.stage(|cs| cs.set_cell(0, 1, Some(b"Alice".to_vec()), Some("Alicia".to_string())));
+        grid.stage(|cs| cs.insert_row_at(1, vec![None, None]));
+        // A change that changes nothing is not an undo step
+        grid.stage(|cs| cs.set_cell(0, 1, Some(b"Alice".to_vec()), Some("Alicia".to_string())));
+
+        assert!(grid.step_staged_edits(false));
+        assert_eq!(grid.row_count(), 1);
+        assert_eq!(grid.cell_value(0, 1).as_deref(), Some("Alicia"));
+        assert!(grid.step_staged_edits(false));
+        assert_eq!(grid.cell_value(0, 1).as_deref(), Some("Alice"));
+        assert!(!grid.step_staged_edits(false));
+
+        assert!(grid.step_staged_edits(true));
+        assert_eq!(grid.cell_value(0, 1).as_deref(), Some("Alicia"));
+        grid.set_pager(pager);
+        assert!(!grid.step_staged_edits(false), "a new result starts with no history");
     }
 
     #[test]

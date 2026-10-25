@@ -1,3 +1,5 @@
+use ui_core::history::UndoKey;
+
 use super::*;
 
 impl Workspace {
@@ -68,13 +70,17 @@ impl Workspace {
             if let Some(field) = self.active_field {
                 let mut caret = self.field_cursor;
                 let mut selected_all = self.field_selected_all;
+                let mut history = self.form_history.remove(&field).unwrap_or_default();
                 let input = LineInput {
                     text: self.field_value_mut(field),
                     caret: &mut caret,
                     selected_all: &mut selected_all,
                     digits_only: field == FormField::Port,
+                    history: &mut history,
                 };
-                if handle_line_key(input, &event.keystroke, cx) {
+                let consumed = handle_line_key(input, &event.keystroke, cx);
+                self.form_history.insert(field, history);
+                if consumed {
                     self.field_cursor = caret;
                     self.field_selected_all = selected_all;
                     self.cursor_visible = true;
@@ -109,6 +115,7 @@ impl Workspace {
                         caret: &mut self.fetch_size_cursor,
                         selected_all: &mut self.fetch_size_selected_all,
                         digits_only: true,
+                        history: &mut tab.fetch.size_history,
                     };
                     if handle_line_key(input, &event.keystroke, cx) {
                         self.cursor_visible = true;
@@ -128,6 +135,7 @@ impl Workspace {
                         caret: &mut self.filter_cursor,
                         selected_all: &mut self.filter_selected_all,
                         digits_only: false,
+                        history: &mut tab.filter_history,
                     };
                     if handle_line_key(input, &event.keystroke, cx) {
                         self.cursor_visible = true;
@@ -143,6 +151,14 @@ impl Workspace {
                     self.status_message = format!("📋 Copied {} cell(s) to clipboard", cells);
                     cx.notify();
                 }
+            } else if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
+                let redo = undo_key == UndoKey::Redo;
+                if tab.table_name.is_none() {
+                    if redo { tab.editor.redo() } else { tab.editor.undo() };
+                } else if tab.active_subtab == TableSubTab::Data {
+                    self.step_pending_edits(redo);
+                }
+                cx.notify();
             } else if tab.table_name.is_none() {
                 if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                     && event.keystroke.key.eq_ignore_ascii_case("v")
@@ -214,6 +230,7 @@ impl Workspace {
                     caret: &mut edit.caret,
                     selected_all: &mut edit.selected_all,
                     digits_only: false,
+                    history: &mut self.cell_edit_history,
                 };
                 if !handle_line_key(input, keystroke, cx) {
                     return;

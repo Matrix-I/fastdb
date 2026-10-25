@@ -61,7 +61,7 @@ pub enum RowRef {
 /// Edits staged in the result grid until they are saved to the database or cancelled:
 /// changed cells of fetched rows, rows added between them, and fetched rows marked for
 /// deletion. Edits and deletions refer to fetched rows by their index in the result.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changeset {
     pub changes: HashMap<CellKey, ModifiedCell>,
     /// New rows, ordered by their position in the grid

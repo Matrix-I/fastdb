@@ -60,6 +60,18 @@ impl SqlEditorView {
         self.update_completions();
     }
 
+    /// Cmd+Z: takes back the last edit. Returns `false` when there is nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        self.show_completions = false;
+        self.buffer.undo()
+    }
+
+    /// Cmd+Shift+Z: puts back the last undone edit. Returns `false` when there is nothing to redo.
+    pub fn redo(&mut self) -> bool {
+        self.show_completions = false;
+        self.buffer.redo()
+    }
+
     pub fn update_completions(&mut self) {
         if let Some(ref cache) = self.schema_cache {
             let text = self.buffer.text();

@@ -690,6 +690,7 @@ impl Workspace {
         self.cursor_visible = true;
         self.show_password = false;
         self.test_result = None;
+        self.form_history.clear();
         self.show_connection_modal = true;
     }
 
@@ -722,6 +723,7 @@ impl Workspace {
             self.field_selected_all = false;
             self.cursor_visible = true;
             self.show_password = false;
+            self.form_history.clear();
             self.show_connection_modal = true;
         } else {
             self.open_new_connection_dialog();

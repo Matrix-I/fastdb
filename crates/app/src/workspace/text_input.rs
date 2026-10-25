@@ -6,10 +6,15 @@
 
 use std::rc::Rc;
 
+use ui_core::history::{EditKind, History, UndoKey};
+
 use super::*;
 
 /// Called with `(char_index, click_count)` when a character of an input is clicked.
 pub(super) type CaretPick = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
+
+/// Undo history of a single-line input: snapshots of its text and caret
+pub type LineHistory = History<(String, usize)>;
 
 /// A single-line input being edited by a key press.
 pub(super) struct LineInput<'a> {
@@ -17,6 +22,7 @@ pub(super) struct LineInput<'a> {
     pub caret: &'a mut usize,
     pub selected_all: &'a mut bool,
     pub digits_only: bool,
+    pub history: &'a mut LineHistory,
 }
 
 fn byte_at(text: &str, caret: usize) -> usize {
@@ -76,8 +82,36 @@ fn remove_range(input: &mut LineInput, from: usize, to: usize) {
     *input.caret = from;
 }
 
-/// Applies an editing key press. Returns `true` when the key was consumed.
+/// Applies an editing key press, Cmd+Z / Cmd+Shift+Z included. Returns `true` when the
+/// key was consumed.
 pub(super) fn handle_line_key(mut input: LineInput, keystroke: &Keystroke, cx: &mut App) -> bool {
+    if let Some(undo_key) = UndoKey::from_keystroke(keystroke) {
+        let current = (input.text.clone(), *input.caret);
+        let restored = match undo_key {
+            UndoKey::Undo => input.history.undo(current),
+            UndoKey::Redo => input.history.redo(current),
+        };
+        if let Some((text, caret)) = restored {
+            *input.text = text;
+            *input.caret = caret;
+            *input.selected_all = false;
+        }
+        return true;
+    }
+
+    let before = (input.text.clone(), (*input.caret).min(char_len(input.text)));
+    let Some(kind) = apply_line_key(&mut input, keystroke, cx) else { return false };
+    if *input.text != before.0 {
+        input.history.record(before, kind);
+    } else {
+        input.history.break_run();
+    }
+    true
+}
+
+/// Applies an editing key press, returning how it changed the text, or `None` when
+/// the key is not an editing key
+fn apply_line_key(input: &mut LineInput, keystroke: &Keystroke, cx: &mut App) -> Option<EditKind> {
     let len = char_len(input.text);
     *input.caret = (*input.caret).min(len);
     let caret = *input.caret;
@@ -87,24 +121,24 @@ pub(super) fn handle_line_key(mut input: LineInput, keystroke: &Keystroke, cx: &
 
     if cmd && key.eq_ignore_ascii_case("a") {
         *input.selected_all = true;
-        return true;
+        return Some(EditKind::Other);
     }
     if cmd && key.eq_ignore_ascii_case("c") {
         cx.write_to_clipboard(ClipboardItem::new_string(input.text.clone()));
-        return true;
+        return Some(EditKind::Other);
     }
     if cmd && key.eq_ignore_ascii_case("x") {
         cx.write_to_clipboard(ClipboardItem::new_string(input.text.clone()));
         input.text.clear();
         *input.caret = 0;
         *input.selected_all = false;
-        return true;
+        return Some(EditKind::Other);
     }
     if cmd && key.eq_ignore_ascii_case("v") {
         if let Some(pasted) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            insert(&mut input, pasted.trim_matches(|c| c == '\r' || c == '\n'));
+            insert(input, pasted.trim_matches(|c| c == '\r' || c == '\n'));
         }
-        return true;
+        return Some(EditKind::Other);
     }
 
     // Caret movement. With everything selected, Left/Right collapse to that edge.
@@ -124,27 +158,28 @@ pub(super) fn handle_line_key(mut input: LineInput, keystroke: &Keystroke, cx: &
     if let Some(target) = target {
         *input.caret = target;
         *input.selected_all = false;
-        return true;
+        return Some(EditKind::Other);
     }
 
+    let deleting_one = (key == "backspace" || key == "delete") && !*input.selected_all && !mods.platform && !mods.alt;
     match key {
         "backspace" | "delete" if *input.selected_all => {
             input.text.clear();
             *input.caret = 0;
             *input.selected_all = false;
         }
-        "backspace" if mods.platform => remove_range(&mut input, 0, caret),
+        "backspace" if mods.platform => remove_range(input, 0, caret),
         "backspace" if mods.alt => {
             let from = prev_word(input.text, caret);
-            remove_range(&mut input, from, caret);
+            remove_range(input, from, caret);
         }
-        "backspace" if caret > 0 => remove_range(&mut input, caret - 1, caret),
-        "delete" if caret < len => remove_range(&mut input, caret, caret + 1),
+        "backspace" if caret > 0 => remove_range(input, caret - 1, caret),
+        "delete" if caret < len => remove_range(input, caret, caret + 1),
         "backspace" | "delete" => {}
-        "space" => insert(&mut input, " "),
+        "space" => insert(input, " "),
         _ => {
             if cmd {
-                return false;
+                return None;
             }
             let typed = keystroke
                 .key_char
@@ -152,12 +187,17 @@ pub(super) fn handle_line_key(mut input: LineInput, keystroke: &Keystroke, cx: &
                 .filter(|kc| kc.chars().count() == 1)
                 .or_else(|| (key.chars().count() == 1).then_some(key));
             match typed {
-                Some(s) => insert(&mut input, s),
-                None => return false,
+                Some(s) => {
+                    let replaces_selection = *input.selected_all;
+                    insert(input, s);
+                    let word_char = !replaces_selection && !s.chars().all(char::is_whitespace);
+                    return Some(if word_char { EditKind::Typing } else { EditKind::Other });
+                }
+                None => return None,
             }
         }
     }
-    true
+    Some(if deleting_one { EditKind::Deleting } else { EditKind::Other })
 }
 
 /// Renders the text of an input one character per cell. Clicking the left or right half
@@ -299,11 +339,11 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     // Not a glob: `super::*` brings in `gpui::test`, which shadows the built-in `#[test]`.
-    use super::{insert, next_word, prev_word, remove_range, LineInput};
+    use super::{insert, next_word, prev_word, remove_range, LineHistory, LineInput};
 
     fn edit(text: &str, caret: usize, f: impl FnOnce(&mut LineInput)) -> (String, usize) {
-        let (mut text, mut caret, mut sel) = (text.to_string(), caret, false);
-        f(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: false });
+        let (mut text, mut caret, mut sel, mut history) = (text.to_string(), caret, false, LineHistory::new());
+        f(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: false, history: &mut history });
         (text, caret)
     }
 
@@ -317,14 +357,14 @@ mod tests {
     #[test]
     fn selection_is_replaced_by_typing() {
         let (mut text, mut caret, mut sel) = ("old".to_string(), 1, true);
-        insert(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: false }, "n");
+        insert(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: false, history: &mut LineHistory::new() }, "n");
         assert_eq!((text.as_str(), caret, sel), ("n", 1, false));
     }
 
     #[test]
     fn digits_only_drops_other_chars() {
         let (mut text, mut caret, mut sel) = ("54".to_string(), 1, false);
-        insert(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: true }, "3a2");
+        insert(&mut LineInput { text: &mut text, caret: &mut caret, selected_all: &mut sel, digits_only: true, history: &mut LineHistory::new() }, "3a2");
         assert_eq!((text.as_str(), caret), ("5324", 3));
     }
 
