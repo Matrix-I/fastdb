@@ -45,7 +45,12 @@ impl Workspace {
                                 "Disconnected".to_string()
                             })
                     )
-                    .child(self.status_message.clone())
+                    .child({
+                        let failed = ["❌", "✕", "⚠"].iter().any(|m| self.status_message.starts_with(m));
+                        div()
+                            .text_color(if failed { theme.text_error } else { theme.text_muted })
+                            .child(self.status_message.clone())
+                    })
             )
             .child(
                 div()

@@ -252,9 +252,9 @@ impl Workspace {
                 let outcome = rt.block_on(async {
                     tokio::time::timeout(timeout_duration, async {
                         let driver = create_driver(config)
-                            .map_err(|e| format!("Driver initialization error: {}", e))?;
+                            .map_err(|e| format!("Driver initialization error: {:#}", e))?;
                         driver.ping().await
-                            .map_err(|e| format!("Ping failed: {}", e))?;
+                            .map_err(|e| format!("Ping failed: {:#}", e))?;
                         Ok::<_, String>("Connection test successful! Database responded to ping.".to_string())
                     }).await
                 });
@@ -304,10 +304,10 @@ impl Workspace {
                 let outcome = rt.block_on(async {
                     tokio::time::timeout(timeout_duration, async {
                         let driver = create_driver(config.clone())
-                            .map_err(|e| format!("Driver initialization error: {}", e))?;
+                            .map_err(|e| format!("Driver initialization error: {:#}", e))?;
 
                         driver.ping().await
-                            .map_err(|e| format!("Connection refused: {}", e))?;
+                            .map_err(|e| format!("Connection failed: {:#}", e))?;
 
                         let metadata = fetch_schema_metadata(driver.as_ref()).await?;
 
@@ -424,11 +424,27 @@ impl Workspace {
                     Err(e) => {
                         this.test_result = Some(Err(e.clone()));
                         this.status_message = format!("❌ Connection failed: {}", e);
+                        // Connected from the navigator: open the saved connection so the error is
+                        // visible and a missing password can be filled in
+                        if !this.show_connection_modal && this.editing_connection_id.is_some() {
+                            this.show_connection_error_dialog();
+                        }
                     }
                 }
                 cx.notify();
             });
         }).detach();
+    }
+
+    /// Shows the connection dialog with the already loaded form and the failure banner
+    fn show_connection_error_dialog(&mut self) {
+        self.active_field = Some(if self.form_password.is_empty() { FormField::Password } else { FormField::Database });
+        self.field_cursor = usize::MAX;
+        self.field_selected_all = false;
+        self.cursor_visible = true;
+        self.show_password = false;
+        self.form_history.clear();
+        self.show_connection_modal = true;
     }
 
     /// True when the connection is open, whether active or parked in the background
