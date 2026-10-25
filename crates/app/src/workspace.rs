@@ -241,6 +241,11 @@ impl Render for Workspace {
         let theme = &self.theme;
         let active_tab_idx = self.active_tab;
 
+        #[cfg(target_os = "macos")]
+        let top_bar_left_pad = 80.0;
+        #[cfg(not(target_os = "macos"))]
+        let top_bar_left_pad = 14.0;
+
         div()
             .flex()
             .flex_col()
@@ -257,7 +262,8 @@ impl Render for Workspace {
                     .bg(theme.bg_surface)
                     .border_b_1()
                     .border_color(theme.border)
-                    .px_3()
+                    .pl(px(top_bar_left_pad))
+                    .pr_3()
                     .child(
                         div()
                             .flex()
