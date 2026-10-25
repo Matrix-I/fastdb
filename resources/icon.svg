@@ -1,0 +1,55 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161C36"/>
+      <stop offset="1" stop-color="#070A16"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3FE0FF"/>
+      <stop offset="1" stop-color="#8B6CFF"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#7FEBFF"/>
+    </linearGradient>
+    <clipPath id="tile">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+    <path id="db" d="M292 330 A220 70 0 1 0 732 330 A220 70 0 1 0 292 330 Z M292 330 V700 A220 70 0 0 0 732 700 V330 M292 453 A220 70 0 0 0 732 453 M292 576 A220 70 0 0 0 732 576"/>
+    <path id="boltShape" d="M548 392 L418 600 L500 600 L462 790 L612 552 L528 552 L590 392 Z"/>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+
+  <!-- Result grid fading in from the bottom -->
+  <g clip-path="url(#tile)" stroke="#3FE0FF" stroke-width="2" fill="none">
+    <g opacity="0.07">
+      <path d="M100 640 H924 M100 700 H924 M100 760 H924 M100 820 H924 M100 880 H924"/>
+      <path d="M160 600 V924 M260 600 V924 M360 600 V924 M460 600 V924 M560 600 V924 M660 600 V924 M760 600 V924 M860 600 V924"/>
+    </g>
+  </g>
+
+  <!-- Cylinder body hides the grid behind it -->
+  <path d="M292 330 A220 70 0 0 1 732 330 V700 A220 70 0 0 1 292 700 Z" fill="#0D1226"/>
+
+  <!-- Neon database: wide faint strokes under a sharp core give the glow -->
+  <g fill="none" stroke="url(#neon)" stroke-linecap="round" stroke-linejoin="round">
+    <use xlink:href="#db" stroke-width="64" opacity="0.03"/>
+    <use xlink:href="#db" stroke-width="52" opacity="0.04"/>
+    <use xlink:href="#db" stroke-width="40" opacity="0.05"/>
+    <use xlink:href="#db" stroke-width="30" opacity="0.08"/>
+    <use xlink:href="#db" stroke-width="22" opacity="0.14"/>
+    <use xlink:href="#db" stroke-width="12" opacity="1"/>
+  </g>
+  <g fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.55">
+    <use xlink:href="#db"/>
+  </g>
+
+  <!-- Lightning bolt cut out of the cylinder lines -->
+  <use xlink:href="#boltShape" fill="#0B0F20" stroke="#0B0F20" stroke-width="44" stroke-linejoin="round"/>
+  <g stroke="#7FEBFF" stroke-linejoin="round" fill="none">
+    <use xlink:href="#boltShape" stroke-width="40" opacity="0.10"/>
+    <use xlink:href="#boltShape" stroke-width="22" opacity="0.25"/>
+  </g>
+  <use xlink:href="#boltShape" fill="url(#bolt)" stroke="#BFF5FF" stroke-width="6" stroke-linejoin="round"/>
+</svg>

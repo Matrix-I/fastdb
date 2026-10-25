@@ -37,8 +37,8 @@ cp "$BIN_SRC" "$DEB_DIR/usr/bin/$APP_NAME"
 chmod +x "$DEB_DIR/usr/bin/$APP_NAME"
 
 # Copy Icon
-if [ -f "$WORKSPACE_ROOT/assets/icons/database.svg" ]; then
-    cp "$WORKSPACE_ROOT/assets/icons/database.svg" "$DEB_DIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg"
+if [ -f "$WORKSPACE_ROOT/resources/icon.svg" ]; then
+    cp "$WORKSPACE_ROOT/resources/icon.svg" "$DEB_DIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg"
 fi
 
 # Create desktop entry
@@ -79,8 +79,8 @@ mkdir -p "$APP_DIR/usr/bin"
 mkdir -p "$APP_DIR/usr/share/icons"
 cp "$BIN_SRC" "$APP_DIR/usr/bin/$APP_NAME"
 cp "$DEB_DIR/usr/share/applications/$APP_NAME.desktop" "$APP_DIR/"
-if [ -f "$WORKSPACE_ROOT/assets/icons/database.svg" ]; then
-    cp "$WORKSPACE_ROOT/assets/icons/database.svg" "$APP_DIR/$APP_NAME.svg"
+if [ -f "$WORKSPACE_ROOT/resources/icon.svg" ]; then
+    cp "$WORKSPACE_ROOT/resources/icon.svg" "$APP_DIR/$APP_NAME.svg"
 fi
 
 cat <<EOF > "$APP_DIR/AppRun"

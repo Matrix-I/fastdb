@@ -45,6 +45,8 @@ cat <<EOF > "$APP_BUNDLE/Contents/Info.plist"
     <string>$VERSION</string>
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
+    <key>CFBundleIconFile</key>
+    <string>$APP_NAME.icns</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>NSHighResolutionCapable</key>
@@ -55,10 +57,8 @@ cat <<EOF > "$APP_BUNDLE/Contents/Info.plist"
 </plist>
 EOF
 
-# Copy application icons if available
-if [ -d "$WORKSPACE_ROOT/assets/icons" ]; then
-    cp -r "$WORKSPACE_ROOT/assets/icons" "$APP_BUNDLE/Contents/Resources/"
-fi
+# Copy the app icon (UI icons are embedded in the binary)
+cp "$WORKSPACE_ROOT/resources/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/$APP_NAME.icns"
 
 # Create .dmg if hdiutil is available
 if command -v hdiutil &> /dev/null; then
