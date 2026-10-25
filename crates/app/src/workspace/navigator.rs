@@ -152,6 +152,7 @@ impl Workspace {
                         };
 
                         let conn_id_for_click = conn_id.clone();
+                        let conn_id_for_chev = conn_id.clone();
                         let conn_id_for_edit = conn_id.clone();
                         let conn_id_for_del = conn_id.clone();
 
@@ -168,13 +169,10 @@ impl Workspace {
                                 .bg(if is_this_connected { theme.bg_surface_selected } else { rgba(0x00000000) })
                                 .hover(|s| s.bg(theme.bg_surface_hover))
                                 .cursor_pointer()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if is_this_connected {
-                                        this.nav_connection_expanded = !this.nav_connection_expanded;
-                                    } else if !this.is_connecting {
-                                        this.connect_saved_by_id(&conn_id_for_click, cx);
+                                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                    if event.click_count() >= 2 {
+                                        this.toggle_or_connect(&conn_id_for_click, cx);
                                     }
-                                    cx.notify();
                                 }))
                                 .child(
                                     div()
@@ -182,13 +180,16 @@ impl Workspace {
                                         .items_center()
                                         .gap_1p5()
                                         .text_size(px(12.0))
-                                        .child(
-                                            div()
-                                                .w(px(12.0))
-                                                .text_size(px(10.0))
-                                                .text_color(if is_this_connecting { theme.text_warning } else { theme.text_muted })
-                                                .child(if is_this_connecting { "⏳" } else if is_conn_exp { "▾" } else { "▸" })
-                                        )
+                                        .child(nav_chevron(
+                                            format!("nav-chev-conn-{}", conn_id),
+                                            if is_this_connecting { "⏳" } else if is_conn_exp { "▾" } else { "▸" },
+                                            12.0,
+                                            10.0,
+                                            if is_this_connecting { theme.text_warning } else { theme.text_muted },
+                                            theme.text_primary,
+                                            cx,
+                                            move |this, cx| this.toggle_or_connect(&conn_id_for_chev, cx),
+                                        ))
                                         .child(dbeaver_driver_icon(&drv_name, is_this_connected))
                                         .child(
                                             div()
@@ -212,7 +213,7 @@ impl Workspace {
                                                 div()
                                                     .text_size(px(10.0))
                                                     .text_color(theme.text_muted)
-                                                    .child("(Click to connect)")
+                                                    .child("(Double-click to connect)")
                                             } else {
                                                 div()
                                             }
@@ -267,24 +268,22 @@ impl Workspace {
                                 .pl(px(14.0))
                                 .rounded_sm()
                                 .hover(|s| s.bg(theme.bg_surface_hover))
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.nav_databases_expanded = !this.nav_databases_expanded;
-                                    cx.notify();
-                                }))
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap_1p5()
                                         .text_size(px(11.5))
-                                        .child(
-                                            div()
-                                                .w(px(12.0))
-                                                .text_size(px(10.0))
-                                                .text_color(theme.text_muted)
-                                                .child(if is_dbs_exp { "▾" } else { "▸" })
-                                        )
+                                        .child(nav_chevron(
+                                            "nav-chev-databases",
+                                            if is_dbs_exp { "▾" } else { "▸" },
+                                            12.0,
+                                            10.0,
+                                            theme.text_muted,
+                                            theme.text_primary,
+                                            cx,
+                                            |this, _| this.nav_databases_expanded = !this.nav_databases_expanded,
+                                        ))
                                         .child(img("icons/folder_database.svg").w(px(16.0)).h(px(16.0)))
                                         .child("Databases")
                                 )
@@ -302,24 +301,22 @@ impl Workspace {
                                     .pl(px(26.0))
                                     .rounded_sm()
                                     .hover(|s| s.bg(theme.bg_surface_hover))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.nav_database_expanded = !this.nav_database_expanded;
-                                        cx.notify();
-                                    }))
                                     .child(
                                         div()
                                             .flex()
                                             .items_center()
                                             .gap_1p5()
                                             .text_size(px(11.5))
-                                            .child(
-                                                div()
-                                                    .w(px(12.0))
-                                                    .text_size(px(10.0))
-                                                    .text_color(theme.text_muted)
-                                                    .child(if is_db_exp { "▾" } else { "▸" })
-                                            )
+                                            .child(nav_chevron(
+                                                "nav-chev-database",
+                                                if is_db_exp { "▾" } else { "▸" },
+                                                12.0,
+                                                10.0,
+                                                theme.text_muted,
+                                                theme.text_primary,
+                                                cx,
+                                                |this, _| this.nav_database_expanded = !this.nav_database_expanded,
+                                            ))
                                             .child(img("icons/database.svg").w(px(16.0)).h(px(16.0)))
                                             .child(
                                                 div()
@@ -342,24 +339,22 @@ impl Workspace {
                                         .pl(px(38.0))
                                         .rounded_sm()
                                         .hover(|s| s.bg(theme.bg_surface_hover))
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.nav_schemas_expanded = !this.nav_schemas_expanded;
-                                            cx.notify();
-                                        }))
                                         .child(
                                             div()
                                                 .flex()
                                                 .items_center()
                                                 .gap_1p5()
                                                 .text_size(px(11.5))
-                                                .child(
-                                                    div()
-                                                        .w(px(12.0))
-                                                        .text_size(px(10.0))
-                                                        .text_color(theme.text_muted)
-                                                        .child(if is_schemas_exp { "▾" } else { "▸" })
-                                                )
+                                                .child(nav_chevron(
+                                                    "nav-chev-schemas",
+                                                    if is_schemas_exp { "▾" } else { "▸" },
+                                                    12.0,
+                                                    10.0,
+                                                    theme.text_muted,
+                                                    theme.text_primary,
+                                                    cx,
+                                                    |this, _| this.nav_schemas_expanded = !this.nav_schemas_expanded,
+                                                ))
                                                 .child(img("icons/folder_schema.svg").w(px(16.0)).h(px(16.0)))
                                                 .child("Schemas")
                                         )
@@ -398,28 +393,22 @@ impl Workspace {
                                                 .pl(px(50.0))
                                                 .rounded_sm()
                                                 .hover(|s| s.bg(theme.bg_surface_hover))
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    if this.nav_schema_expanded.contains(&s_name_clone) {
-                                                        this.nav_schema_expanded.remove(&s_name_clone);
-                                                    } else {
-                                                        this.nav_schema_expanded.insert(s_name_clone.clone());
-                                                    }
-                                                    cx.notify();
-                                                }))
                                                 .child(
                                                     div()
                                                         .flex()
                                                         .items_center()
                                                         .gap_1p5()
                                                         .text_size(px(11.5))
-                                                        .child(
-                                                            div()
-                                                                .w(px(12.0))
-                                                                .text_size(px(10.0))
-                                                                .text_color(theme.text_muted)
-                                                                .child(if is_schema_exp { "▾" } else { "▸" })
-                                                        )
+                                                        .child(nav_chevron(
+                                                            format!("nav-chev-schema-{}", schema_name),
+                                                            if is_schema_exp { "▾" } else { "▸" },
+                                                            12.0,
+                                                            10.0,
+                                                            theme.text_muted,
+                                                            theme.text_primary,
+                                                            cx,
+                                                            move |this, _| toggle_key(&mut this.nav_schema_expanded, &s_name_clone),
+                                                        ))
                                                         .child(img("icons/schema.svg").w(px(16.0)).h(px(16.0)))
                                                         .child(
                                                             div()
@@ -444,28 +433,22 @@ impl Workspace {
                                                     .pl(px(62.0))
                                                     .rounded_sm()
                                                     .hover(|s| s.bg(theme.bg_surface_hover))
-                                                    .cursor_pointer()
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        if this.nav_tables_expanded.contains(&s_name_for_tables) {
-                                                            this.nav_tables_expanded.remove(&s_name_for_tables);
-                                                        } else {
-                                                            this.nav_tables_expanded.insert(s_name_for_tables.clone());
-                                                        }
-                                                        cx.notify();
-                                                    }))
                                                     .child(
                                                         div()
                                                             .flex()
                                                             .items_center()
                                                             .gap_1p5()
                                                             .text_size(px(11.5))
-                                                            .child(
-                                                                div()
-                                                                    .w(px(12.0))
-                                                                    .text_size(px(10.0))
-                                                                    .text_color(theme.text_muted)
-                                                                    .child(if is_tables_exp { "▾" } else { "▸" })
-                                                            )
+                                                            .child(nav_chevron(
+                                                                format!("nav-chev-tables-{}", schema_name),
+                                                                if is_tables_exp { "▾" } else { "▸" },
+                                                                12.0,
+                                                                10.0,
+                                                                theme.text_muted,
+                                                                theme.text_primary,
+                                                                cx,
+                                                                move |this, _| toggle_key(&mut this.nav_tables_expanded, &s_name_for_tables),
+                                                            ))
                                                             .child(img("icons/folder_table.svg").w(px(16.0)).h(px(16.0)))
                                                             .child("Tables")
                                                     )
@@ -483,7 +466,6 @@ impl Workspace {
 
                                                     let t_schema_for_click = table_schema.clone();
                                                     let t_name_for_click = table_name.clone();
-                                                    let t_key_for_click = table_key.clone();
 
                                                     let mut row_div = div()
                                                         .id(ElementId::Name(item_id.into()))
@@ -496,13 +478,14 @@ impl Workspace {
                                                         .rounded_sm()
                                                         .hover(|s| s.bg(theme.bg_surface_hover))
                                                         .cursor_pointer()
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.selected_table_name = Some(t_name_for_click.clone());
-                                                            if !this.nav_table_expanded.contains(&t_key_for_click) {
-                                                                this.nav_table_expanded.insert(t_key_for_click.clone());
-                                                                this.nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_click));
+                                                        // Single click selects; double click opens the table's data.
+                                                        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                                            if event.click_count() >= 2 {
+                                                                this.query_table(&t_schema_for_click, &t_name_for_click, cx);
+                                                            } else {
+                                                                this.selected_table_name = Some(t_name_for_click.clone());
+                                                                cx.notify();
                                                             }
-                                                            this.query_table(&t_schema_for_click, &t_name_for_click, cx);
                                                         }));
 
                                                     if is_selected {
@@ -518,26 +501,23 @@ impl Workspace {
                                                                     .items_center()
                                                                     .gap_1p5()
                                                                     .text_size(px(11.5))
-                                                                    .child(
-                                                                        div()
-                                                                            .id(ElementId::Name(format!("nav-chev-{}-{}", table_schema, table_name).into()))
-                                                                            .w(px(12.0))
-                                                                            .text_size(px(10.0))
-                                                                            .text_color(if is_selected { rgb(0xffffff) } else { theme.text_muted })
-                                                                            .hover(|s| s.text_color(theme.text_primary))
-                                                                            .cursor_pointer()
-                                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                                cx.stop_propagation();
-                                                                                if this.nav_table_expanded.contains(&t_key_for_chev) {
-                                                                                    this.nav_table_expanded.remove(&t_key_for_chev);
-                                                                                } else {
-                                                                                    this.nav_table_expanded.insert(t_key_for_chev.clone());
-                                                                                    this.nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_chev));
-                                                                                }
-                                                                                cx.notify();
-                                                                            }))
-                                                                            .child(if is_table_exp { "▾" } else { "▸" })
-                                                                    )
+                                                                    .child(nav_chevron(
+                                                                        format!("nav-chev-{}-{}", table_schema, table_name),
+                                                                        if is_table_exp { "▾" } else { "▸" },
+                                                                        12.0,
+                                                                        10.0,
+                                                                        if is_selected { rgb(0xffffff) } else { theme.text_muted },
+                                                                        theme.text_primary,
+                                                                        cx,
+                                                                        move |this, _| {
+                                                                            if this.nav_table_expanded.contains(&t_key_for_chev) {
+                                                                                this.nav_table_expanded.remove(&t_key_for_chev);
+                                                                            } else {
+                                                                                this.nav_table_expanded.insert(t_key_for_chev.clone());
+                                                                                this.nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_chev));
+                                                                            }
+                                                                        },
+                                                                    ))
                                                                     .child(img("icons/table.svg").w(px(16.0)).h(px(16.0)))
                                                                     .child(
                                                                         div()
@@ -588,28 +568,22 @@ impl Workspace {
                                                                 .pr_2()
                                                                 .rounded_sm()
                                                                 .hover(|s| s.bg(theme.bg_surface_hover))
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                                    if this.nav_subfolder_expanded.contains(&col_key_toggle) {
-                                                                        this.nav_subfolder_expanded.remove(&col_key_toggle);
-                                                                    } else {
-                                                                        this.nav_subfolder_expanded.insert(col_key_toggle.clone());
-                                                                    }
-                                                                    cx.notify();
-                                                                }))
                                                                 .child(
                                                                     div()
                                                                         .flex()
                                                                         .items_center()
                                                                         .gap_1p5()
                                                                         .text_size(px(11.5))
-                                                                        .child(
-                                                                            div()
-                                                                                .w(px(10.0))
-                                                                                .text_size(px(9.0))
-                                                                                .text_color(theme.text_muted)
-                                                                                .child(if is_col_exp { "▾" } else { "▸" })
-                                                                        )
+                                                                        .child(nav_chevron(
+                                                                            format!("nav-chev-{}", col_key_toggle),
+                                                                            if is_col_exp { "▾" } else { "▸" },
+                                                                            10.0,
+                                                                            9.0,
+                                                                            theme.text_muted,
+                                                                            theme.text_primary,
+                                                                            cx,
+                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &col_key_toggle),
+                                                                        ))
                                                                         .child(img("icons/columns.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
                                                                             div()
@@ -718,28 +692,22 @@ impl Workspace {
                                                                 .pr_2()
                                                                 .rounded_sm()
                                                                 .hover(|s| s.bg(theme.bg_surface_hover))
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                                    if this.nav_subfolder_expanded.contains(&constr_key_toggle) {
-                                                                        this.nav_subfolder_expanded.remove(&constr_key_toggle);
-                                                                    } else {
-                                                                        this.nav_subfolder_expanded.insert(constr_key_toggle.clone());
-                                                                    }
-                                                                    cx.notify();
-                                                                }))
                                                                 .child(
                                                                     div()
                                                                         .flex()
                                                                         .items_center()
                                                                         .gap_1p5()
                                                                         .text_size(px(11.5))
-                                                                        .child(
-                                                                            div()
-                                                                                .w(px(10.0))
-                                                                                .text_size(px(9.0))
-                                                                                .text_color(theme.text_muted)
-                                                                                .child(if is_constr_exp { "▾" } else { "▸" })
-                                                                        )
+                                                                        .child(nav_chevron(
+                                                                            format!("nav-chev-{}", constr_key_toggle),
+                                                                            if is_constr_exp { "▾" } else { "▸" },
+                                                                            10.0,
+                                                                            9.0,
+                                                                            theme.text_muted,
+                                                                            theme.text_primary,
+                                                                            cx,
+                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &constr_key_toggle),
+                                                                        ))
                                                                         .child(img("icons/folder_constraint.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
                                                                             div()
@@ -800,28 +768,22 @@ impl Workspace {
                                                                 .pr_2()
                                                                 .rounded_sm()
                                                                 .hover(|s| s.bg(theme.bg_surface_hover))
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                                    if this.nav_subfolder_expanded.contains(&fk_key_toggle) {
-                                                                        this.nav_subfolder_expanded.remove(&fk_key_toggle);
-                                                                    } else {
-                                                                        this.nav_subfolder_expanded.insert(fk_key_toggle.clone());
-                                                                    }
-                                                                    cx.notify();
-                                                                }))
                                                                 .child(
                                                                     div()
                                                                         .flex()
                                                                         .items_center()
                                                                         .gap_1p5()
                                                                         .text_size(px(11.5))
-                                                                        .child(
-                                                                            div()
-                                                                                .w(px(10.0))
-                                                                                .text_size(px(9.0))
-                                                                                .text_color(theme.text_muted)
-                                                                                .child(if is_fk_exp { "▾" } else { "▸" })
-                                                                        )
+                                                                        .child(nav_chevron(
+                                                                            format!("nav-chev-{}", fk_key_toggle),
+                                                                            if is_fk_exp { "▾" } else { "▸" },
+                                                                            10.0,
+                                                                            9.0,
+                                                                            theme.text_muted,
+                                                                            theme.text_primary,
+                                                                            cx,
+                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &fk_key_toggle),
+                                                                        ))
                                                                         .child(img("icons/folder.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
                                                                             div()
@@ -876,28 +838,22 @@ impl Workspace {
                                                                 .pr_2()
                                                                 .rounded_sm()
                                                                 .hover(|s| s.bg(theme.bg_surface_hover))
-                                                                .cursor_pointer()
-                                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                                    if this.nav_subfolder_expanded.contains(&idx_key_toggle) {
-                                                                        this.nav_subfolder_expanded.remove(&idx_key_toggle);
-                                                                    } else {
-                                                                        this.nav_subfolder_expanded.insert(idx_key_toggle.clone());
-                                                                    }
-                                                                    cx.notify();
-                                                                }))
                                                                 .child(
                                                                     div()
                                                                         .flex()
                                                                         .items_center()
                                                                         .gap_1p5()
                                                                         .text_size(px(11.5))
-                                                                        .child(
-                                                                            div()
-                                                                                .w(px(10.0))
-                                                                                .text_size(px(9.0))
-                                                                                .text_color(theme.text_muted)
-                                                                                .child(if is_idx_exp { "▾" } else { "▸" })
-                                                                        )
+                                                                        .child(nav_chevron(
+                                                                            format!("nav-chev-{}", idx_key_toggle),
+                                                                            if is_idx_exp { "▾" } else { "▸" },
+                                                                            10.0,
+                                                                            9.0,
+                                                                            theme.text_muted,
+                                                                            theme.text_primary,
+                                                                            cx,
+                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &idx_key_toggle),
+                                                                        ))
                                                                         .child(img("icons/folder.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
                                                                             div()
@@ -964,28 +920,22 @@ impl Workspace {
                                                                     .pr_2()
                                                                     .rounded_sm()
                                                                     .hover(|s| s.bg(theme.bg_surface_hover))
-                                                                    .cursor_pointer()
-                                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                                        if this.nav_subfolder_expanded.contains(&cat_key_toggle) {
-                                                                            this.nav_subfolder_expanded.remove(&cat_key_toggle);
-                                                                        } else {
-                                                                            this.nav_subfolder_expanded.insert(cat_key_toggle.clone());
-                                                                        }
-                                                                        cx.notify();
-                                                                    }))
                                                                     .child(
                                                                         div()
                                                                             .flex()
                                                                             .items_center()
                                                                             .gap_1p5()
                                                                             .text_size(px(11.5))
-                                                                            .child(
-                                                                                div()
-                                                                                    .w(px(10.0))
-                                                                                    .text_size(px(9.0))
-                                                                                    .text_color(theme.text_muted)
-                                                                                    .child(if is_cat_exp { "▾" } else { "▸" })
-                                                                            )
+                                                                            .child(nav_chevron(
+                                                                                format!("nav-chev-{}", cat_key_toggle),
+                                                                                if is_cat_exp { "▾" } else { "▸" },
+                                                                                10.0,
+                                                                                9.0,
+                                                                                theme.text_muted,
+                                                                                theme.text_primary,
+                                                                                cx,
+                                                                                move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &cat_key_toggle),
+                                                                            ))
                                                                             .child(
                                                                                 if is_partition {
                                                                                     img("icons/folder_table.svg").w(px(16.0)).h(px(16.0))
@@ -1028,5 +978,53 @@ impl Workspace {
 
             nav_tree
         })
+    }
+}
+
+impl Workspace {
+    /// Connection node action: expand/collapse when connected, otherwise connect.
+    fn toggle_or_connect(&mut self, conn_id: &str, cx: &mut Context<Self>) {
+        let is_active = self.active_connection_id.as_deref() == Some(conn_id);
+        if self.is_connected && is_active {
+            self.nav_connection_expanded = !self.nav_connection_expanded;
+        } else if !self.is_connecting {
+            self.connect_saved_by_id(conn_id, cx);
+        }
+    }
+}
+
+/// Expand/collapse arrow of a navigator node. It is the only click target that
+/// toggles a node; the row itself handles selection and double-click.
+#[allow(clippy::too_many_arguments)]
+fn nav_chevron(
+    id: impl Into<SharedString>,
+    glyph: &'static str,
+    width: f32,
+    text_size: f32,
+    color: Rgba,
+    hover_color: Rgba,
+    cx: &mut Context<Workspace>,
+    on_toggle: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(ElementId::Name(id.into()))
+        .flex()
+        .justify_center()
+        .w(px(width))
+        .text_size(px(text_size))
+        .text_color(color)
+        .hover(move |s| s.text_color(hover_color))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            cx.stop_propagation();
+            on_toggle(this, cx);
+            cx.notify();
+        }))
+        .child(glyph)
+}
+
+fn toggle_key(set: &mut HashSet<String>, key: &str) {
+    if !set.remove(key) {
+        set.insert(key.to_string());
     }
 }
