@@ -39,7 +39,7 @@ pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
 pub use tab_context_menu::TabContextMenu;
 pub use ddl::generate_table_ddl;
-pub use query::{group_thousands, TabState};
+pub use query::{group_thousands, script_fetch_query, TabState};
 #[cfg(test)]
 pub use query::QueryStatus;
 use ddl::render_dbeaver_col_badge;

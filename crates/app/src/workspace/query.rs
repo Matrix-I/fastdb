@@ -122,6 +122,18 @@ impl FetchSummary {
     }
 }
 
+/// SQL reading one chunk of a script tab's statement from `offset`, and whether it is paged.
+/// Statements that are not plain SELECTs run as written, in one go.
+pub fn script_fetch_query(tab: &TabState, offset: u64) -> (String, bool) {
+    let Some(ref statement) = tab.script_sql else {
+        return (String::new(), false);
+    };
+    match paged_select(statement, tab.fetch.size, offset) {
+        Some(sql) => (sql, true),
+        None => (statement.clone(), false),
+    }
+}
+
 /// Column name quoted for the driver's SQL dialect
 pub(super) fn quote_ident(kind: DbDriverKind, name: &str) -> String {
     match kind {
@@ -315,21 +327,7 @@ impl Workspace {
         let schema = tab.schema_name.as_deref().unwrap_or("public");
         let table = match tab.table_name.as_deref() {
             Some(t) if !t.is_empty() => t,
-            _ => {
-                if !tab.title.is_empty() && !tab.title.starts_with("Query ") {
-                    &tab.title
-                } else {
-                    let full_text = tab.editor.buffer.text();
-                    let non_comments: Vec<&str> = full_text
-                        .lines()
-                        .filter(|l| !l.trim().starts_with("--") && !l.trim().trim_matches(';').trim().is_empty())
-                        .collect();
-                    if !non_comments.is_empty() {
-                        return (non_comments.join("\n"), false);
-                    }
-                    return ("SELECT 1;".to_string(), false);
-                }
-            }
+            _ => return script_fetch_query(tab, offset),
         };
 
         let target = match self.selected_driver_kind {
@@ -407,6 +405,10 @@ impl Workspace {
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.fetch.commit_size_text();
+            if tab.is_script() {
+                let statement = tab.editor.active_statement();
+                tab.script_sql = (!statement.is_empty()).then_some(statement);
+            }
         }
         self.is_fetch_size_focused = false;
         let (sql, paged) = self.build_fetch_query(self.active_tab, 0);

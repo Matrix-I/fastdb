@@ -412,6 +412,32 @@ mod tests {
     }
 
     #[test]
+    fn test_script_fetch_query_pages_selects_and_runs_other_statements_as_written() {
+        use crate::workspace::{script_fetch_query, TabState};
+        use ui_core::theme::Theme;
+
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        let mut tab = TabState::script(1, "SQL Script 1".to_string(), Theme::dark(), cache);
+        tab.fetch.size = 100;
+
+        tab.script_sql = Some("SELECT * FROM users;".to_string());
+        assert_eq!(
+            script_fetch_query(&tab, 0),
+            ("SELECT * FROM (SELECT * FROM users\n) fastdb_page LIMIT 100".to_string(), true)
+        );
+        assert_eq!(
+            script_fetch_query(&tab, 100).0,
+            "SELECT * FROM (SELECT * FROM users\n) fastdb_page LIMIT 100 OFFSET 100"
+        );
+
+        tab.script_sql = Some("DELETE FROM users WHERE id = 1;".to_string());
+        assert_eq!(script_fetch_query(&tab, 0), ("DELETE FROM users WHERE id = 1;".to_string(), false));
+
+        tab.script_sql = None;
+        assert_eq!(script_fetch_query(&tab, 0), (String::new(), false));
+    }
+
+    #[test]
     fn test_script_tabs_start_empty_with_the_editor_focused() {
         use ui_core::theme::Theme;
         let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
