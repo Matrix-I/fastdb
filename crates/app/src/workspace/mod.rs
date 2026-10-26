@@ -23,6 +23,7 @@ mod panel_resize;
 mod panes;
 mod properties_panel;
 mod query;
+mod sql_script;
 mod tab_context_menu;
 mod table_view;
 mod text_input;
