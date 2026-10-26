@@ -343,28 +343,12 @@ mod tests {
 
     #[test]
     fn test_property_sections_and_subtabs() {
-        use crate::workspace::{TableSubTab, PropertySection, TabState, DataViewMode};
-        use ui_editor::SqlEditorView;
-        use ui_grid::VirtualDataGrid;
+        use crate::workspace::{TableSubTab, PropertySection, TabState};
         use ui_core::theme::Theme;
 
-        let tab = TabState {
-            id: 1,
-            title: "additionalInfo".to_string(),
-            schema_name: Some("public".to_string()),
-            table_name: Some("additionalInfo".to_string()),
-            filter_sql: String::new(),
-            filter_history: Default::default(),
-            active_subtab: TableSubTab::Properties,
-            active_property_section: PropertySection::Columns,
-            properties_header_collapsed: false,
-            view_mode: DataViewMode::Grid,
-            show_sql_dialog: false,
-            editor: SqlEditorView::new("SELECT 1;", Theme::dark(), None),
-            grid: VirtualDataGrid::new(None, Theme::dark()),
-            execution_time_ms: None,
-            fetch: Default::default(),
-        };
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        let mut tab = TabState::table(1, "public", "additionalInfo", Theme::dark(), cache);
+        tab.active_subtab = TableSubTab::Properties;
 
         assert_eq!(tab.active_subtab, TableSubTab::Properties);
         assert_eq!(tab.active_property_section, PropertySection::Columns);
@@ -409,26 +393,33 @@ mod tests {
     }
 
     fn sample_table_tab() -> crate::workspace::TabState {
-        use crate::workspace::{DataViewMode, PropertySection, TabState, TableSubTab};
         use ui_core::theme::Theme;
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        crate::workspace::TabState::table(7, "public", "users", Theme::dark(), cache)
+    }
 
-        TabState {
-            id: 7,
-            title: "users".to_string(),
-            schema_name: Some("public".to_string()),
-            table_name: Some("users".to_string()),
-            filter_sql: String::new(),
-            filter_history: Default::default(),
-            active_subtab: TableSubTab::Data,
-            active_property_section: PropertySection::Columns,
-            properties_header_collapsed: false,
-            view_mode: DataViewMode::Grid,
-            show_sql_dialog: false,
-            editor: ui_editor::SqlEditorView::new("SELECT 1;", Theme::dark(), None),
-            grid: ui_grid::VirtualDataGrid::new(None, Theme::dark()),
-            execution_time_ms: None,
-            fetch: Default::default(),
-        }
+    #[test]
+    fn test_failed_run_keeps_its_message_until_the_next_run() {
+        use db_wire::StreamEvent;
+
+        let mut tab = sample_table_tab();
+        tab.begin_fetch(true, false);
+        tab.apply_stream_event(StreamEvent::Error("relation \"users\" does not exist".to_string()));
+        assert_eq!(tab.last_error.as_deref(), Some("relation \"users\" does not exist"));
+
+        tab.begin_fetch(true, false);
+        assert_eq!(tab.last_error, None);
+    }
+
+    #[test]
+    fn test_script_tabs_start_empty_with_the_editor_focused() {
+        use ui_core::theme::Theme;
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        let tab = crate::workspace::TabState::script(3, "SQL Script 1".to_string(), Theme::dark(), cache);
+        assert!(tab.is_script());
+        assert!(tab.editor_focused);
+        assert_eq!(tab.editor.buffer.text(), "");
+        assert!(!sample_table_tab().is_script());
     }
 
     #[test]

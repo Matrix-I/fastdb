@@ -96,7 +96,6 @@ pub struct Workspace {
     pub active_tab: usize,
     pub tabs: Vec<TabState>,
     pub driver: Option<Arc<dyn DatabaseDriver>>,
-    #[allow(dead_code)]
     pub schema_cache: Arc<SchemaCache>,
     pub tables: Vec<TableSummary>,
     pub is_running_query: bool,
@@ -104,6 +103,8 @@ pub struct Workspace {
     pub query_generation: u64,
     pub cancel_requested: bool,
     pub next_tab_id: u64,
+    /// Number given to the next SQL script tab's title
+    pub next_script_number: usize,
 
     // Real Database Connection Setup State
     pub saved_connections: Vec<SavedConnection>,
@@ -232,6 +233,7 @@ impl Workspace {
             query_generation: 0,
             cancel_requested: false,
             next_tab_id: 1,
+            next_script_number: 1,
 
             // Connection Setup Form Defaults
             saved_connections,

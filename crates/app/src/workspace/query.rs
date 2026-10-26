@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use db_wire::QueryResultPager;
 
 use super::*;
+use super::sql_script::{paged_select, script_title};
 
 /// Rows fetched per round trip until the user picks another fetch size
 pub const DEFAULT_FETCH_SIZE: usize = 200;
@@ -24,6 +25,12 @@ pub struct TabState {
     pub grid: VirtualDataGrid,
     pub execution_time_ms: Option<u64>,
     pub fetch: FetchState,
+    /// Statement of a script tab's current result, read again by "fetch next"
+    pub script_sql: Option<String>,
+    /// Message of the last failed run, cleared when the next run starts
+    pub last_error: Option<String>,
+    /// In a script tab, whether keys go to the editor rather than the result grid
+    pub editor_focused: bool,
 }
 
 /// DBeaver-style incremental fetching: the first run reads `size` rows, and reaching the
@@ -145,6 +152,59 @@ pub enum QueryStatus {
 }
 
 impl TabState {
+    /// Tab showing the rows of `schema.table`, opened on its Data sub-tab
+    pub fn table(id: u64, schema: &str, table: &str, theme: Theme, cache: Arc<SchemaCache>) -> Self {
+        let mut grid = VirtualDataGrid::new(None, theme.clone());
+        grid.set_table_name(table);
+        Self {
+            title: table.to_string(),
+            schema_name: Some(schema.to_string()),
+            table_name: Some(table.to_string()),
+            editor: SqlEditorView::new("", theme, Some(cache)),
+            grid,
+            ..Self::blank(id)
+        }
+    }
+
+    /// Free-form SQL script tab with an empty editor that has the keyboard
+    pub fn script(id: u64, title: String, theme: Theme, cache: Arc<SchemaCache>) -> Self {
+        Self {
+            title,
+            editor: SqlEditorView::new("", theme.clone(), Some(cache)),
+            grid: VirtualDataGrid::new(None, theme),
+            editor_focused: true,
+            ..Self::blank(id)
+        }
+    }
+
+    /// Whether this tab runs SQL typed in its editor rather than reading a table
+    pub fn is_script(&self) -> bool {
+        self.table_name.is_none()
+    }
+
+    fn blank(id: u64) -> Self {
+        Self {
+            id,
+            title: String::new(),
+            schema_name: None,
+            table_name: None,
+            filter_sql: String::new(),
+            filter_history: Default::default(),
+            active_subtab: TableSubTab::Data,
+            active_property_section: PropertySection::Columns,
+            properties_header_collapsed: false,
+            view_mode: DataViewMode::Grid,
+            show_sql_dialog: false,
+            editor: SqlEditorView::new("", Theme::dark(), None),
+            grid: VirtualDataGrid::new(None, Theme::dark()),
+            execution_time_ms: None,
+            fetch: FetchState::default(),
+            script_sql: None,
+            last_error: None,
+            editor_focused: false,
+        }
+    }
+
     /// Rows currently shown in the grid
     pub fn loaded_rows(&self) -> u64 {
         self.grid.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0)
@@ -156,6 +216,7 @@ impl TabState {
         self.fetch.append = append.then(AppendSource::default);
         self.fetch.started_at = Some(Instant::now());
         self.fetch.schema_ready_at = None;
+        self.last_error = None;
     }
 
     /// Applies a streaming query event to this tab's grid
@@ -211,6 +272,7 @@ impl TabState {
         self.fetch.append = None;
         self.fetch.started_at = None;
         self.fetch.schema_ready_at = None;
+        self.last_error = Some(error.clone());
         QueryStatus::Failed(error)
     }
 
@@ -324,26 +386,8 @@ impl Workspace {
         if let Some(idx) = existing_tab_idx {
             self.active_tab = idx;
         } else {
-            let mut grid = VirtualDataGrid::new(None, self.theme.clone());
-            grid.set_table_name(table);
             let id = self.allocate_tab_id();
-            self.tabs.push(TabState {
-                id,
-                title: table.to_string(),
-                schema_name: Some(schema.to_string()),
-                table_name: Some(table.to_string()),
-                filter_sql: String::new(),
-                filter_history: Default::default(),
-                active_subtab: TableSubTab::Data,
-                active_property_section: PropertySection::Columns,
-                properties_header_collapsed: false,
-                view_mode: DataViewMode::Grid,
-                show_sql_dialog: false,
-                editor: SqlEditorView::new("SELECT 1;", self.theme.clone(), Some(self.schema_cache.clone())),
-                grid,
-                execution_time_ms: None,
-                fetch: FetchState::default(),
-            });
+            self.tabs.push(TabState::table(id, schema, table, self.theme.clone(), self.schema_cache.clone()));
             self.active_tab = self.tabs.len() - 1;
         }
 
@@ -499,37 +543,15 @@ impl Workspace {
         .detach();
     }
 
-    #[allow(dead_code)]
-    pub fn new_tab(&mut self) {
-        let count = self.tabs.len() + 1;
-        let title = format!("Query {}", count);
-        let editor = SqlEditorView::new(
-            "SELECT 1;",
-            self.theme.clone(),
-            Some(self.schema_cache.clone()),
-        );
-        let grid = VirtualDataGrid::new(None, self.theme.clone());
-
+    /// Opens an empty SQL script tab for the active connection (Cmd+], "+ SQL")
+    pub fn open_sql_script(&mut self) {
+        let title = script_title(self.next_script_number);
+        self.next_script_number += 1;
         let id = self.allocate_tab_id();
-        self.tabs.push(TabState {
-            id,
-            title,
-            schema_name: None,
-            table_name: None,
-            filter_sql: String::new(),
-            filter_history: Default::default(),
-            active_subtab: TableSubTab::Data,
-            active_property_section: PropertySection::Columns,
-            properties_header_collapsed: false,
-            view_mode: DataViewMode::Grid,
-            show_sql_dialog: false,
-            editor,
-            grid,
-            execution_time_ms: None,
-            fetch: FetchState::default(),
-        });
+        self.tabs.push(TabState::script(id, title, self.theme.clone(), self.schema_cache.clone()));
         self.active_tab = self.tabs.len() - 1;
         self.is_filter_focused = false;
+        self.blur_fetch_size();
     }
 
     pub fn close_tab(&mut self, index: usize) {

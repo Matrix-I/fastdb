@@ -402,15 +402,6 @@ impl Workspace {
 
                         if !this.tabs.is_empty() {
                             let tab = &mut this.tabs[this.active_tab];
-                            let current_text = tab.editor.buffer.text();
-                            if current_text.trim().is_empty() || current_text.starts_with("-- Welcome to FastDB") {
-                                let welcome_conn = format!(
-                                    "-- Connected to {}.\n-- Select a table from the navigator or write a query to execute.\n",
-                                    conn_name
-                                );
-                                tab.editor = SqlEditorView::new(&welcome_conn, this.theme.clone(), Some(this.schema_cache.clone()));
-                                tab.editor.buffer.set_cursor_offset(0);
-                            }
                             tab.grid = VirtualDataGrid::new(None, this.theme.clone());
                         }
                     }
