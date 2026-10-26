@@ -16,6 +16,14 @@ pub const GUTTER_WIDTH: f32 = 52.0;
 /// Number of leading rows measured when auto-fitting column widths
 pub const WIDTH_SAMPLE_ROWS: u64 = 100;
 
+// Header cell geometry, kept in sync with the header row built in `render_grid_interactive`
+const HEADER_PADDING_X: f32 = 8.0;
+const HEADER_GAP: f32 = 6.0;
+const HEADER_ARROW_WIDTH: f32 = 14.0;
+const HEADER_KEY_WIDTH: f32 = 11.0;
+/// Width of the drag handle the app appends to every header cell
+const HEADER_RESIZER_WIDTH: f32 = 8.0;
+
 /// Called with (row, col) when a data cell is pressed
 pub type CellMouseDownHandler = Rc<dyn Fn(u64, usize, &MouseDownEvent, &mut Window, &mut App)>;
 
@@ -87,6 +95,23 @@ fn clip_cell_text(mut text: String, width: f32) -> String {
     text
 }
 
+/// Width a header cell needs to show its name in full, from the widths of its texts.
+/// Mirrors the header layout: padding + badge + [key] + name + [sort glyph] + arrow,
+/// a gap between each of them, then the resizer and the right border.
+fn header_cell_width(badge_w: f32, name_w: f32, is_pk: bool, sort_glyph_w: Option<f32>) -> f32 {
+    let mut items_w = badge_w + name_w + HEADER_ARROW_WIDTH;
+    let mut gaps = 2.0;
+    if is_pk {
+        items_w += HEADER_KEY_WIDTH;
+        gaps += 1.0;
+    }
+    if let Some(w) = sort_glyph_w {
+        items_w += w;
+        gaps += 1.0;
+    }
+    2.0 * HEADER_PADDING_X + items_w + gaps * HEADER_GAP + HEADER_RESIZER_WIDTH + 1.0
+}
+
 pub fn dbeaver_type_badge(data_type: mem_engine::DataType) -> &'static str {
     match data_type {
         mem_engine::DataType::Text | mem_engine::DataType::Varchar => "AZ",
@@ -129,6 +154,10 @@ pub struct VirtualDataGrid {
     pub editing_cell: Option<CellEdit>,
     /// Ordering applied to the query; kept when a new result replaces the pager
     pub ordering: Option<ColumnOrder>,
+    /// Header widths measured with the window's fonts; the character estimate stands in until then
+    pub header_widths: Vec<f32>,
+    /// Pager and ordering `header_widths` were measured for
+    header_widths_key: Option<(usize, Option<ColumnOrder>)>,
     pub horizontal_scroll_handle: ScrollHandle,
     pub vertical_scroll_handle: UniformListScrollHandle,
 }
@@ -153,6 +182,8 @@ impl VirtualDataGrid {
             changeset_history: History::new(),
             editing_cell: None,
             ordering: None,
+            header_widths: Vec::new(),
+            header_widths_key: None,
             horizontal_scroll_handle: ScrollHandle::new(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
         };
@@ -163,6 +194,8 @@ impl VirtualDataGrid {
     pub fn set_pager(&mut self, pager: Arc<QueryResultPager>) {
         self.pager = Some(pager);
         self.manual_column_widths.clear();
+        self.header_widths.clear();
+        self.header_widths_key = None;
         self.recalculate_all_widths();
         self.selection.clear();
         self.changeset.clear();
@@ -297,14 +330,15 @@ impl VirtualDataGrid {
         let sample_rows = pager.total_rows().min(WIDTH_SAMPLE_ROWS);
 
         for (col_idx, col) in pager.columns.iter().enumerate() {
-            // 1. Column header width: name + DBeaver data type badge + key icon + dropdown arrow + padding.
-            // Names are measured at a heavier weight than the estimator assumes, hence the 10% margin.
-            let name_w = Self::estimate_text_width(&col.name, 12.0) * 1.1;
-            let badge_str = dbeaver_type_badge(col.data_type);
-            let badge_w = Self::estimate_text_width(badge_str, 10.0);
-            let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
-            let key_w = if is_pk { 17.0 } else { 0.0 };
-            let header_w = name_w + badge_w + key_w + 50.0;
+            // 1. Column header width; until it is measured with real fonts, estimated per character.
+            // Name and badge render heavier than the estimator assumes, hence the 10% margin.
+            let header_w = self.header_widths.get(col_idx).copied().unwrap_or_else(|| {
+                let name_w = Self::estimate_text_width(&col.name, 12.0) * 1.1;
+                let badge_w = Self::estimate_text_width(dbeaver_type_badge(col.data_type), 10.0) * 1.1;
+                let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
+                let is_sorted = self.ordering.as_ref().is_some_and(|o| o.column == col.name);
+                header_cell_width(badge_w, name_w, is_pk, is_sorted.then_some(9.0))
+            });
 
             // 2. Data sample width across up to 100 rows
             let mut max_cell_w = 0.0f32;
@@ -331,6 +365,60 @@ impl VirtualDataGrid {
         }
 
         (snug_widths, natural_widths)
+    }
+
+    /// Measures the column headers with the window's fonts, once per result and ordering, and
+    /// widens auto-sized columns whose header the per-character estimate underrated.
+    /// Only ever widens, so a re-ordered result keeps its widths apart from room for the sort glyph.
+    pub fn measure_header_widths(&mut self, window: &Window) {
+        let Some(pager) = self.pager.clone() else {
+            return;
+        };
+        let key = (Arc::as_ptr(&pager) as usize, self.ordering.clone());
+        if self.header_widths_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.header_widths_key = Some(key);
+
+        let base = window.text_style();
+        let text_width = |text: &str, size: f32, weight: FontWeight| -> f32 {
+            let run = TextRun {
+                len: text.len(),
+                font: Font { weight, ..base.font() },
+                color: base.color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let line = window.text_system().shape_line(SharedString::from(text.to_string()), px(size), &[run], None);
+            f32::from(line.width).ceil()
+        };
+
+        self.header_widths = pager
+            .columns
+            .iter()
+            .map(|col| {
+                let badge_w = text_width(dbeaver_type_badge(col.data_type), 10.0, FontWeight::BOLD);
+                let name_w = text_width(&col.name, 12.0, FontWeight::SEMIBOLD);
+                let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
+                let sort_glyph = self
+                    .ordering
+                    .as_ref()
+                    .filter(|o| o.column == col.name)
+                    .map(|o| if o.descending { "↓" } else { "↑" });
+                let sort_w = sort_glyph.map(|g| text_width(g, 12.0, FontWeight::BOLD));
+                header_cell_width(badge_w, name_w, is_pk, sort_w)
+            })
+            .collect();
+
+        if self.content_widths.len() != self.header_widths.len() || self.natural_widths.len() != self.header_widths.len() {
+            return;
+        }
+        for (c, &header_w) in self.header_widths.iter().enumerate() {
+            self.natural_widths[c] = self.natural_widths[c].max(header_w);
+            self.content_widths[c] = self.content_widths[c].max(header_w.min(MAX_AUTO_COL_WIDTH));
+        }
+        self.apply_viewport_distribution();
     }
 
     /// Calculate content-fit widths for each column based on header text & sampled cell data
@@ -555,7 +643,7 @@ impl VirtualDataGrid {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .w(px(14.0))
+                    .w(px(HEADER_ARROW_WIDTH))
                     .h(px(14.0))
                     .rounded_xs()
                     .text_size(px(8.5))
@@ -590,9 +678,10 @@ impl VirtualDataGrid {
                                 .flex_1()
                                 .min_w_0()
                                 .items_center()
-                                .gap_1_5()
+                                // Spacing in px: gpui's `gap_1_5` is 20% of the width, not Tailwind's 6px
+                                .gap(px(HEADER_GAP))
                                 .h_full()
-                                .px_2()
+                                .px(px(HEADER_PADDING_X))
                                 .overflow_hidden()
                                 .child(
                                     div()
@@ -602,7 +691,7 @@ impl VirtualDataGrid {
                                         .text_color(rgb(0x58a6ff))
                                         .child(badge_str)
                                 )
-                                .children(is_pk.then(|| img("icons/key.svg").flex_none().w(px(11.0)).h(px(11.0))))
+                                .children(is_pk.then(|| img("icons/key.svg").flex_none().w(px(HEADER_KEY_WIDTH)).h(px(11.0))))
                                 .child(
                                     div()
                                         .flex_1()
@@ -1183,6 +1272,25 @@ mod tests {
         assert_eq!(grid.cell_value(0, 1).as_deref(), Some("Alicia"));
         grid.set_pager(pager);
         assert!(!grid.step_staged_edits(false), "a new result starts with no history");
+    }
+
+    #[test]
+    fn test_header_wider_than_cells_sets_the_column_width() {
+        let cols = vec![ColumnMeta::new("username", DataType::Text)];
+        let pager = Arc::new(QueryResultPager::new(cols).unwrap());
+        pager.append_row(vec![Some(&b"FRONTENDUSER"[..])]).unwrap();
+        let mut grid = VirtualDataGrid::new(None, Theme::dark());
+        grid.set_pager(pager);
+
+        // Measured header widths replace the estimate, so the full name fits
+        grid.header_widths = vec![240.0];
+        grid.recalculate_all_widths();
+        assert_eq!(grid.column_widths[0], 240.0);
+
+        // Double-click auto-fit lands on the same width after a manual resize
+        grid.set_column_width(0, 80.0);
+        grid.auto_fit_single_column(0);
+        assert_eq!(grid.column_widths[0], 240.0);
     }
 
     #[test]
