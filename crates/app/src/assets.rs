@@ -398,6 +398,32 @@ mod tests {
         crate::workspace::TabState::table(7, "public", "users", Theme::dark(), cache)
     }
 
+    fn sample_script_tab(text: &str) -> crate::workspace::TabState {
+        use crate::workspace::{ScriptFile, TabState};
+        use ui_core::theme::Theme;
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        let script = ScriptFile {
+            path: std::path::PathBuf::from("/tmp/Script-4.sql"),
+            connection_id: "pg".to_string(),
+            name: "Script-4".to_string(),
+            modified: std::time::SystemTime::now(),
+            preview: String::new(),
+        };
+        TabState::script(3, &script, text, Theme::dark(), cache)
+    }
+
+    #[test]
+    fn test_script_tab_title_text_and_dirty_flag_come_from_its_file() {
+        let mut tab = sample_script_tab("SELECT 1;");
+        assert_eq!(tab.title, "Script-4");
+        assert_eq!(tab.connection_id.as_deref(), Some("pg"));
+        assert_eq!(tab.editor.buffer.text(), "SELECT 1;");
+        assert!(!tab.is_dirty());
+        tab.editor.insert_text("\nSELECT 2;");
+        assert!(tab.is_dirty());
+        assert!(!sample_table_tab().is_dirty());
+    }
+
     #[test]
     fn test_failed_run_keeps_its_message_until_the_next_run() {
         use db_wire::StreamEvent;
@@ -413,11 +439,8 @@ mod tests {
 
     #[test]
     fn test_script_fetch_query_pages_selects_and_runs_other_statements_as_written() {
-        use crate::workspace::{script_fetch_query, TabState};
-        use ui_core::theme::Theme;
-
-        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
-        let mut tab = TabState::script(1, "SQL Script 1".to_string(), Theme::dark(), cache);
+        use crate::workspace::script_fetch_query;
+        let mut tab = sample_script_tab("");
         tab.fetch.size = 100;
 
         tab.script_sql = Some("SELECT * FROM users;".to_string());
@@ -439,9 +462,7 @@ mod tests {
 
     #[test]
     fn test_script_tabs_start_empty_with_the_editor_focused() {
-        use ui_core::theme::Theme;
-        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
-        let tab = crate::workspace::TabState::script(3, "SQL Script 1".to_string(), Theme::dark(), cache);
+        let tab = sample_script_tab("");
         assert!(tab.is_script());
         assert!(tab.editor_focused);
         assert_eq!(tab.editor.buffer.text(), "");

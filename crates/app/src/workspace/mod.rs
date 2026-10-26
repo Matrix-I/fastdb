@@ -106,8 +106,8 @@ pub struct Workspace {
     pub query_generation: u64,
     pub cancel_requested: bool,
     pub next_tab_id: u64,
-    /// Number given to the next SQL script tab's title
-    pub next_script_number: usize,
+    /// Saved SQL scripts, one folder per connection
+    pub script_store: ScriptStore,
 
     // Real Database Connection Setup State
     pub saved_connections: Vec<SavedConnection>,
@@ -236,7 +236,7 @@ impl Workspace {
             query_generation: 0,
             cancel_requested: false,
             next_tab_id: 1,
-            next_script_number: 1,
+            script_store: ScriptStore::new(ScriptStore::default_root()),
 
             // Connection Setup Form Defaults
             saved_connections,
@@ -308,6 +308,7 @@ impl Workspace {
                 cx.background_executor().timer(std::time::Duration::from_millis(530)).await;
                 if this.update(cx, |this, cx| {
                     this.cursor_visible = !this.cursor_visible;
+                    this.save_dirty_scripts();
                     cx.notify();
                 }).is_err() {
                     break;

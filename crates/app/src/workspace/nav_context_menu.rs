@@ -102,11 +102,8 @@ impl Workspace {
                 self.connect_saved_by_id(conn_id, cx);
                 self.refresh_connection(cx);
             }
-            NavMenuAction::OpenSqlEditor => {
-                // A script runs on the active connection, so switch to a parked one first
-                self.connect_saved_by_id(conn_id, cx);
-                self.open_sql_script();
-            }
+            // Opening the script switches to its connection
+            NavMenuAction::OpenSqlEditor => self.open_sql_script(Some(conn_id), cx),
         }
     }
 }

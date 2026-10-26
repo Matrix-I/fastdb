@@ -70,6 +70,7 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.active_tab = i;
                                 this.is_filter_focused = false;
+                                this.activate_script_connection(cx);
                                 cx.notify();
                             }))
                             .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -116,7 +117,7 @@ impl Workspace {
                         .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_primary))
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_sql_script();
+                            this.open_sql_script(None, cx);
                             cx.notify();
                         }))
                         .child(img("icons/sql_script.svg").w(px(12.0)).h(px(12.0)))

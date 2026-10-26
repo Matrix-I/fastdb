@@ -3,7 +3,9 @@ use std::time::{Duration, Instant};
 use db_wire::QueryResultPager;
 
 use super::*;
-use super::sql_script::{paged_select, script_title};
+use std::path::PathBuf;
+
+use super::sql_script::paged_select;
 
 /// Rows fetched per round trip until the user picks another fetch size
 pub const DEFAULT_FETCH_SIZE: usize = 200;
@@ -31,6 +33,12 @@ pub struct TabState {
     pub last_error: Option<String>,
     /// In a script tab, whether keys go to the editor rather than the result grid
     pub editor_focused: bool,
+    /// File a script tab is saved to
+    pub script_path: Option<PathBuf>,
+    /// Saved connection a script tab runs on
+    pub connection_id: Option<String>,
+    /// Text last written to the script file, to tell whether the editor has unsaved changes
+    pub saved_text: String,
 }
 
 /// DBeaver-style incremental fetching: the first run reads `size` rows, and reaching the
@@ -178,15 +186,23 @@ impl TabState {
         }
     }
 
-    /// Free-form SQL script tab with an empty editor that has the keyboard
-    pub fn script(id: u64, title: String, theme: Theme, cache: Arc<SchemaCache>) -> Self {
+    /// Tab editing the saved script `script`, whose file holds `text`; the editor has the keyboard
+    pub fn script(id: u64, script: &ScriptFile, text: &str, theme: Theme, cache: Arc<SchemaCache>) -> Self {
         Self {
-            title,
-            editor: SqlEditorView::new("", theme.clone(), Some(cache)),
+            title: script.name.clone(),
+            editor: SqlEditorView::new(text, theme.clone(), Some(cache)),
             grid: VirtualDataGrid::new(None, theme),
             editor_focused: true,
+            script_path: Some(script.path.clone()),
+            connection_id: Some(script.connection_id.clone()),
+            saved_text: text.to_string(),
             ..Self::blank(id)
         }
+    }
+
+    /// Whether a script tab's editor holds changes not yet written to its file
+    pub fn is_dirty(&self) -> bool {
+        self.script_path.is_some() && self.editor.buffer.text() != self.saved_text
     }
 
     /// Whether this tab runs SQL typed in its editor rather than reading a table
@@ -214,6 +230,9 @@ impl TabState {
             script_sql: None,
             last_error: None,
             editor_focused: false,
+            script_path: None,
+            connection_id: None,
+            saved_text: String::new(),
         }
     }
 
@@ -403,6 +422,7 @@ impl Workspace {
         if self.tabs.is_empty() {
             return;
         }
+        self.save_script_tab(self.active_tab);
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.fetch.commit_size_text();
             if tab.is_script() {
@@ -545,15 +565,72 @@ impl Workspace {
         .detach();
     }
 
-    /// Opens an empty SQL script tab for the active connection (Cmd+], "+ SQL")
-    pub fn open_sql_script(&mut self) {
-        let title = script_title(self.next_script_number);
-        self.next_script_number += 1;
-        let id = self.allocate_tab_id();
-        self.tabs.push(TabState::script(id, title, self.theme.clone(), self.schema_cache.clone()));
-        self.active_tab = self.tabs.len() - 1;
+    /// "+ SQL", Cmd+] and the navigator's "SQL Editor": opens the latest script of
+    /// `conn_id` (the active connection when `None`), creating one when it has none, or
+    /// offers the script chooser when the latest one is already open
+    pub fn open_sql_script(&mut self, conn_id: Option<&str>, cx: &mut Context<Self>) {
+        let Some(conn_id) = conn_id.map(str::to_string).or_else(|| self.active_connection_id.clone()) else {
+            self.show_connection_modal = true;
+            return;
+        };
+        let script = match self.script_store.most_recent(&conn_id) {
+            Some(recent) if !self.tabs.iter().any(|t| t.script_path.as_deref() == Some(recent.path.as_path())) => recent,
+            _ => match self.script_store.create(&conn_id) {
+                Ok(script) => script,
+                Err(e) => {
+                    tracing::warn!("{e:#}");
+                    return;
+                }
+            },
+        };
+        self.open_script_file(&script, cx);
+    }
+
+    /// Activates the tab showing `script`, or reads it into a new tab, on its connection
+    pub fn open_script_file(&mut self, script: &ScriptFile, cx: &mut Context<Self>) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.script_path.as_deref() == Some(script.path.as_path())) {
+            self.active_tab = idx;
+        } else {
+            let text = match self.script_store.read(script) {
+                Ok(text) => text,
+                Err(e) => {
+                    tracing::warn!("{e:#}");
+                    return;
+                }
+            };
+            let id = self.allocate_tab_id();
+            self.tabs.push(TabState::script(id, script, &text, self.theme.clone(), self.schema_cache.clone()));
+            self.active_tab = self.tabs.len() - 1;
+        }
         self.is_filter_focused = false;
         self.blur_fetch_size();
+        self.activate_script_connection(cx);
+    }
+
+    /// Makes the active script tab's connection the active connection, so it runs there
+    pub fn activate_script_connection(&mut self, cx: &mut Context<Self>) {
+        let Some(conn_id) = self.tabs.get(self.active_tab).and_then(|t| t.connection_id.clone()) else { return };
+        if self.active_connection_id.as_deref() != Some(conn_id.as_str()) || !self.is_connected {
+            self.connect_saved_by_id(&conn_id, cx);
+        }
+    }
+
+    /// Writes a script tab's text to its file when it changed; a failure shows in its banner
+    pub fn save_script_tab(&mut self, idx: usize) {
+        let Some(tab) = self.tabs.get_mut(idx).filter(|t| t.is_dirty()) else { return };
+        let Some(path) = tab.script_path.clone() else { return };
+        let text = tab.editor.buffer.text();
+        match self.script_store.write(&path, &text) {
+            Ok(()) => tab.saved_text = text,
+            Err(e) => tab.last_error = Some(format!("{e:#}")),
+        }
+    }
+
+    /// Saves every script tab with unsaved changes
+    pub fn save_dirty_scripts(&mut self) {
+        for idx in 0..self.tabs.len() {
+            self.save_script_tab(idx);
+        }
     }
 
     pub fn close_tab(&mut self, index: usize) {

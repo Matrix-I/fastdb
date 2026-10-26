@@ -1,4 +1,4 @@
-//! Helpers for SQL script tabs: paging a free-form SELECT like a table and naming the tabs.
+//! Helpers for SQL script tabs: paging a free-form SELECT like a table.
 
 /// Wraps a plain SELECT in a sub-select reading `size` rows from `offset`, so a script's
 /// result is fetched in chunks like a table's. Returns `None` for any other statement, or
@@ -29,14 +29,10 @@ pub(super) fn paged_select(statement: &str, size: usize, offset: u64) -> Option<
     Some(sql)
 }
 
-/// Title of the `number`-th SQL script tab opened in this window
-pub(super) fn script_title(number: usize) -> String {
-    format!("SQL Script {number}")
-}
 
 #[cfg(test)]
 mod tests {
-    use super::{paged_select, script_title};
+    use super::paged_select;
 
     #[test]
     fn plain_selects_are_paged() {
@@ -72,9 +68,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn script_titles_count_up() {
-        assert_eq!(script_title(1), "SQL Script 1");
-        assert_eq!(script_title(12), "SQL Script 12");
-    }
 }

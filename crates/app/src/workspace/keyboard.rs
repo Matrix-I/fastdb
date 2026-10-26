@@ -10,6 +10,7 @@ impl Workspace {
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("q")
         {
+            self.save_dirty_scripts();
             cx.quit();
             return;
         }
@@ -33,7 +34,7 @@ impl Workspace {
             && event.keystroke.key == "]"
             && !self.show_connection_modal
         {
-            self.open_sql_script();
+            self.open_sql_script(None, cx);
             cx.notify();
             return;
         }

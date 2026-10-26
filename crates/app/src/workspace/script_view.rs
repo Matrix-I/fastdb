@@ -13,6 +13,12 @@ impl Workspace {
         let theme = &theme;
         let is_running_query = self.is_running_query;
         let caret_visible = self.cursor_visible;
+        let connection_name = self.tabs[tab_idx]
+            .connection_id
+            .as_deref()
+            .and_then(|id| self.saved_connections.iter().find(|c| c.id == id))
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
 
         let toolbar = div()
             .flex()
@@ -56,9 +62,21 @@ impl Workspace {
             )
             .child(
                 div()
+                    .flex_1()
                     .text_size(px(11.0))
                     .text_color(theme.text_muted)
                     .child("Runs the statement under the caret"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1p5()
+                    .text_size(px(11.5))
+                    .text_color(theme.text_secondary)
+                    .child(img("icons/database.svg").w(px(13.0)).h(px(13.0)))
+                    .child(connection_name),
             );
 
         let pick = self.script_editor_pick(tab_idx, cx);

@@ -56,6 +56,9 @@ impl Workspace {
         let len = self.tabs.len();
         let old_active = self.active_tab;
         let new_active = active_after_close(len, old_active, fallback, &keep);
+        for idx in (0..len).filter(|&i| !keep(i)) {
+            self.save_script_tab(idx);
+        }
         let mut idx = 0;
         self.tabs.retain(|_| {
             let kept = keep(idx);
