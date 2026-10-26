@@ -31,6 +31,9 @@ pub struct SqlEditorView {
     pub caret_moved: bool,
     /// Scroll position of the line list; the caret line is scrolled into view after it moves
     pub scroll_handle: ScrollHandle,
+    /// Quote put around completed names that are not plain lowercase identifiers:
+    /// `"` for PostgreSQL and SQLite, a backtick for MySQL
+    pub identifier_quote: char,
 }
 
 impl SqlEditorView {
@@ -45,6 +48,7 @@ impl SqlEditorView {
             show_completions: false,
             caret_moved: true,
             scroll_handle: ScrollHandle::new(),
+            identifier_quote: '"',
         }
     }
 
@@ -160,9 +164,20 @@ impl SqlEditorView {
         let Some(item) = self.completion_items.get(self.selected_completion).cloned() else {
             return false;
         };
-        let start = self.word_start();
+        let mut start = self.word_start();
         let end = self.buffer.cursor_offset();
-        self.buffer.replace_range(start, end, &item.label);
+        let text = match item.kind {
+            CompletionKind::Table | CompletionKind::Column if needs_quotes(&item.label) => {
+                // An opening quote typed before the word is replaced, not doubled
+                if self.buffer.text()[..start].ends_with(self.identifier_quote) {
+                    start -= self.identifier_quote.len_utf8();
+                }
+                let q = self.identifier_quote;
+                format!("{q}{}{q}", item.label.replace(q, &format!("{q}{q}")))
+            }
+            _ => item.label.clone(),
+        };
+        self.buffer.replace_range(start, end, &text);
         self.caret_moved = true;
         self.hide_completions();
         true
@@ -288,9 +303,7 @@ impl SqlEditorView {
 
     fn render_completion_popup(&self, top: f32, left: f32, theme: &Theme) -> impl IntoElement {
         let mut popup = div()
-            .absolute()
-            .top(px(top))
-            .left(px(left))
+            .occlude()
             .w(px(280.0))
             .bg(theme.bg_surface)
             .border_1()
@@ -343,8 +356,22 @@ impl SqlEditorView {
                     )
             );
         }
-        popup
+        // Painted after everything else (like the filter bar's list), so the rest of the
+        // window cannot cover it
+        div()
+            .absolute()
+            .top(px(top))
+            .left(px(left))
+            .child(deferred(anchored().snap_to_window().child(popup)).with_priority(1))
     }
+}
+
+/// Whether a table or column name must be quoted to keep its case and characters:
+/// anything but a lowercase letter or `_` followed by lowercase letters, digits and `_`
+fn needs_quotes(name: &str) -> bool {
+    let mut chars = name.chars();
+    let starts_plain = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c == '_');
+    !(starts_plain && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
 }
 
 /// Colour of a word in the simple keyword highlighter
@@ -574,6 +601,50 @@ mod tests {
         assert!(!ed.handle_key(&cmd("v")));
         assert!(!ed.handle_key(&cmd("enter")));
         assert_eq!(ed.buffer.text(), "SELECT 1");
+    }
+
+    fn mixed_case_editor() -> SqlEditorView {
+        let cache = SchemaCache::new().unwrap();
+        cache.add_table("public", "apiClient", "BASE TABLE").unwrap();
+        cache.add_table("public", "users", "BASE TABLE").unwrap();
+        cache.add_column("public", "apiClient", "clientId", "varchar", false).unwrap();
+        SqlEditorView::new("", Theme::dark(), Some(Arc::new(cache)))
+    }
+
+    fn accept(ed: &mut SqlEditorView, label: &str) {
+        ed.selected_completion = ed.completion_items.iter().position(|i| i.label == label).unwrap();
+        assert!(ed.handle_key(&key("tab")));
+    }
+
+    #[test]
+    fn mixed_case_names_are_quoted_when_completed() {
+        let mut ed = mixed_case_editor();
+        type_str(&mut ed, "SELECT * FROM api");
+        accept(&mut ed, "apiClient");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\"");
+
+        type_str(&mut ed, ".");
+        accept(&mut ed, "clientId");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\".\"clientId\"");
+    }
+
+    #[test]
+    fn plain_lowercase_names_and_keywords_stay_unquoted() {
+        let mut ed = mixed_case_editor();
+        type_str(&mut ed, "SEL");
+        accept(&mut ed, "SELECT");
+        type_str(&mut ed, " * FROM us");
+        accept(&mut ed, "users");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM users");
+    }
+
+    #[test]
+    fn an_opening_quote_already_typed_is_not_doubled() {
+        let mut ed = mixed_case_editor();
+        ed.identifier_quote = '`';
+        type_str(&mut ed, "SELECT * FROM `api");
+        accept(&mut ed, "apiClient");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM `apiClient`");
     }
 
     #[test]

@@ -175,6 +175,7 @@ impl Workspace {
                 }
             } else if tab.is_script() && tab.editor_focused {
                 let cmd = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
+                tab.editor.identifier_quote = if self.selected_driver_kind == DbDriverKind::MySql { '`' } else { '"' };
                 if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
                     if undo_key == UndoKey::Redo { tab.editor.redo() } else { tab.editor.undo() };
                 } else if cmd && event.keystroke.key.eq_ignore_ascii_case("v") {

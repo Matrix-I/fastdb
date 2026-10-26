@@ -39,7 +39,8 @@ pub fn get_completions(
     // Check if cursor follows a dot (e.g. `table.`, `users.`)
     if let Some(last_dot_pos) = prefix.rfind('.') {
         let after_dot = &prefix[last_dot_pos + 1..];
-        let before_dot = prefix[..last_dot_pos].trim_end();
+        // A quoted name ("apiClient" or `apiClient`) loses its closing quote here
+        let before_dot = prefix[..last_dot_pos].trim_end().trim_end_matches(['"', '`']);
 
         // Extract identifier before dot
         let table_ident = before_dot
@@ -146,5 +147,17 @@ mod tests {
         // 3. Column completion after dot
         let res3 = get_completions("SELECT customers.", 17, &cache);
         assert!(res3.iter().any(|item| item.label == "email"));
+    }
+
+    #[test]
+    fn test_column_completion_after_a_quoted_table() {
+        let cache = SchemaCache::new().unwrap();
+        cache.add_table("public", "apiClient", "BASE TABLE").unwrap();
+        cache.add_column("public", "apiClient", "clientId", "varchar", false).unwrap();
+
+        for sql in ["SELECT \"apiClient\".", "SELECT `apiClient`.", "SELECT \"apiClient\".cli"] {
+            let res = get_completions(sql, sql.len(), &cache);
+            assert!(res.iter().any(|item| item.label == "clientId"), "{sql}");
+        }
     }
 }
