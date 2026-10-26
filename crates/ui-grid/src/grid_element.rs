@@ -10,8 +10,8 @@ use crate::changeset::{Changeset, RowRef};
 use crate::selection::GridSelection;
 
 pub const MIN_COL_WIDTH: f32 = 75.0;
-pub const MAX_AUTO_COL_WIDTH: f32 = 1200.0;
-pub const MAX_EXPANDED_COL_WIDTH: f32 = 2500.0;
+/// Widest a column auto-fits to; longer content is cut with an ellipsis until the user drags it wider
+pub const MAX_AUTO_COL_WIDTH: f32 = 480.0;
 pub const GUTTER_WIDTH: f32 = 52.0;
 /// Number of leading rows measured when auto-fitting column widths
 pub const WIDTH_SAMPLE_ROWS: u64 = 100;
@@ -23,6 +23,24 @@ const HEADER_ARROW_WIDTH: f32 = 14.0;
 const HEADER_KEY_WIDTH: f32 = 11.0;
 /// Width of the drag handle the app appends to every header cell
 const HEADER_RESIZER_WIDTH: f32 = 8.0;
+// Data cell geometry, kept in sync with the cells built in `render_grid_interactive`
+const CELL_PADDING_X: f32 = 8.0;
+/// Chars of a cell measured for its width; anything longer is past `MAX_AUTO_COL_WIDTH` anyway
+const CELL_MEASURE_CHARS: usize = 200;
+
+/// Width a data cell needs to show `text_w` px of text in full: padding, right border and
+/// a pixel of slack so sub-pixel rounding never triggers the ellipsis
+fn data_cell_width(text_w: f32) -> f32 {
+    text_w + 2.0 * CELL_PADDING_X + 2.0
+}
+
+/// Leading part of a cell's text that is measured for the column width
+fn cell_measure_sample(text: &str) -> &str {
+    match text.char_indices().nth(CELL_MEASURE_CHARS) {
+        Some((i, _)) => &text[..i],
+        None => text,
+    }
+}
 
 /// Called with (row, col) when a data cell is pressed
 pub type CellMouseDownHandler = Rc<dyn Fn(u64, usize, &MouseDownEvent, &mut Window, &mut App)>;
@@ -142,7 +160,6 @@ pub struct VirtualDataGrid {
     pub viewport_height: f32,
     pub viewport_width: f32,
     pub content_widths: Vec<f32>,
-    pub natural_widths: Vec<f32>,
     pub column_widths: Vec<f32>,
     pub manual_column_widths: HashSet<usize>,
     /// Rows already measured for column widths; grows while results stream in
@@ -158,6 +175,12 @@ pub struct VirtualDataGrid {
     pub header_widths: Vec<f32>,
     /// Pager and ordering `header_widths` were measured for
     header_widths_key: Option<(usize, Option<ColumnOrder>)>,
+    /// Widest data cell per column, measured with the window's fonts over the first
+    /// `cell_widths_rows` rows; the character estimate covers the rows after them
+    pub cell_widths: Vec<f32>,
+    cell_widths_rows: u64,
+    /// The sampled rows changed since `cell_widths` were measured
+    cell_widths_stale: bool,
     pub horizontal_scroll_handle: ScrollHandle,
     pub vertical_scroll_handle: UniformListScrollHandle,
 }
@@ -173,7 +196,6 @@ impl VirtualDataGrid {
             viewport_height: 600.0,
             viewport_width: 1000.0,
             content_widths: Vec::new(),
-            natural_widths: Vec::new(),
             column_widths: Vec::new(),
             manual_column_widths: HashSet::new(),
             width_sampled_rows: 0,
@@ -184,6 +206,9 @@ impl VirtualDataGrid {
             ordering: None,
             header_widths: Vec::new(),
             header_widths_key: None,
+            cell_widths: Vec::new(),
+            cell_widths_rows: 0,
+            cell_widths_stale: false,
             horizontal_scroll_handle: ScrollHandle::new(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
         };
@@ -196,6 +221,8 @@ impl VirtualDataGrid {
         self.manual_column_widths.clear();
         self.header_widths.clear();
         self.header_widths_key = None;
+        self.cell_widths.clear();
+        self.cell_widths_rows = 0;
         self.recalculate_all_widths();
         self.selection.clear();
         self.changeset.clear();
@@ -222,6 +249,9 @@ impl VirtualDataGrid {
         self.pager = Some(pager);
         // The widths already fit the columns; re-measuring the new rows would make them jump
         self.width_sampled_rows = WIDTH_SAMPLE_ROWS;
+        self.cell_widths.clear();
+        self.cell_widths_rows = 0;
+        self.cell_widths_stale = false;
         self.selection.clear();
         self.changeset.clear();
         self.changeset_history.clear();
@@ -317,60 +347,95 @@ impl VirtualDataGrid {
         width
     }
 
-    /// Calculate content-fit widths for each column based on header text & sampled cell data.
-    /// Returns (snug_widths, natural_widths)
-    pub fn calculate_content_and_natural_widths(&self) -> (Vec<f32>, Vec<f32>) {
+    /// Content-fit width of each column, from its header and the sampled cells, capped at `MAX_AUTO_COL_WIDTH`.
+    /// Cells measured with the window's fonts count as measured; the rest are estimated per character.
+    pub fn calculate_content_widths(&self) -> Vec<f32> {
         let Some(ref pager) = self.pager else {
-            return (Vec::new(), Vec::new());
+            return Vec::new();
         };
 
-        let num_cols = pager.num_cols() as usize;
-        let mut snug_widths = Vec::with_capacity(num_cols);
-        let mut natural_widths = Vec::with_capacity(num_cols);
         let sample_rows = pager.total_rows().min(WIDTH_SAMPLE_ROWS);
+        pager
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(col_idx, col)| {
+                // 1. Column header width; until it is measured with real fonts, estimated per character.
+                // Name and badge render heavier than the estimator assumes, hence the 10% margin.
+                let header_w = self.header_widths.get(col_idx).copied().unwrap_or_else(|| {
+                    let name_w = Self::estimate_text_width(&col.name, 12.0) * 1.1;
+                    let badge_w = Self::estimate_text_width(dbeaver_type_badge(col.data_type), 10.0) * 1.1;
+                    let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
+                    let is_sorted = self.ordering.as_ref().is_some_and(|o| o.column == col.name);
+                    header_cell_width(badge_w, name_w, is_pk, is_sorted.then_some(9.0))
+                });
 
-        for (col_idx, col) in pager.columns.iter().enumerate() {
-            // 1. Column header width; until it is measured with real fonts, estimated per character.
-            // Name and badge render heavier than the estimator assumes, hence the 10% margin.
-            let header_w = self.header_widths.get(col_idx).copied().unwrap_or_else(|| {
-                let name_w = Self::estimate_text_width(&col.name, 12.0) * 1.1;
-                let badge_w = Self::estimate_text_width(dbeaver_type_badge(col.data_type), 10.0) * 1.1;
-                let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
-                let is_sorted = self.ordering.as_ref().is_some_and(|o| o.column == col.name);
-                header_cell_width(badge_w, name_w, is_pk, is_sorted.then_some(9.0))
-            });
-
-            // 2. Data sample width across up to 100 rows
-            let mut max_cell_w = 0.0f32;
-            for r in 0..sample_rows {
-                let cell_str = resolve_cell(pager, &self.changeset, r, col_idx).unwrap_or_else(|| "NULL".to_string());
-
-                let sample = if cell_str.len() > 500 {
-                    let idx = cell_str.char_indices().nth(500).map(|(i, _)| i).unwrap_or(cell_str.len());
-                    &cell_str[..idx]
-                } else {
-                    &cell_str
+                // 2. Widest of the sampled cells: measured ones as measured, the rest estimated
+                let (mut max_cell_w, first_estimated) = match self.cell_widths.get(col_idx) {
+                    Some(&w) => (w, self.cell_widths_rows),
+                    None => (0.0f32, 0),
                 };
-
-                let cell_w = Self::estimate_text_width(sample, 12.0) + 26.0;
-                if cell_w > max_cell_w {
-                    max_cell_w = cell_w;
+                for r in first_estimated..sample_rows {
+                    let cell_str = resolve_cell(pager, &self.changeset, r, col_idx).unwrap_or_else(|| "NULL".to_string());
+                    // The estimate runs a little narrow on most fonts, hence the 10% margin
+                    let cell_w = data_cell_width(Self::estimate_text_width(cell_measure_sample(&cell_str), 12.0) * 1.1);
+                    max_cell_w = max_cell_w.max(cell_w);
                 }
-            }
 
-            let natural_w = header_w.max(max_cell_w).max(MIN_COL_WIDTH);
-            let snug_w = natural_w.clamp(MIN_COL_WIDTH, MAX_AUTO_COL_WIDTH);
-            natural_widths.push(natural_w);
-            snug_widths.push(snug_w);
+                header_w.max(max_cell_w).clamp(MIN_COL_WIDTH, MAX_AUTO_COL_WIDTH)
+            })
+            .collect()
+    }
+
+    /// Measures the column headers and the sampled data cells with the window's fonts, so
+    /// auto-sized columns fit their content exactly instead of by the per-character estimate.
+    pub fn measure_widths(&mut self, window: &Window) {
+        self.measure_header_widths(window);
+        self.measure_cell_widths(window);
+    }
+
+    /// Measures the sampled data cells after the sample changed and re-fits the auto-sized columns
+    fn measure_cell_widths(&mut self, window: &Window) {
+        if !self.cell_widths_stale {
+            return;
         }
+        self.cell_widths_stale = false;
+        let Some(pager) = self.pager.clone() else {
+            return;
+        };
 
-        (snug_widths, natural_widths)
+        let base = window.text_style();
+        let font = base.font();
+        let sample_rows = pager.total_rows().min(WIDTH_SAMPLE_ROWS);
+        self.cell_widths = (0..pager.columns.len())
+            .map(|c| {
+                (0..sample_rows)
+                    .map(|r| {
+                        let text = resolve_cell(&pager, &self.changeset, r, c).unwrap_or_else(|| "NULL".to_string());
+                        let text = cell_measure_sample(&text);
+                        let run = TextRun {
+                            len: text.len(),
+                            font: font.clone(),
+                            color: base.color,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        let line = window.text_system().shape_line(SharedString::from(text.to_string()), px(12.0), &[run], None);
+                        data_cell_width(f32::from(line.width).ceil())
+                    })
+                    .fold(0.0f32, f32::max)
+            })
+            .collect();
+        self.cell_widths_rows = sample_rows;
+        self.content_widths = self.calculate_content_widths();
+        self.apply_viewport_distribution();
     }
 
     /// Measures the column headers with the window's fonts, once per result and ordering, and
     /// widens auto-sized columns whose header the per-character estimate underrated.
     /// Only ever widens, so a re-ordered result keeps its widths apart from room for the sort glyph.
-    pub fn measure_header_widths(&mut self, window: &Window) {
+    fn measure_header_widths(&mut self, window: &Window) {
         let Some(pager) = self.pager.clone() else {
             return;
         };
@@ -411,31 +476,25 @@ impl VirtualDataGrid {
             })
             .collect();
 
-        if self.content_widths.len() != self.header_widths.len() || self.natural_widths.len() != self.header_widths.len() {
+        if self.content_widths.len() != self.header_widths.len() {
             return;
         }
         for (c, &header_w) in self.header_widths.iter().enumerate() {
-            self.natural_widths[c] = self.natural_widths[c].max(header_w);
             self.content_widths[c] = self.content_widths[c].max(header_w.min(MAX_AUTO_COL_WIDTH));
         }
         self.apply_viewport_distribution();
     }
 
-    /// Calculate content-fit widths for each column based on header text & sampled cell data
-    pub fn calculate_content_widths(&self) -> Vec<f32> {
-        self.calculate_content_and_natural_widths().0
-    }
-
-    /// Recalculates intrinsic content widths and applies viewport expansion distribution
+    /// Recalculates the content widths and lays the columns out with them; the cells are
+    /// measured with real fonts on the next `measure_widths`
     pub fn recalculate_all_widths(&mut self) {
         self.width_sampled_rows = self
             .pager
             .as_ref()
             .map(|p| p.total_rows().min(WIDTH_SAMPLE_ROWS))
             .unwrap_or(0);
-        let (snug, natural) = self.calculate_content_and_natural_widths();
-        self.content_widths = snug;
-        self.natural_widths = natural;
+        self.cell_widths_stale = self.width_sampled_rows > self.cell_widths_rows;
+        self.content_widths = self.calculate_content_widths();
         self.apply_viewport_distribution();
     }
 
@@ -456,67 +515,29 @@ impl VirtualDataGrid {
         }
     }
 
-    /// Preserves snug content fit for all columns without adding artificial blank whitespace,
-    /// and allows columns with clipped/truncated data to expand into available window space.
+    /// Lays the columns out: each fits its content (up to `MAX_AUTO_COL_WIDTH`) unless the user
+    /// resized it, in which case it keeps that width. Free room in the viewport stays empty.
     pub fn apply_viewport_distribution(&mut self) {
         let num_cols = self.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
         if num_cols == 0 {
             self.column_widths.clear();
             self.content_widths.clear();
-            self.natural_widths.clear();
             return;
         }
 
-        if self.content_widths.len() != num_cols || self.natural_widths.len() != num_cols {
-            let (snug, natural) = self.calculate_content_and_natural_widths();
-            self.content_widths = snug;
-            self.natural_widths = natural;
+        if self.content_widths.len() != num_cols {
+            self.content_widths = self.calculate_content_widths();
         }
 
-        if self.column_widths.len() != num_cols {
-            self.column_widths = self.content_widths.clone();
-        }
-
-        let mut working_widths = Vec::with_capacity(num_cols);
-        let mut manual_sum = 0.0f32;
-        let mut non_manual_content_sum = 0.0f32;
-        let mut capped_cols = Vec::new();
-
-        for c in 0..num_cols {
-            if self.manual_column_widths.contains(&c) {
-                let w = self.column_widths.get(c).copied().unwrap_or(MIN_COL_WIDTH).max(MIN_COL_WIDTH);
-                manual_sum += w;
-                working_widths.push(w);
-            } else {
-                let snug_w = self.content_widths.get(c).copied().unwrap_or(MIN_COL_WIDTH);
-                let nat_w = self.natural_widths.get(c).copied().unwrap_or(snug_w);
-                non_manual_content_sum += snug_w;
-                if nat_w > snug_w + 1.0 {
-                    capped_cols.push(c);
+        self.column_widths = (0..num_cols)
+            .map(|c| {
+                if self.manual_column_widths.contains(&c) {
+                    self.column_widths.get(c).copied().unwrap_or(MIN_COL_WIDTH).max(MIN_COL_WIDTH)
+                } else {
+                    self.content_widths[c]
                 }
-                working_widths.push(snug_w);
-            }
-        }
-
-        let avail_for_cols = (self.viewport_width - GUTTER_WIDTH).max(0.0);
-        let avail_for_non_manual = (avail_for_cols - manual_sum).max(0.0);
-
-        // If available window width exceeds non-manual content sum:
-        // Only expand columns whose content was actually capped/truncated!
-        // Columns whose content is already fully visible (e.g. key) stay snug ("khít")!
-        if !capped_cols.is_empty() && avail_for_non_manual > non_manual_content_sum {
-            let extra = avail_for_non_manual - non_manual_content_sum;
-            let per_capped = extra / capped_cols.len() as f32;
-            for &c in &capped_cols {
-                let base_w = working_widths[c];
-                let nat_w = self.natural_widths.get(c).copied().unwrap_or(base_w);
-                let max_needed = (nat_w - base_w).max(0.0);
-                let added = per_capped.min(max_needed).min(MAX_EXPANDED_COL_WIDTH - base_w);
-                working_widths[c] = (base_w + added).clamp(MIN_COL_WIDTH, MAX_EXPANDED_COL_WIDTH);
-            }
-        }
-
-        self.column_widths = working_widths;
+            })
+            .collect();
     }
 
     /// Manually resize a column with the mouse, pinning its width
@@ -530,9 +551,9 @@ impl VirtualDataGrid {
     /// Double-click action: resets a column to auto-fit its content and unpins it
     pub fn auto_fit_single_column(&mut self, col: usize) {
         self.manual_column_widths.remove(&col);
-        let (snug, natural) = self.calculate_content_and_natural_widths();
-        self.content_widths = snug;
-        self.natural_widths = natural;
+        // A refilled result has no measured cells yet; measure them on the next frame
+        self.cell_widths_stale |= self.cell_widths.is_empty();
+        self.content_widths = self.calculate_content_widths();
         self.apply_viewport_distribution();
     }
 
@@ -809,7 +830,7 @@ impl VirtualDataGrid {
                                     .items_center()
                                     .w(px(width))
                                     .h_full()
-                                    .px_2()
+                                    .px(px(CELL_PADDING_X))
                                     .border_r_1()
                                     .border_color(theme_border)
                                     .text_size(px(12.0))
@@ -1379,15 +1400,39 @@ mod tests {
         ]).unwrap();
 
         let mut grid = VirtualDataGrid::new(Some(pager), Theme::dark());
-        grid.viewport_width = 800.0;
+        grid.viewport_width = 1600.0;
         grid.apply_viewport_distribution();
 
-        let total_cols_w: f32 = grid.column_widths.iter().sum();
-        let total_w = total_cols_w + GUTTER_WIDTH;
+        // Long data is capped, not stretched into the free room; dragging is the way to widen it
+        assert_eq!(grid.column_widths[1], MAX_AUTO_COL_WIDTH);
+        grid.set_column_width(1, 900.0);
+        grid.update_viewport_width(1000.0);
+        assert_eq!(grid.column_widths[1], 900.0);
+    }
 
-        // Long data should naturally expand and total width should exceed viewport width of 800px
-        assert!(grid.column_widths[1] > 600.0, "long JSON column should expand to show content");
-        assert!(total_w > 800.0, "total content width ({}) should exceed viewport (800) enabling horizontal scroll", total_w);
+    #[test]
+    fn test_measured_cells_replace_the_estimate() {
+        let cols = vec![ColumnMeta::new("id", DataType::Uuid), ColumnMeta::new("note", DataType::Text)];
+        let pager = Arc::new(QueryResultPager::new(cols).unwrap());
+        pager.append_row(vec![Some(&b"ec6401e5-514b-4450-98e2-10fb73a65dd6"[..]), Some(&b"x"[..])]).unwrap();
+        let mut grid = VirtualDataGrid::new(None, Theme::dark());
+        grid.set_pager(Arc::clone(&pager));
+        assert!(grid.cell_widths_stale);
+
+        // What the window's fonts measured wins over the estimate, wider or narrower
+        grid.cell_widths = vec![310.0, 20.0];
+        grid.cell_widths_rows = 1;
+        grid.cell_widths_stale = false;
+        grid.content_widths = grid.calculate_content_widths();
+        grid.apply_viewport_distribution();
+        assert_eq!(grid.column_widths[0], 310.0);
+
+        // Rows streamed in after the measurement are estimated until measured again
+        pager.append_row(vec![Some(&b"1"[..]), Some("w".repeat(300).as_bytes())]).unwrap();
+        grid.on_rows_appended();
+        assert!(grid.cell_widths_stale);
+        assert_eq!(grid.column_widths[0], 310.0);
+        assert_eq!(grid.column_widths[1], MAX_AUTO_COL_WIDTH);
     }
 
     #[test]

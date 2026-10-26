@@ -101,7 +101,7 @@ impl Workspace {
                             let tab = &mut self.tabs[active_tab_idx];
                             tab.grid.update_viewport_width(available_viewport_w);
                             tab.grid.update_viewport_height(available_viewport_h);
-                            tab.grid.measure_header_widths(window);
+                            tab.grid.measure_widths(window);
 
                             // Scrolling onto the last row reads the next chunk, as DBeaver does
                             if tab.fetch.has_more && !is_running_query && is_scrolled_to_bottom(&tab.grid) {
