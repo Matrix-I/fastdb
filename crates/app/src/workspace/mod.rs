@@ -23,6 +23,7 @@ mod panel_resize;
 mod panes;
 mod properties_panel;
 mod query;
+mod script_chooser;
 mod script_store;
 mod script_view;
 mod sql_script;
@@ -37,6 +38,7 @@ mod widgets;
 pub use column_menu::ColumnMenu;
 pub use filter_suggest::FilterSuggest;
 pub use panes::Panes;
+pub use script_chooser::ScriptChooser;
 pub use script_store::{filter_scripts, ScriptFile, ScriptStore};
 pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
@@ -108,6 +110,8 @@ pub struct Workspace {
     pub next_tab_id: u64,
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
+    /// "Choose SQL script" dialog, if open
+    pub script_chooser: Option<ScriptChooser>,
 
     // Real Database Connection Setup State
     pub saved_connections: Vec<SavedConnection>,
@@ -237,6 +241,7 @@ impl Workspace {
             cancel_requested: false,
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),
+            script_chooser: None,
 
             // Connection Setup Form Defaults
             saved_connections,
@@ -413,6 +418,9 @@ impl Render for Workspace {
         // 4. Modal Dialog: Database Connection Setup
         if self.show_connection_modal {
             root = root.child(self.render_connection_dialog(cx));
+        }
+        if self.script_chooser.is_some() {
+            root = root.child(self.render_script_chooser(cx));
         }
 
         root

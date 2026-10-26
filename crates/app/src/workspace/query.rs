@@ -574,8 +574,12 @@ impl Workspace {
             return;
         };
         let script = match self.script_store.most_recent(&conn_id) {
-            Some(recent) if !self.tabs.iter().any(|t| t.script_path.as_deref() == Some(recent.path.as_path())) => recent,
-            _ => match self.script_store.create(&conn_id) {
+            Some(recent) if self.tabs.iter().any(|t| t.script_path.as_deref() == Some(recent.path.as_path())) => {
+                self.open_script_chooser(&conn_id);
+                return;
+            }
+            Some(recent) => recent,
+            None => match self.script_store.create(&conn_id) {
                 Ok(script) => script,
                 Err(e) => {
                     tracing::warn!("{e:#}");

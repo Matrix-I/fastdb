@@ -29,6 +29,11 @@ impl Workspace {
             return;
         }
 
+        if self.script_chooser.is_some() {
+            self.handle_script_chooser_key(&event.keystroke, cx);
+            return;
+        }
+
         // Cmd+] (macOS) / Ctrl+] opens a new SQL script, as in DBeaver
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key == "]"
