@@ -55,6 +55,125 @@ impl RopeyBuffer {
         self.open_run = None;
     }
 
+    /// Char index of the caret
+    fn cursor_char(&self) -> usize {
+        self.rope.byte_to_char(self.cursor_offset)
+    }
+
+    /// Moves the caret to a char index, ending the current undo run
+    fn set_cursor_char(&mut self, char_idx: usize) {
+        let char_idx = char_idx.min(self.rope.len_chars());
+        self.set_cursor_offset(self.rope.char_to_byte(char_idx));
+    }
+
+    /// Chars of `line_idx` without its trailing line break
+    fn line_len_chars(&self, line_idx: usize) -> usize {
+        let line = self.rope.line(line_idx);
+        let mut len = line.len_chars();
+        if len > 0 && line.char(len - 1) == '\n' {
+            len -= 1;
+            if len > 0 && line.char(len - 1) == '\r' {
+                len -= 1;
+            }
+        }
+        len
+    }
+
+    fn is_word_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
+    }
+
+    pub fn move_left(&mut self) {
+        self.set_cursor_char(self.cursor_char().saturating_sub(1));
+    }
+
+    pub fn move_right(&mut self) {
+        self.set_cursor_char(self.cursor_char() + 1);
+    }
+
+    /// Alt+Left: to the start of the word before the caret
+    pub fn move_word_left(&mut self) {
+        let mut idx = self.cursor_char();
+        while idx > 0 && !Self::is_word_char(self.rope.char(idx - 1)) {
+            idx -= 1;
+        }
+        while idx > 0 && Self::is_word_char(self.rope.char(idx - 1)) {
+            idx -= 1;
+        }
+        self.set_cursor_char(idx);
+    }
+
+    /// Alt+Right: to the end of the word after the caret
+    pub fn move_word_right(&mut self) {
+        let len = self.rope.len_chars();
+        let mut idx = self.cursor_char();
+        while idx < len && !Self::is_word_char(self.rope.char(idx)) {
+            idx += 1;
+        }
+        while idx < len && Self::is_word_char(self.rope.char(idx)) {
+            idx += 1;
+        }
+        self.set_cursor_char(idx);
+    }
+
+    /// Moves to the same column one line up, or to the start of the text on the first line
+    pub fn move_up(&mut self) {
+        let (line, col) = self.cursor_line_col();
+        if line == 0 {
+            self.set_cursor_offset(0);
+        } else {
+            self.set_cursor_line_col(line - 1, col);
+        }
+    }
+
+    /// Moves to the same column one line down, or to the end of the text on the last line
+    pub fn move_down(&mut self) {
+        let (line, col) = self.cursor_line_col();
+        if line + 1 >= self.rope.len_lines() {
+            self.set_cursor_offset(self.len());
+        } else {
+            self.set_cursor_line_col(line + 1, col);
+        }
+    }
+
+    pub fn move_line_start(&mut self) {
+        let (line, _) = self.cursor_line_col();
+        self.set_cursor_line_col(line, 0);
+    }
+
+    pub fn move_line_end(&mut self) {
+        let (line, _) = self.cursor_line_col();
+        self.set_cursor_line_col(line, usize::MAX);
+    }
+
+    pub fn move_to_start(&mut self) {
+        self.set_cursor_offset(0);
+    }
+
+    pub fn move_to_end(&mut self) {
+        self.set_cursor_offset(self.len());
+    }
+
+    /// Places the caret at `line` and char column `col`, both clamped to the text
+    pub fn set_cursor_line_col(&mut self, line: usize, col: usize) {
+        let line = line.min(self.rope.len_lines().saturating_sub(1));
+        let col = col.min(self.line_len_chars(line));
+        self.set_cursor_char(self.rope.line_to_char(line) + col);
+    }
+
+    /// Replaces the bytes `start..end` with `text` as one undo step and puts the caret after it
+    pub fn replace_range(&mut self, start: usize, end: usize, text: &str) {
+        let end = end.min(self.len());
+        let start = start.min(end);
+        let char_start = self.rope.byte_to_char(start);
+        let char_end = self.rope.byte_to_char(end);
+        let old_text = self.rope.slice(char_start..char_end).to_string();
+        self.rope.remove(char_start..char_end);
+        self.rope.insert(char_start, text);
+        self.record(TextEdit { offset: start, old_text, new_text: text.to_string() }, EditKind::Other);
+        self.cursor_offset = start + text.len();
+    }
+
     /// Records `edit` as an undo step, or folds it into the last step when it continues
     /// a run of typing or of backspaces, so Cmd+Z takes back a word rather than a letter
     fn record(&mut self, edit: TextEdit, kind: EditKind) {
@@ -245,5 +364,79 @@ mod tests {
         assert_eq!(buf.text(), "xyabc");
         buf.undo();
         assert_eq!(buf.text(), "abc");
+    }
+
+    #[test]
+    fn arrows_move_by_char_and_stay_on_char_boundaries() {
+        let mut buf = RopeyBuffer::new("ngày");
+        assert_eq!(buf.cursor_offset(), "ngày".len());
+        buf.move_left();
+        assert_eq!(buf.cursor_offset(), "ngà".len());
+        buf.move_left();
+        assert_eq!(buf.cursor_offset(), "ng".len());
+        buf.move_right();
+        assert_eq!(buf.cursor_offset(), "ngà".len());
+        buf.move_to_start();
+        buf.move_left();
+        assert_eq!(buf.cursor_offset(), 0);
+        buf.move_to_end();
+        buf.move_right();
+        assert_eq!(buf.cursor_offset(), buf.len());
+    }
+
+    #[test]
+    fn up_and_down_keep_the_column_clamped_to_the_line() {
+        let mut buf = RopeyBuffer::new("SELECT id\nFROM t\nWHERE id = 1");
+        buf.set_cursor_line_col(0, 8);
+        buf.move_down();
+        assert_eq!(buf.cursor_line_col(), (1, 6));
+        buf.move_down();
+        assert_eq!(buf.cursor_line_col(), (2, 6));
+        buf.move_up();
+        buf.move_up();
+        assert_eq!(buf.cursor_line_col(), (0, 6));
+        buf.move_up();
+        assert_eq!(buf.cursor_line_col(), (0, 0));
+        buf.move_to_end();
+        buf.move_down();
+        assert_eq!(buf.cursor_offset(), buf.len());
+    }
+
+    #[test]
+    fn home_and_end_stop_at_the_line_break() {
+        let mut buf = RopeyBuffer::new("SELECT 1;\nSELECT 2;");
+        buf.set_cursor_line_col(0, 3);
+        buf.move_line_end();
+        assert_eq!(buf.cursor_line_col(), (0, 9));
+        buf.move_line_start();
+        assert_eq!(buf.cursor_line_col(), (0, 0));
+        buf.set_cursor_line_col(1, 99);
+        assert_eq!(buf.cursor_line_col(), (1, 9));
+        buf.set_cursor_line_col(99, 0);
+        assert_eq!(buf.cursor_line_col(), (1, 0));
+    }
+
+    #[test]
+    fn word_jumps_skip_to_word_edges() {
+        let mut buf = RopeyBuffer::new("SELECT user_id FROM t");
+        buf.move_to_start();
+        buf.move_word_right();
+        assert_eq!(buf.cursor_offset(), 6);
+        buf.move_word_right();
+        assert_eq!(buf.cursor_offset(), 14);
+        buf.move_word_left();
+        assert_eq!(buf.cursor_offset(), 7);
+    }
+
+    #[test]
+    fn replace_range_is_one_undo_step() {
+        let mut buf = RopeyBuffer::new("SELECT * FROM cus");
+        buf.replace_range(14, 17, "customers");
+        assert_eq!(buf.text(), "SELECT * FROM customers");
+        assert_eq!(buf.cursor_offset(), 23);
+        buf.undo();
+        assert_eq!(buf.text(), "SELECT * FROM cus");
+        buf.redo();
+        assert_eq!(buf.text(), "SELECT * FROM customers");
     }
 }
