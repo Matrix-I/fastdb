@@ -10,7 +10,7 @@
 
 FastDB is a database client built from scratch in Rust. It talks to databases through native async drivers, renders its UI on the GPU with [GPUI](https://github.com/zed-industries/zed) (Metal on macOS, Vulkan on Linux), and keeps query results in a paged, disk-spilling memory engine so a million-row result does not need a million-row heap.
 
-> **Status: early prototype.** Browsing tables and streaming their data works against PostgreSQL, MySQL and SQLite. The free-form SQL editor, inline editing and several other features listed under [Not built yet](#-not-built-yet) exist only as tested library code or not at all. The performance numbers below are **targets, not measurements**.
+> **Status: early prototype.** Browsing tables, streaming their data and running free-form SQL from script tabs works against PostgreSQL, MySQL and SQLite. Several other features listed under [Not built yet](#-not-built-yet) exist only as tested library code or not at all. The performance numbers below are **targets, not measurements**.
 
 ---
 
@@ -52,6 +52,13 @@ What exists today that these targets build on: a paged result store with an LRU 
 - **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and generated DDL.
 - **Diagram**: a simple entity box listing the table's columns.
 
+### SQL editor
+- Open a **SQL script** tab with `Cmd + ]`, the **+ SQL** button in the tab bar, or **SQL Editor** in a connection's right-click menu.
+- `Cmd + Enter` runs the statement under the caret; its rows stream into the grid below the editor.
+- Plain `SELECT` / `WITH` statements without their own `LIMIT` are fetched in chunks of the fetch size, like table data; other statements run as written.
+- Schema-aware completion of keywords, functions, tables and `table.` columns, accepted with `Tab` or `Enter`.
+- The error of a failed statement is shown above the result, in script and table tabs.
+
 ### Type handling
 - **PostgreSQL**: every column is decoded from the binary wire format. Covered types include integers, floats, `NUMERIC` (exact), `TEXT`, `UUID`, `JSON(B)`, `BYTEA`, dates and times (including `TIMETZ`, `INTERVAL` and ±infinity), `INET`, `CIDR`, `MACADDR`, `MONEY`, `OID`, `"char"`, enums, domains and N-dimensional arrays. A type FastDB does not recognize is shown as text or as a hex literal; it is never shown as `NULL`.
 - **MySQL**: result columns are typed from the wire column type. **SQLite**: result columns are typed from the declared column type.
@@ -66,7 +73,12 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 | macOS | Linux | Action |
 | :--- | :--- | :--- |
-| `Cmd + Enter` | `Ctrl + Enter` | Run the active tab's query |
+| `Cmd + Enter` | `Ctrl + Enter` | Run the active tab's query (in a SQL script: the statement under the caret) |
+| `Cmd + ]` | `Ctrl + ]` | Open a new SQL script |
+| `←` `→` `↑` `↓`, `Home`, `End` | same | Move the caret in the SQL editor |
+| `Alt + ←/→` | `Alt + ←/→` | Move the caret by word in the SQL editor |
+| `Cmd + ←/→`, `Cmd + ↑/↓` | `Ctrl + ←/→`, `Ctrl + ↑/↓` | Move to the line start/end, or the script start/end |
+| `Tab` / `Enter` (completion open) | same | Accept the selected completion (`Esc` closes the list) |
 | `Enter` (in filter bar) | `Enter` (in filter bar) | Apply the filter and re-run |
 | `Esc` (in filter bar) | `Esc` (in filter bar) | Leave the filter bar |
 | `Cmd + W` | `Ctrl + W` | Close the active tab |
@@ -79,7 +91,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 These are goals of the project, but they are not available in the app today:
 
-- **Free-form SQL editor tabs.** The Ropey-backed editor (`ui-editor`), tree-sitter statement-at-cursor detection and schema-aware autocompletion (`sql-intel`) are implemented and unit-tested, but no editor is shown in the UI yet. Queries currently come from table tabs.
+- **SQL editor extras.** Running a whole script, several result tabs, selection and copy inside the editor, query history and SQL formatting are not built yet.
 - **Grid selection, copy and inline editing.** Range selection with TSV / CSV / SQL `INSERT` copy, and inline edits that generate `UPDATE` statements, exist in `ui-grid` with tests, but they are not connected to mouse or keyboard input.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
@@ -135,9 +147,9 @@ flowchart TD
 | `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used |
 | `mem-engine` | library | Slotted pages, LRU pager, LZ4 disk spill | Used |
 | `db-wire` | library | Drivers, streaming, cancellation, CSV/SQL export, SSH (stub) | Used (export and SSH unused) |
-| `sql-intel` | library | Tree-sitter SQL parsing, schema cache, completion | Schema cache used; parser and completion are not in the UI yet |
+| `sql-intel` | library | Tree-sitter SQL parsing, schema cache, completion | Used |
 | `ui-core` | library | Theme and shared actions | Used |
-| `ui-editor` | library | Rope buffer and SQL editor view | Not rendered yet |
+| `ui-editor` | library | Rope buffer and SQL editor view | Used |
 | `ui-grid` | library | Virtualized grid, selection, changeset | Grid used; selection and editing not wired |
 
 ---
