@@ -10,7 +10,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .flex_1()
-            .h_full()
+            .size_full()
             .overflow_hidden()
             .bg(theme.bg_grid)
             .child({
@@ -39,6 +39,7 @@ impl Workspace {
                             div()
                                 .text_size(px(12.0))
                                 .text_color(theme.text_muted)
+                                .text_center()
                                 .child("Click a table in the Database Navigator on the left to open and view data.")
                         )
                         .into_any_element()
