@@ -68,7 +68,9 @@ impl Panes {
         AnyView::from(self.navigator.clone()).cached(StyleRefinement::default().flex_none().w(px(width)).h_full())
     }
 
+    /// Kept from growing to the grid's full content width, which would leave the grid
+    /// nothing to scroll horizontally
     pub fn table_view(&self) -> AnyView {
-        AnyView::from(self.table_view.clone()).cached(StyleRefinement::default().flex_1().h_full())
+        AnyView::from(self.table_view.clone()).cached(StyleRefinement::default().flex_1().min_w_0().h_full().overflow_hidden())
     }
 }
