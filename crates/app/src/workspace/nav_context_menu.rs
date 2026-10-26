@@ -15,6 +15,7 @@ enum NavMenuAction {
     Disconnect,
     Delete,
     Refresh,
+    OpenSqlEditor,
 }
 
 impl Workspace {
@@ -76,6 +77,8 @@ impl Workspace {
                 this.nav_context_menu = None;
                 cx.notify();
             }))
+            .child(item("nav-menu-sql-editor", "icons/sql_script.svg", "SQL Editor", is_connected && !self.is_connecting, NavMenuAction::OpenSqlEditor, cx))
+            .child(separator())
             .child(item("nav-menu-edit", "icons/edit.svg", "Edit Connection", true, NavMenuAction::EditConnection, cx))
             .child(separator())
             .child(item("nav-menu-connect", "icons/connect.svg", "Connect", !is_connected && !self.is_connecting, NavMenuAction::Connect, cx))
@@ -98,6 +101,11 @@ impl Workspace {
                 // Refresh acts on the active connection, so switch to a parked one first
                 self.connect_saved_by_id(conn_id, cx);
                 self.refresh_connection(cx);
+            }
+            NavMenuAction::OpenSqlEditor => {
+                // A script runs on the active connection, so switch to a parked one first
+                self.connect_saved_by_id(conn_id, cx);
+                self.open_sql_script();
             }
         }
     }

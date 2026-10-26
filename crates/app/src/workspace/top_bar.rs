@@ -77,7 +77,7 @@ impl Workspace {
                                 this.open_tab_context_menu(i, event.position);
                                 cx.notify();
                             }))
-                            .child(img("icons/table.svg").w(px(13.0)).h(px(13.0)))
+                            .child(img(if tab.is_script() { "icons/sql_script.svg" } else { "icons/table.svg" }).w(px(13.0)).h(px(13.0)))
                             .child(tab.title.clone())
                             .child(
                                 div()
@@ -101,7 +101,27 @@ impl Workspace {
                             )
                     );
                 }
-                tabs_bar
+                tabs_bar.child(
+                    div()
+                        .id("btn-new-sql-script")
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_primary))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_sql_script();
+                            cx.notify();
+                        }))
+                        .child(img("icons/sql_script.svg").w(px(12.0)).h(px(12.0)))
+                        .child("+ SQL")
+                )
             })
     }
 }

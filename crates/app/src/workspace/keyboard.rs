@@ -28,6 +28,16 @@ impl Workspace {
             return;
         }
 
+        // Cmd+] (macOS) / Ctrl+] opens a new SQL script, as in DBeaver
+        if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && event.keystroke.key == "]"
+            && !self.show_connection_modal
+        {
+            self.open_sql_script();
+            cx.notify();
+            return;
+        }
+
         if self.column_menu.is_some() {
             if event.keystroke.key == "escape" {
                 self.column_menu = None;
@@ -163,6 +173,19 @@ impl Workspace {
                         cx.notify();
                     }
                 }
+            } else if tab.is_script() && tab.editor_focused {
+                let cmd = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
+                if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
+                    if undo_key == UndoKey::Redo { tab.editor.redo() } else { tab.editor.undo() };
+                } else if cmd && event.keystroke.key.eq_ignore_ascii_case("v") {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        tab.editor.insert_text(&text);
+                    }
+                } else if !tab.editor.handle_key(&event.keystroke) {
+                    return;
+                }
+                self.cursor_visible = true;
+                cx.notify();
             } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                 && event.keystroke.key.eq_ignore_ascii_case("c")
             {
@@ -172,51 +195,10 @@ impl Workspace {
                 }
             } else if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
                 let redo = undo_key == UndoKey::Redo;
-                if tab.table_name.is_none() {
-                    if redo { tab.editor.redo() } else { tab.editor.undo() };
-                } else if tab.active_subtab == TableSubTab::Data {
+                if !tab.is_script() && tab.active_subtab == TableSubTab::Data {
                     self.step_pending_edits(redo);
                 }
                 cx.notify();
-            } else if tab.table_name.is_none() {
-                if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                    && event.keystroke.key.eq_ignore_ascii_case("v")
-                {
-                    if let Some(item) = cx.read_from_clipboard() {
-                        if let Some(pasted) = item.text() {
-                            tab.editor.insert_text(&pasted);
-                            cx.notify();
-                        }
-                    }
-                } else if event.keystroke.key == "backspace" {
-                    tab.editor.backspace();
-                    cx.notify();
-                } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
-                    tab.editor.insert_text("\n");
-                    cx.notify();
-                } else if event.keystroke.key == "space" {
-                    tab.editor.insert_text(" ");
-                    cx.notify();
-                } else {
-                    let input_char = if let Some(ref kc) = event.keystroke.key_char {
-                        if kc.chars().count() == 1 {
-                            Some(kc.as_str())
-                        } else {
-                            None
-                        }
-                    } else if event.keystroke.key.chars().count() == 1 {
-                        Some(event.keystroke.key.as_str())
-                    } else {
-                        None
-                    };
-
-                    if let Some(char_str) = input_char {
-                        if !event.keystroke.modifiers.platform && !event.keystroke.modifiers.control {
-                            tab.editor.insert_text(char_str);
-                            cx.notify();
-                        }
-                    }
-                }
             }
         }
     }

@@ -43,16 +43,12 @@ impl Workspace {
                                 .child("Click a table in the Database Navigator on the left to open and view data.")
                         )
                         .into_any_element()
+                } else if self.tabs[active_tab_idx].is_script() {
+                    self.render_script_view(active_tab_idx, window, cx).into_any_element()
                 } else {
                     let active_subtab = self.tabs[active_tab_idx].active_subtab;
                     let show_sql_dialog = self.tabs[active_tab_idx].show_sql_dialog;
                     let filter_sql = self.tabs[active_tab_idx].filter_sql.clone();
-                    let fetch_size_text = self.tabs[active_tab_idx].fetch.size_text.clone();
-                    let has_more_rows = self.tabs[active_tab_idx].fetch.has_more;
-                    let is_appending = self.tabs[active_tab_idx].fetch.is_appending();
-                    let fetch_summary = self.tabs[active_tab_idx].fetch.last.as_ref().map(|s| s.message());
-                    let total_rows = self.tabs[active_tab_idx].loaded_rows();
-                    let is_fetch_size_focused = self.is_fetch_size_focused;
                     let is_filter_focused = self.is_filter_focused;
                     let is_running_query = self.is_running_query;
 
@@ -440,6 +436,12 @@ impl Workspace {
                     );
                 }
 
+                if active_subtab == TableSubTab::Data {
+                    if let Some(message) = self.tabs[active_tab_idx].last_error.clone() {
+                        center_col = center_col.child(self.render_error_banner(&message));
+                    }
+                }
+
                 // D. Main View Body depending on active_subtab
                 match active_subtab {
                     TableSubTab::Data => {
@@ -453,99 +455,112 @@ impl Workspace {
                     }
                 }
 
-                // E. Result footer (when in Data subtab): fetch size, fetch next, row count and the
-                // summary of the last fetch, laid out like DBeaver's result panel status bar
+                // E. Result footer (when in Data subtab)
                 if active_subtab == TableSubTab::Data {
-                    let can_fetch_next = has_more_rows && !is_running_query;
-                    let row_count = format!(
-                        "{}{}",
-                        group_thousands(total_rows),
-                        if has_more_rows { "+" } else { "" }
-                    );
-                    let summary = if is_appending {
-                        "Fetching next rows…".to_string()
-                    } else {
-                        fetch_summary.unwrap_or_default()
-                    };
-                    center_col = center_col.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .h(px(26.0))
-                            .bg(theme.bg_surface)
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .px_2()
-                            .text_size(px(11.0))
-                            .text_color(theme.text_muted)
-                            .child(self.render_edit_toolbar(cx))
-                            .child(
-                                div()
-                                    .id("fetch-size-input-box")
-                                    .flex()
-                                    .items_center()
-                                    .w(px(64.0))
-                                    .h(px(20.0))
-                                    .px_1()
-                                    .bg(theme.bg_editor)
-                                    .border_1()
-                                    .border_color(if is_fetch_size_focused { rgb(0x388bfd) } else { theme.border })
-                                    .rounded_xs()
-                                    .cursor_text()
-                                    .text_color(theme.text_primary)
-                                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                        this.focus_fetch_size(event.click_count() >= 2, usize::MAX);
-                                        cx.notify();
-                                    }))
-                                    .child(render_field_content(
-                                        &fetch_size_text,
-                                        "",
-                                        is_fetch_size_focused,
-                                        self.fetch_size_anchor,
-                                        self.fetch_size_cursor,
-                                        self.cursor_visible,
-                                        theme,
-                                        &self.fetch_size_caret_pick(cx),
-                                    ))
-                            )
-                            .child({
-                                let fetch_next_btn = div()
-                                    .id("btn-fetch-next-page")
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .w(px(20.0))
-                                    .h(px(20.0))
-                                    .rounded_xs();
-                                let fetch_next_btn = if can_fetch_next {
-                                    fetch_next_btn.cursor_pointer().hover(|s| s.bg(theme.bg_surface_hover))
-                                } else {
-                                    fetch_next_btn.opacity(0.4)
-                                };
-                                fetch_next_btn
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.blur_fetch_size();
-                                        this.fetch_next_rows(cx);
-                                        cx.notify();
-                                    }))
-                                    .child(img("icons/fetch_next.svg").w(px(14.0)).h(px(14.0)))
-                            })
-                            .child(div().text_color(theme.text_secondary).child(row_count))
-                            .child(div().w(px(1.0)).h(px(14.0)).bg(theme.border))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .child(summary)
-                            )
-                    );
+                    center_col = center_col.child(self.render_result_footer(active_tab_idx, cx));
                 }
 
                     center_col.into_any_element()
                 }
             })
+    }
+
+    /// Status bar under a result: edit toolbar, fetch size, fetch next, row count and the
+    /// summary of the last fetch, laid out like DBeaver's result panel status bar
+    pub(super) fn render_result_footer(&mut self, tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme.clone();
+        let theme = &theme;
+        let tab = &self.tabs[tab_idx];
+        let has_more_rows = tab.fetch.has_more;
+        let is_appending = tab.fetch.is_appending();
+        let fetch_summary = tab.fetch.last.as_ref().map(|s| s.message());
+        let total_rows = tab.loaded_rows();
+        let fetch_size_text = tab.fetch.size_text.clone();
+        let is_fetch_size_focused = self.is_fetch_size_focused;
+        let is_running_query = self.is_running_query;
+        let can_fetch_next = has_more_rows && !is_running_query;
+        let row_count = format!(
+            "{}{}",
+            group_thousands(total_rows),
+            if has_more_rows { "+" } else { "" }
+        );
+        let summary = if is_appending {
+            "Fetching next rows…".to_string()
+        } else {
+            fetch_summary.unwrap_or_default()
+        };
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .h(px(26.0))
+                .bg(theme.bg_surface)
+                .border_t_1()
+                .border_color(theme.border)
+                .px_2()
+                .text_size(px(11.0))
+                .text_color(theme.text_muted)
+                .child(self.render_edit_toolbar(cx))
+                .child(
+                    div()
+                        .id("fetch-size-input-box")
+                        .flex()
+                        .items_center()
+                        .w(px(64.0))
+                        .h(px(20.0))
+                        .px_1()
+                        .bg(theme.bg_editor)
+                        .border_1()
+                        .border_color(if is_fetch_size_focused { rgb(0x388bfd) } else { theme.border })
+                        .rounded_xs()
+                        .cursor_text()
+                        .text_color(theme.text_primary)
+                        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                            this.focus_fetch_size(event.click_count() >= 2, usize::MAX);
+                            cx.notify();
+                        }))
+                        .child(render_field_content(
+                            &fetch_size_text,
+                            "",
+                            is_fetch_size_focused,
+                            self.fetch_size_anchor,
+                            self.fetch_size_cursor,
+                            self.cursor_visible,
+                            theme,
+                            &self.fetch_size_caret_pick(cx),
+                        ))
+                )
+                .child({
+                    let fetch_next_btn = div()
+                        .id("btn-fetch-next-page")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(20.0))
+                        .h(px(20.0))
+                        .rounded_xs();
+                    let fetch_next_btn = if can_fetch_next {
+                        fetch_next_btn.cursor_pointer().hover(|s| s.bg(theme.bg_surface_hover))
+                    } else {
+                        fetch_next_btn.opacity(0.4)
+                    };
+                    fetch_next_btn
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.blur_fetch_size();
+                            this.fetch_next_rows(cx);
+                            cx.notify();
+                        }))
+                        .child(img("icons/fetch_next.svg").w(px(14.0)).h(px(14.0)))
+                })
+                .child(div().text_color(theme.text_secondary).child(row_count))
+                .child(div().w(px(1.0)).h(px(14.0)).bg(theme.border))
+                .child(
+                    div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(summary)
+                )
     }
 }
