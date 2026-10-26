@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 use gpui::*;
-use sql_intel::{get_completions, CompletionItem, CompletionKind, SchemaCache, SqlParser};
+use sql_intel::{expects_table_alias, get_completions, pick_table_alias, CompletionItem, CompletionKind, SchemaCache, SqlParser};
 use ui_core::theme::Theme;
 
 use crate::buffer::RopeyBuffer;
@@ -176,6 +176,13 @@ impl SqlEditorView {
                 format!("{q}{}{q}", item.label.replace(q, &format!("{q}{q}")))
             }
             _ => item.label.clone(),
+        };
+        // Like DBeaver, a table picked after FROM or JOIN gets an alias for its columns
+        let source = self.buffer.text();
+        let text = if item.kind == CompletionKind::Table && expects_table_alias(&source, start) {
+            format!("{text} {}", pick_table_alias(&source, &item.label))
+        } else {
+            text
         };
         self.buffer.replace_range(start, end, &text);
         self.caret_moved = true;
@@ -543,7 +550,7 @@ mod tests {
         let idx = ed.completion_items.iter().position(|i| i.label == "customers").unwrap();
         ed.selected_completion = idx;
         assert!(ed.handle_key(&key("tab")));
-        assert_eq!(ed.buffer.text(), "SELECT * FROM customers");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM customers c");
         assert!(!ed.show_completions);
     }
 
@@ -619,13 +626,37 @@ mod tests {
     #[test]
     fn mixed_case_names_are_quoted_when_completed() {
         let mut ed = mixed_case_editor();
-        type_str(&mut ed, "SELECT * FROM api");
+        type_str(&mut ed, "SELECT \"api");
         accept(&mut ed, "apiClient");
-        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\"");
+        assert_eq!(ed.buffer.text(), "SELECT \"apiClient\"");
 
         type_str(&mut ed, ".");
         accept(&mut ed, "clientId");
-        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\".\"clientId\"");
+        assert_eq!(ed.buffer.text(), "SELECT \"apiClient\".\"clientId\"");
+    }
+
+    #[test]
+    fn tables_after_from_or_join_get_an_alias_used_by_column_completion() {
+        let mut ed = mixed_case_editor();
+        type_str(&mut ed, "SELECT * FROM api");
+        accept(&mut ed, "apiClient");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\" a");
+
+        type_str(&mut ed, " JOIN us");
+        accept(&mut ed, "users");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\" a JOIN users u");
+
+        type_str(&mut ed, " WHERE a.");
+        accept(&mut ed, "clientId");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\" a JOIN users u WHERE a.\"clientId\"");
+    }
+
+    #[test]
+    fn tables_outside_from_or_join_get_no_alias() {
+        let mut ed = mixed_case_editor();
+        type_str(&mut ed, "UPDATE us");
+        accept(&mut ed, "users");
+        assert_eq!(ed.buffer.text(), "UPDATE users");
     }
 
     #[test]
@@ -635,7 +666,7 @@ mod tests {
         accept(&mut ed, "SELECT");
         type_str(&mut ed, " * FROM us");
         accept(&mut ed, "users");
-        assert_eq!(ed.buffer.text(), "SELECT * FROM users");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM users u");
     }
 
     #[test]
@@ -644,7 +675,7 @@ mod tests {
         ed.identifier_quote = '`';
         type_str(&mut ed, "SELECT * FROM `api");
         accept(&mut ed, "apiClient");
-        assert_eq!(ed.buffer.text(), "SELECT * FROM `apiClient`");
+        assert_eq!(ed.buffer.text(), "SELECT * FROM `apiClient` a");
     }
 
     #[test]

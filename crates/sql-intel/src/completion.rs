@@ -49,6 +49,9 @@ pub fn get_completions(
             .unwrap_or("");
 
         if !table_ident.is_empty() {
+            // `f.` completes the columns of the table that `f` is an alias of
+            let resolved = crate::alias::resolve_alias(query, table_ident);
+            let table_ident = resolved.as_deref().unwrap_or(table_ident);
             if let Ok(cols) = cache.search_columns(table_ident, after_dot) {
                 for col in cols {
                     items.push(CompletionItem {
@@ -147,6 +150,17 @@ mod tests {
         // 3. Column completion after dot
         let res3 = get_completions("SELECT customers.", 17, &cache);
         assert!(res3.iter().any(|item| item.label == "email"));
+    }
+
+    #[test]
+    fn test_column_completion_through_a_table_alias() {
+        let cache = SchemaCache::new().unwrap();
+        cache.add_table("public", "featureFlag", "BASE TABLE").unwrap();
+        cache.add_column("public", "featureFlag", "flagName", "varchar", false).unwrap();
+
+        let sql = "SELECT * FROM \"featureFlag\" f WHERE f.";
+        let res = get_completions(sql, sql.len(), &cache);
+        assert!(res.iter().any(|item| item.label == "flagName" && item.kind == CompletionKind::Column));
     }
 
     #[test]
