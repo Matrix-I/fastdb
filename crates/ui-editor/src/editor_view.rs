@@ -1,9 +1,20 @@
+use std::rc::Rc;
 use std::sync::Arc;
 use gpui::*;
 use sql_intel::{get_completions, CompletionItem, CompletionKind, SchemaCache, SqlParser};
 use ui_core::theme::Theme;
 
 use crate::buffer::RopeyBuffer;
+
+const LINE_HEIGHT: f32 = 20.0;
+const GUTTER_WIDTH: f32 = 48.0;
+const MONO_FONT: &str = ".AppleSystemUIFontMonospaced, Menlo, monospace";
+/// Approximate advance of one monospace char at 13 px, used to place the completion popup
+const CHAR_WIDTH: f32 = 7.8;
+
+/// Called with `(line, col)` when a char of the editor is clicked; `col` may be past the
+/// end of the line (`usize::MAX` for a click right of the text)
+pub type EditorPick = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
 
 /// Completion entries shown in the popup; the selection wraps within them
 pub const MAX_VISIBLE_COMPLETIONS: usize = 6;
@@ -18,6 +29,8 @@ pub struct SqlEditorView {
     pub show_completions: bool,
     /// Set when the caret moved since the last render, which scrolls it into view
     pub caret_moved: bool,
+    /// Scroll position of the line list; the caret line is scrolled into view after it moves
+    pub scroll_handle: ScrollHandle,
 }
 
 impl SqlEditorView {
@@ -31,6 +44,7 @@ impl SqlEditorView {
             selected_completion: 0,
             show_completions: false,
             caret_moved: true,
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -228,180 +242,234 @@ impl SqlEditorView {
         true
     }
 
-    pub fn render_editor(&mut self) -> impl IntoElement {
-        let theme = &self.theme;
-        let (cursor_line, _cursor_col) = self.buffer.cursor_line_col();
+    pub fn render_editor(&mut self, focused: bool, caret_visible: bool, on_pick: EditorPick) -> impl IntoElement {
+        let theme = self.theme.clone();
+        let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
+        if std::mem::take(&mut self.caret_moved) {
+            self.scroll_handle.scroll_to_item(cursor_line);
+        }
 
-        let line_count = self.buffer.line_count().max(1);
-        let gutter_width = 48.0;
+        let mut lines = div()
+            .id("sql-editor-lines")
+            .flex()
+            .flex_col()
+            .size_full()
+            .py_1()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle);
 
-        let mut editor_container = div()
+        for l in 0..self.buffer.line_count().max(1) {
+            let content = self.buffer.line(l).unwrap_or_default();
+            let content = content.trim_end_matches(['\n', '\r']);
+            let caret_col = (focused && l == cursor_line).then_some(cursor_col);
+            lines = lines.child(render_line(l, content, caret_col, caret_visible, &on_pick, &theme));
+        }
+
+        let mut root = div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             .bg(theme.bg_editor)
             .text_color(theme.text_primary)
-            .overflow_hidden();
+            .font_family(MONO_FONT)
+            .text_size(px(13.0))
+            .overflow_hidden()
+            .child(lines);
 
-        // Editor Body: Gutter + Code Lines
-        let mut body = div()
-            .flex()
-            .flex_1()
-            .size_full()
-            .overflow_hidden();
+        if focused && self.show_completions && !self.completion_items.is_empty() {
+            let scroll_y = f32::from(self.scroll_handle.offset().y);
+            let top = (cursor_line as f32 + 1.0) * LINE_HEIGHT + 4.0 + scroll_y;
+            let left = GUTTER_WIDTH + 12.0 + cursor_col as f32 * CHAR_WIDTH;
+            root = root.child(self.render_completion_popup(top, left, &theme));
+        }
+        root
+    }
 
-        // 1. Line Number Gutter
-        let mut gutter = div()
+    fn render_completion_popup(&self, top: f32, left: f32, theme: &Theme) -> impl IntoElement {
+        let mut popup = div()
+            .absolute()
+            .top(px(top))
+            .left(px(left))
+            .w(px(280.0))
+            .bg(theme.bg_surface)
+            .border_1()
+            .border_color(theme.border_focused)
+            .rounded_md()
+            .shadow_lg()
+            .p_1()
             .flex()
             .flex_col()
-            .w(px(gutter_width))
-            .h_full()
-            .bg(theme.bg_surface)
-            .border_r_1()
-            .border_color(theme.border)
-            .py_2();
+            .gap_1();
 
-        for l in 0..line_count {
-            let is_current = l == cursor_line;
-            gutter = gutter.child(
+        for (idx, item) in self.completion_items.iter().take(MAX_VISIBLE_COMPLETIONS).enumerate() {
+            let is_sel = idx == self.selected_completion;
+            let bg = if is_sel { theme.bg_surface_selected } else { theme.bg_surface };
+
+            let icon_path = match item.kind {
+                CompletionKind::Keyword => "icons/sql.svg",
+                CompletionKind::Table => "icons/table.svg",
+                CompletionKind::Column => "icons/column.svg",
+                CompletionKind::Function => "icons/function.svg",
+            };
+
+            popup = popup.child(
                 div()
-                    .h(px(22.0))
-                    .px_2()
                     .flex()
                     .items_center()
-                    .justify_end()
+                    .justify_between()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .bg(bg)
                     .text_size(px(12.0))
-                    .text_color(if is_current { theme.text_accent } else { theme.text_muted })
-                    .child(format!("{}", l + 1))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(img(icon_path).w(px(14.0)).h(px(14.0)))
+                            .child(
+                                div()
+                                    .font_weight(if is_sel { FontWeight::BOLD } else { FontWeight::NORMAL })
+                                    .child(item.label.clone())
+                            )
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme.text_muted)
+                            .child(item.detail.clone())
+                    )
             );
         }
-
-        body = body.child(gutter);
-
-        // 2. Code Area with Syntax Highlighting
-        let mut code_area = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .px_3()
-            .py_2()
-            .overflow_hidden();
-
-        // Line-by-line render
-        for l in 0..line_count {
-            let line_content = self.buffer.line(l).unwrap_or_default();
-            let is_current = l == cursor_line;
-
-            let mut line_div = div()
-                .flex()
-                .items_center()
-                .h(px(22.0))
-                .w_full()
-                .text_size(px(13.0));
-
-            if is_current {
-                line_div = line_div.bg(theme.bg_surface_hover);
-            }
-
-            // Simple fast keyword coloring for display
-            let words: Vec<&str> = line_content.split_inclusive(' ').collect();
-            for word in words {
-                let trimmed = word.trim().to_uppercase();
-                let color = match trimmed.as_str() {
-                    "SELECT" | "FROM" | "WHERE" | "JOIN" | "INNER" | "LEFT" | "RIGHT"
-                    | "ON" | "GROUP" | "BY" | "ORDER" | "LIMIT" | "OFFSET" | "INSERT"
-                    | "INTO" | "VALUES" | "UPDATE" | "SET" | "DELETE" | "AS" | "AND"
-                    | "OR" | "NOT" | "IN" | "IS" | "NULL" => theme.text_accent,
-                    _ if word.starts_with('\'') || word.ends_with('\'') => theme.text_success,
-                    _ if word.parse::<f64>().is_ok() => theme.text_warning,
-                    _ if word.starts_with("--") => theme.text_muted,
-                    _ => theme.text_primary,
-                };
-
-                line_div = line_div.child(
-                    div()
-                        .text_color(color)
-                        .child(word.to_string())
-                );
-            }
-
-            code_area = code_area.child(line_div);
-        }
-
-        body = body.child(code_area);
-        editor_container = editor_container.child(body);
-
-        // 3. Autocomplete Popup
-        if self.show_completions && !self.completion_items.is_empty() {
-            let mut popup = div()
-                .absolute()
-                .top(px(100.0))
-                .left(px(gutter_width + 80.0))
-                .w(px(280.0))
-                .max_h(px(200.0))
-                .bg(theme.bg_surface)
-                .border_1()
-                .border_color(theme.border_focused)
-                .rounded_md()
-                .shadow_lg()
-                .p_1()
-                .flex()
-                .flex_col()
-                .gap_1();
-
-            for (idx, item) in self.completion_items.iter().take(6).enumerate() {
-                let is_sel = idx == self.selected_completion;
-                let bg = if is_sel { theme.bg_surface_selected } else { theme.bg_surface };
-
-                let icon_path = match item.kind {
-                    CompletionKind::Keyword => "icons/sql.svg",
-                    CompletionKind::Table => "icons/table.svg",
-                    CompletionKind::Column => "icons/column.svg",
-                    CompletionKind::Function => "icons/function.svg",
-                };
-
-                popup = popup.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .bg(bg)
-                        .text_size(px(12.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(img(icon_path).w(px(14.0)).h(px(14.0)))
-                                .child(
-                                    div()
-                                        .font_weight(if is_sel { FontWeight::BOLD } else { FontWeight::NORMAL })
-                                        .child(item.label.clone())
-                                )
-                        )
-                        .child(
-                            div()
-                                .text_size(px(10.0))
-                                .text_color(theme.text_muted)
-                                .child(item.detail.clone())
-                        )
-                );
-            }
-
-            editor_container = editor_container.child(popup);
-        }
-
-        editor_container
+        popup
     }
+}
+
+/// Colour of a word in the simple keyword highlighter
+fn word_color(word: &str, theme: &Theme) -> Hsla {
+    let trimmed = word.trim().to_uppercase();
+    match trimmed.as_str() {
+        "SELECT" | "FROM" | "WHERE" | "JOIN" | "INNER" | "LEFT" | "RIGHT"
+        | "ON" | "GROUP" | "BY" | "ORDER" | "LIMIT" | "OFFSET" | "INSERT"
+        | "INTO" | "VALUES" | "UPDATE" | "SET" | "DELETE" | "AS" | "AND"
+        | "OR" | "NOT" | "IN" | "IS" | "NULL" | "WITH" | "CREATE" | "TABLE"
+        | "DROP" | "ALTER" | "HAVING" | "DISTINCT" | "UNION" | "CASE" | "WHEN"
+        | "THEN" | "ELSE" | "END" => theme.text_accent.into(),
+        _ if word.starts_with('\'') || word.ends_with('\'') => theme.text_success.into(),
+        _ if trimmed.trim_end_matches([',', ';', ')']).parse::<f64>().is_ok() => theme.text_warning.into(),
+        _ if word.trim_start().starts_with("--") => theme.text_muted.into(),
+        _ => theme.text_primary.into(),
+    }
+}
+
+/// Thin caret bar drawn between two chars; transparent while the caret blinks off
+fn caret_bar(visible: bool) -> AnyElement {
+    div()
+        .relative()
+        .w(px(0.0))
+        .h(px(16.0))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left(px(-0.75))
+                .w(px(1.5))
+                .h_full()
+                .rounded_xs()
+                .bg(if visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() }),
+        )
+        .into_any_element()
+}
+
+/// One editor line: its number in the gutter, then one cell per char. Clicking the left or
+/// right half of a char reports the caret position before or after it through `on_pick`.
+fn render_line(
+    line: usize,
+    content: &str,
+    caret_col: Option<usize>,
+    caret_visible: bool,
+    on_pick: &EditorPick,
+    theme: &Theme,
+) -> AnyElement {
+    let half = |col: usize, right: bool| {
+        let pick = on_pick.clone();
+        let el = div().absolute().top_0().bottom_0().w(relative(0.5));
+        let el = if right { el.right_0() } else { el.left_0() };
+        el.on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
+            cx.stop_propagation();
+            pick(line, col, window, cx);
+        })
+    };
+
+    let mut code = div().flex().flex_1().h_full().items_center().pl_3().overflow_hidden();
+    if caret_col.is_some() {
+        code = code.bg(theme.bg_surface_hover);
+    }
+
+    // A `--` comment colours the rest of the line
+    let mut col = 0;
+    let mut in_comment = false;
+    for word in content.split_inclusive(' ') {
+        in_comment = in_comment || word.trim_start().starts_with("--");
+        let color: Hsla = if in_comment { theme.text_muted.into() } else { word_color(word, theme) };
+        for ch in word.chars() {
+            if caret_col == Some(col) {
+                code = code.child(caret_bar(caret_visible));
+            }
+            // A lone space shapes to zero width, so render it as a non-breaking space
+            let glyph = if ch == ' ' { '\u{00a0}' } else { ch };
+            code = code.child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .text_color(color)
+                    .child(glyph.to_string())
+                    .child(half(col, false))
+                    .child(half(col + 1, true)),
+            );
+            col += 1;
+        }
+    }
+    if caret_col.is_some_and(|c| c >= col) {
+        code = code.child(caret_bar(caret_visible));
+    }
+    // Clicking right of the text puts the caret at the end of the line
+    let pick = on_pick.clone();
+    code = code.child(div().flex_1().h_full().on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
+        cx.stop_propagation();
+        pick(line, usize::MAX, window, cx);
+    }));
+
+    div()
+        .flex()
+        .flex_none()
+        .w_full()
+        .h(px(LINE_HEIGHT))
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_end()
+                .w(px(GUTTER_WIDTH))
+                .h_full()
+                .pr_2()
+                .bg(theme.bg_surface)
+                .border_r_1()
+                .border_color(theme.border)
+                .text_size(px(12.0))
+                .text_color(if caret_col.is_some() { theme.text_accent } else { theme.text_muted })
+                .child(format!("{}", line + 1)),
+        )
+        .child(code)
+        .into_any_element()
 }
 
 impl Render for SqlEditorView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_editor()
+        self.render_editor(true, true, Rc::new(|_, _, _, _| {}))
     }
 }
 
