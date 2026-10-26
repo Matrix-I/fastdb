@@ -173,7 +173,7 @@ cd fastdb
 cargo run --release -p fastdb-app
 ```
 
-Saved connections are written to `.fastdb_config.json` in the current working directory. Passwords go to the OS keychain under the service `com.fastdb.credentials`. On macOS, the first launch may ask for permission to access the keychain.
+Saved connections are written to `connections.json` in the user config directory (`~/Library/Application Support/com.fastdb.FastDB/` on macOS, `~/.config/fastdb/` on Linux), so they survive rebuilds and launches from Finder. A `.fastdb_config.json` left in the working directory by older builds is moved there on first launch. Passwords are currently stored in that file in plain text.
 
 ---
 

@@ -41,7 +41,7 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
 
 ### 3.1 One-time setup
 
-- [ ] Fix blocker 1 (config path).
+- [x] Fix blocker 1 (config path): connections now live in `platform_hal::paths::config_dir()/connections.json`, and a legacy `./.fastdb_config.json` is moved there on first load.
 - [x] Add the icon (blocker 3): `resources/icon.svg` is the source; `resources/FastDB.icns` and `resources/icon.png` are rendered from it.
 - [ ] Add to the workspace `Cargo.toml`:
   ```toml

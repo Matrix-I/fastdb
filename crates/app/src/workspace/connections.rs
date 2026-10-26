@@ -52,6 +52,25 @@ async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMeta
     })
 }
 
+/// Where builds before the config dir kept the connections, relative to the working directory
+const LEGACY_CONFIG_FILE: &str = ".fastdb_config.json";
+
+/// The saved connections file, in the user's config dir so every build and launch shares it
+fn connections_config_path() -> std::path::PathBuf {
+    platform_hal::paths::config_dir().join("connections.json")
+}
+
+fn write_connections_config(content: &str) -> std::io::Result<()> {
+    let path = connections_config_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // Written beside the file and renamed over it, so a crash mid-write never loses the connections
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, &path)
+}
+
 impl Workspace {
     pub fn load_saved_connections_from_str(content: &str) -> (Vec<SavedConnection>, Option<String>) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
@@ -159,12 +178,21 @@ impl Workspace {
         (connections, active_id)
     }
 
+    /// Reads the saved connections from the user's config dir. A config left by older builds
+    /// in the working directory is picked up once and moved there.
     pub fn load_saved_connections() -> (Vec<SavedConnection>, Option<String>) {
-        if let Ok(content) = std::fs::read_to_string(".fastdb_config.json") {
-            Self::load_saved_connections_from_str(&content)
-        } else {
-            (Vec::new(), None)
+        let path = connections_config_path();
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return Self::load_saved_connections_from_str(&content);
         }
+        let Ok(content) = std::fs::read_to_string(LEGACY_CONFIG_FILE) else {
+            return (Vec::new(), None);
+        };
+        let loaded = Self::load_saved_connections_from_str(&content);
+        if let Err(e) = write_connections_config(&content) {
+            tracing::warn!("Failed to move {} to {}: {}", LEGACY_CONFIG_FILE, path.display(), e);
+        }
+        loaded
     }
 
     pub fn serialize_connections_config(connections: &[SavedConnection], active_id: Option<&str>) -> String {
@@ -196,7 +224,9 @@ impl Workspace {
 
     pub fn save_config(&self) {
         let content = Self::serialize_connections_config(&self.saved_connections, self.active_connection_id.as_deref());
-        let _ = std::fs::write(".fastdb_config.json", content);
+        if let Err(e) = write_connections_config(&content) {
+            tracing::error!("Failed to save connections to {}: {}", connections_config_path().display(), e);
+        }
     }
 
     pub fn active_saved_connection(&self) -> Option<&SavedConnection> {
