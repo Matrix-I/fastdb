@@ -53,7 +53,10 @@ What exists today that these targets build on: a paged result store with an LRU 
 - **Diagram**: a simple entity box listing the table's columns.
 
 ### SQL editor
-- Open a **SQL script** tab with `Cmd + ]`, the **+ SQL** button in the tab bar, or **SQL Editor** in a connection's right-click menu.
+- Scripts are `.sql` files saved per connection under `<config dir>/scripts/<connection id>/Script-<n>.sql` (on macOS `~/Library/Application Support/com.fastdb.FastDB/scripts`), written automatically as you type, before a run, when the tab closes and on quit.
+- `Cmd + ]`, the **+ SQL** button or **SQL Editor** in a connection's right-click menu reopens the connection's latest script, or creates `Script-1` when it has none. When the latest script is already open, a **Choose SQL script** dialog lists the connection's scripts by time with a search box, a **New script** button and **Show scripts for all connections**.
+- A script tab runs on its own connection: selecting it switches the active connection, and the toolbar shows which one.
+- Table names completed after `FROM` / `JOIN` get an alias (`"featureFlag" f`), and `f.` completes that table's columns.
 - `Cmd + Enter` runs the statement under the caret; its rows stream into the grid below the editor.
 - Plain `SELECT` / `WITH` statements without their own `LIMIT` are fetched in chunks of the fetch size, like table data; other statements run as written.
 - Schema-aware completion of keywords, functions, tables and `table.` columns, accepted with `Tab` or `Enter`.
@@ -74,7 +77,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 | macOS | Linux | Action |
 | :--- | :--- | :--- |
 | `Cmd + Enter` | `Ctrl + Enter` | Run the active tab's query (in a SQL script: the statement under the caret) |
-| `Cmd + ]` | `Ctrl + ]` | Open a new SQL script |
+| `Cmd + ]` | `Ctrl + ]` | Open the latest SQL script of the connection (or choose one) |
 | `←` `→` `↑` `↓`, `Home`, `End` | same | Move the caret in the SQL editor |
 | `Alt + ←/→` | `Alt + ←/→` | Move the caret by word in the SQL editor |
 | `Cmd + ←/→`, `Cmd + ↑/↓` | `Ctrl + ←/→`, `Ctrl + ↑/↓` | Move to the line start/end, or the script start/end |
@@ -91,7 +94,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 These are goals of the project, but they are not available in the app today:
 
-- **SQL editor extras.** Running a whole script, several result tabs, selection and copy inside the editor, query history and SQL formatting are not built yet.
+- **SQL editor extras.** Running a whole script, several result tabs, selection and copy inside the editor, renaming or deleting scripts, query history and SQL formatting are not built yet.
 - **Grid selection, copy and inline editing.** Range selection with TSV / CSV / SQL `INSERT` copy, and inline edits that generate `UPDATE` statements, exist in `ui-grid` with tests, but they are not connected to mouse or keyboard input.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
