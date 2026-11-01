@@ -20,7 +20,7 @@ enum NavMenuAction {
 
 impl Workspace {
     pub(super) fn open_nav_context_menu(&mut self, conn_id: &str, position: Point<Pixels>) {
-        self.nav_context_menu = Some(NavContextMenu {
+        self.menus.nav_context_menu = Some(NavContextMenu {
             conn_id: conn_id.to_string(),
             position,
         });
@@ -68,7 +68,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_surface_selected))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.nav_context_menu = None;
+                        this.menus.nav_context_menu = None;
                         this.run_nav_menu_action(action, &conn_id, cx);
                         cx.notify();
                     }));
@@ -90,7 +90,7 @@ impl Workspace {
             .border_color(theme.border)
             .shadow_lg()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.nav_context_menu = None;
+                this.menus.nav_context_menu = None;
                 cx.notify();
             }))
             .child(item(

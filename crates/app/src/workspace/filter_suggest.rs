@@ -111,13 +111,13 @@ impl Workspace {
             return;
         };
         let has_selection = selection_range(
-            self.filter_anchor,
-            self.filter_cursor,
+            self.input.filter_anchor,
+            self.input.filter_cursor,
             tab.filter_sql.chars().count(),
         )
         .is_some();
         let columns = self.filter_columns();
-        let items = match word_at(&tab.filter_sql, self.filter_cursor) {
+        let items = match word_at(&tab.filter_sql, self.input.filter_cursor) {
             Some((_, prefix)) if !has_selection => matching_columns(&columns, &prefix, force),
             _ => Vec::new(),
         };
@@ -127,13 +127,14 @@ impl Workspace {
             .fold(0.0, f32::max);
         // Keep the highlighted entry while it still matches
         let selected = self
+            .input
             .filter_suggest
             .as_ref()
             .and_then(|s| s.items.get(s.selected))
             .and_then(|(name, _)| items.iter().position(|(n, _)| n == name))
             .unwrap_or(0);
         let width = (longest + 64.0).clamp(240.0, 480.0);
-        self.filter_suggest = (!items.is_empty()).then_some(FilterSuggest {
+        self.input.filter_suggest = (!items.is_empty()).then_some(FilterSuggest {
             items,
             selected,
             width,
@@ -142,14 +143,14 @@ impl Workspace {
 
     /// Keys for the open list; returns whether the key was used
     pub(super) fn handle_filter_suggest_key(&mut self, keystroke: &Keystroke) -> bool {
-        let Some(suggest) = self.filter_suggest.as_mut() else {
+        let Some(suggest) = self.input.filter_suggest.as_mut() else {
             return false;
         };
         let len = suggest.items.len();
         match keystroke.key.as_str() {
             "down" => suggest.selected = (suggest.selected + 1) % len,
             "up" => suggest.selected = (suggest.selected + len - 1) % len,
-            "escape" => self.filter_suggest = None,
+            "escape" => self.input.filter_suggest = None,
             "enter" | "return" | "tab" => {
                 let index = suggest.selected;
                 self.apply_filter_suggest(index);
@@ -161,7 +162,7 @@ impl Workspace {
 
     /// Replaces the word at the caret with the quoted name of entry `index`
     pub(super) fn apply_filter_suggest(&mut self, index: usize) {
-        let Some(suggest) = self.filter_suggest.take() else {
+        let Some(suggest) = self.input.filter_suggest.take() else {
             return;
         };
         let Some((name, _)) = suggest.items.get(index) else {
@@ -171,13 +172,13 @@ impl Workspace {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
-        let Some((range, _)) = word_at(&tab.filter_sql, self.filter_cursor) else {
+        let Some((range, _)) = word_at(&tab.filter_sql, self.input.filter_cursor) else {
             return;
         };
 
         let len = tab.filter_sql.chars().count();
         tab.filter_history.record(
-            (tab.filter_sql.clone(), self.filter_cursor.min(len)),
+            (tab.filter_sql.clone(), self.input.filter_cursor.min(len)),
             EditKind::Other,
         );
         let byte = |i: usize| {
@@ -189,9 +190,9 @@ impl Workspace {
         };
         let (start, end) = (byte(range.start), byte(range.end));
         tab.filter_sql.replace_range(start..end, &quoted);
-        self.filter_cursor = range.start + quoted.chars().count();
-        self.filter_anchor = None;
-        self.cursor_visible = true;
+        self.input.filter_cursor = range.start + quoted.chars().count();
+        self.input.filter_anchor = None;
+        self.input.cursor_visible = true;
     }
 
     /// The list under the filter input, if open
@@ -200,9 +201,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let suggest = self
+            .input
             .filter_suggest
             .as_ref()
-            .filter(|_| self.is_filter_focused)?;
+            .filter(|_| self.input.is_filter_focused)?;
         let theme = &self.theme;
         let first = suggest.selected.saturating_sub(VISIBLE_ITEMS - 1);
 
@@ -219,7 +221,7 @@ impl Workspace {
             .border_color(theme.border)
             .shadow_lg()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.filter_suggest = None;
+                this.input.filter_suggest = None;
                 cx.notify();
             }))
             .children(

@@ -97,7 +97,7 @@ impl Workspace {
             ));
             self.active_tab = self.tabs.len() - 1;
         }
-        self.is_filter_focused = false;
+        self.input.is_filter_focused = false;
         self.blur_fetch_size();
         self.activate_script_connection(cx);
         cx.notify();
@@ -127,7 +127,7 @@ impl Workspace {
             return;
         };
         if self.connections.active_connection_id.as_deref() != Some(conn_id.as_str())
-            || !self.connections.active().is_connected
+            || !self.connections.active().driver.is_some()
         {
             self.connect_saved_by_id(&conn_id, cx);
         }

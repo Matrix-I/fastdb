@@ -53,7 +53,7 @@ impl Workspace {
                     let active_subtab = self.tabs[active_tab_idx].active_subtab;
                     let show_sql_dialog = self.tabs[active_tab_idx].show_sql_dialog;
                     let filter_sql = self.tabs[active_tab_idx].filter_sql.clone();
-                    let is_filter_focused = self.is_filter_focused;
+                    let is_filter_focused = self.input.is_filter_focused;
                     let is_running_query = self.operations.is_running();
 
                     let mut center_col = div()
@@ -101,7 +101,7 @@ impl Workspace {
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
                                                 t.active_subtab = TableSubTab::Properties;
-                                                this.is_filter_focused = false;
+                                                this.input.is_filter_focused = false;
                                                 cx.notify();
                                             }
                                         }))
@@ -158,7 +158,7 @@ impl Workspace {
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
                                                 t.active_subtab = TableSubTab::Diagram;
-                                                this.is_filter_focused = false;
+                                                this.input.is_filter_focused = false;
                                                 cx.notify();
                                             }
                                         }))
@@ -233,11 +233,11 @@ impl Workspace {
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                                         this.commit_cell_edit();
                                         this.blur_fetch_size();
-                                        this.is_filter_focused = true;
-                                        this.filter_anchor = (event.click_count() >= 2).then_some(0);
-                                        this.filter_cursor = usize::MAX;
-                                        this.filter_suggest = None;
-                                        this.cursor_visible = true;
+                                        this.input.is_filter_focused = true;
+                                        this.input.filter_anchor = (event.click_count() >= 2).then_some(0);
+                                        this.input.filter_cursor = usize::MAX;
+                                        this.input.filter_suggest = None;
+                                        this.input.cursor_visible = true;
                                         cx.notify();
                                     }))
                                     .text_size(px(11.5))
@@ -245,9 +245,9 @@ impl Workspace {
                                         &filter_sql,
                                         "Enter a SQL expression to filter results (use Ctrl+Space)",
                                         is_filter_focused,
-                                        self.filter_anchor,
-                                        self.filter_cursor,
-                                        self.cursor_visible,
+                                        self.input.filter_anchor,
+                                        self.input.filter_cursor,
+                                        self.input.cursor_visible,
                                         theme,
                                         &self.filter_caret_pick(cx),
                                     ))
@@ -483,7 +483,7 @@ impl Workspace {
         let fetch_summary = tab.fetch.last.as_ref().map(|s| s.message());
         let total_rows = tab.loaded_rows();
         let fetch_size_text = tab.fetch.size_text.clone();
-        let is_fetch_size_focused = self.is_fetch_size_focused;
+        let is_fetch_size_focused = self.input.is_fetch_size_focused;
         let is_running_query = self.operations.is_running();
         let can_fetch_next = has_more_rows && !is_running_query;
         let row_count = format!(
@@ -534,9 +534,9 @@ impl Workspace {
                         &fetch_size_text,
                         "",
                         is_fetch_size_focused,
-                        self.fetch_size_anchor,
-                        self.fetch_size_cursor,
-                        self.cursor_visible,
+                        self.input.fetch_size_anchor,
+                        self.input.fetch_size_cursor,
+                        self.input.cursor_visible,
                         theme,
                         &self.fetch_size_caret_pick(cx),
                     )),

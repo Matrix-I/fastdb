@@ -17,7 +17,7 @@ impl Workspace {
         let theme = self.theme.clone();
         let theme = &theme;
         let is_running_query = self.operations.is_running();
-        let caret_visible = self.cursor_visible;
+        let caret_visible = self.input.cursor_visible;
         let connection_name = self.tabs[tab_idx]
             .connection_id
             .as_deref()
@@ -184,8 +184,8 @@ impl Workspace {
         if focused {
             self.commit_cell_edit();
             self.blur_fetch_size();
-            self.is_filter_focused = false;
-            self.cursor_visible = true;
+            self.input.is_filter_focused = false;
+            self.input.cursor_visible = true;
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.editor_focused = focused;

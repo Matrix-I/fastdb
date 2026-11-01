@@ -81,7 +81,7 @@ impl Workspace {
                                     self.form.active_field == Some(FormField::TlsCa),
                                     self.form.field_anchor,
                                     self.form.field_cursor,
-                                    self.cursor_visible,
+                                    self.input.cursor_visible,
                                     theme,
                                     &self.field_caret_pick(FormField::TlsCa, cx),
                                 )),
@@ -137,15 +137,7 @@ impl Workspace {
             let tile = tile
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    match kind {
-                        DbDriverKind::Postgres => this.select_preset_postgres(),
-                        DbDriverKind::MySql => this.select_preset_mysql(),
-                        DbDriverKind::MariaDb => this.select_preset_mariadb(),
-                        DbDriverKind::Sqlite => this.select_preset_sqlite(),
-                        DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => {
-                            this.select_preset_odbc(kind)
-                        }
-                    }
+                    this.form.select_preset(kind);
                     cx.notify();
                 }));
             providers = providers.child(tile);
@@ -264,7 +256,7 @@ impl Workspace {
                                                 this.form.active_field = Some(FormField::Name);
                                                 this.form.field_anchor = (event.click_count() >= 2).then_some(0);
                                                 this.form.field_cursor = usize::MAX;
-                                                this.cursor_visible = true;
+                                                this.input.cursor_visible = true;
                                                 window.focus(&this.focus_handle);
                                                 cx.notify();
                                             }))
@@ -274,7 +266,7 @@ impl Workspace {
                                                 is_name_active,
                                                 self.form.field_anchor,
                                                 self.form.field_cursor,
-                                                self.cursor_visible,
+                                                self.input.cursor_visible,
                                                 theme,
                                                 &self.field_caret_pick(FormField::Name, cx),
                                             ))
@@ -306,7 +298,7 @@ impl Workspace {
                                                         this.form.active_field = Some(FormField::Host);
                                                         this.form.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.form.field_cursor = usize::MAX;
-                                                        this.cursor_visible = true;
+                                                        this.input.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
@@ -316,7 +308,7 @@ impl Workspace {
                                                         is_host_active,
                                                         self.form.field_anchor,
                                                         self.form.field_cursor,
-                                                        self.cursor_visible,
+                                                        self.input.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::Host, cx),
                                                     ))
@@ -343,7 +335,7 @@ impl Workspace {
                                                         this.form.active_field = Some(FormField::Port);
                                                         this.form.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.form.field_cursor = usize::MAX;
-                                                        this.cursor_visible = true;
+                                                        this.input.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
@@ -353,7 +345,7 @@ impl Workspace {
                                                         is_port_active,
                                                         self.form.field_anchor,
                                                         self.form.field_cursor,
-                                                        self.cursor_visible,
+                                                        self.input.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::Port, cx),
                                                     ))
@@ -390,7 +382,7 @@ impl Workspace {
                                                         this.form.active_field = Some(FormField::Database);
                                                         this.form.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.form.field_cursor = usize::MAX;
-                                                        this.cursor_visible = true;
+                                                        this.input.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
@@ -400,7 +392,7 @@ impl Workspace {
                                                         is_db_active,
                                                         self.form.field_anchor,
                                                         self.form.field_cursor,
-                                                        self.cursor_visible,
+                                                        self.input.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::Database, cx),
                                                     ))
@@ -427,7 +419,7 @@ impl Workspace {
                                                         this.form.active_field = Some(FormField::User);
                                                         this.form.field_anchor = (event.click_count() >= 2).then_some(0);
                                                         this.form.field_cursor = usize::MAX;
-                                                        this.cursor_visible = true;
+                                                        this.input.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
@@ -437,7 +429,7 @@ impl Workspace {
                                                         is_user_active,
                                                         self.form.field_anchor,
                                                         self.form.field_cursor,
-                                                        self.cursor_visible,
+                                                        self.input.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::User, cx),
                                                     ))
@@ -490,7 +482,7 @@ impl Workspace {
                                                 this.form.active_field = Some(FormField::Password);
                                                 this.form.field_anchor = (event.click_count() >= 2).then_some(0);
                                                 this.form.field_cursor = usize::MAX;
-                                                this.cursor_visible = true;
+                                                this.input.cursor_visible = true;
                                                 window.focus(&this.focus_handle);
                                                 cx.notify();
                                             }))
@@ -500,7 +492,7 @@ impl Workspace {
                                                 is_pass_active,
                                                 self.form.field_anchor,
                                                 self.form.field_cursor,
-                                                self.cursor_visible,
+                                                self.input.cursor_visible,
                                                 theme,
                                                 &self.field_caret_pick(FormField::Password, cx),
                                             ))

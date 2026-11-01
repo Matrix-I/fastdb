@@ -84,6 +84,7 @@ pub(super) enum AfterSave {
     Run(u64),
     Close(Vec<u64>),
     Quit,
+    Restart,
 }
 
 use super::{Context, Workspace};
@@ -167,16 +168,31 @@ impl Workspace {
             AfterSave::None => {}
             AfterSave::Run(id) => self.run_saved_query(id, cx),
             AfterSave::Close(ids) => self.close_saved_tabs(&ids, cx),
-            AfterSave::Quit => {
+            AfterSave::Quit | AfterSave::Restart => {
+                let restart = matches!(action, AfterSave::Restart);
                 let flushed = self.save_queue.flush();
                 cx.spawn(async move |this, cx| {
-                    let _ = flushed.recv_async().await;
+                    if flushed.recv_async().await.is_err() {
+                        return;
+                    }
                     let _ = this.update(cx, |this, cx| {
                         if this.tabs.iter().any(|t| t.is_dirty()) {
-                            this.request_quit(cx);
+                            this.save_then(
+                                this.tabs.iter().map(|t| t.id).collect(),
+                                if restart {
+                                    AfterSave::Restart
+                                } else {
+                                    AfterSave::Quit
+                                },
+                                cx,
+                            );
                         } else {
                             this.allow_quit = true;
-                            cx.quit();
+                            if restart {
+                                crate::updater::restart_application();
+                            } else {
+                                cx.quit();
+                            }
                         }
                     });
                 })

@@ -63,7 +63,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let theme = &self.theme;
-        let is_active = self.resizing_panel.map(|d| d.splitter) == Some(splitter);
+        let is_active = self.layout.resizing_panel.map(|d| d.splitter) == Some(splitter);
         let bg = if is_active {
             Rgba {
                 a: 0.85,
@@ -80,8 +80,8 @@ impl Workspace {
             ..theme.border_focused
         };
         let (id, start_width) = match splitter {
-            PanelSplitter::Navigator => ("navigator-splitter", self.navigator_width),
-            PanelSplitter::ValuePanel => ("value-panel-splitter", self.value_panel_width),
+            PanelSplitter::Navigator => ("navigator-splitter", self.layout.navigator_width),
+            PanelSplitter::ValuePanel => ("value-panel-splitter", self.layout.value_panel_width),
         };
 
         let handle = div()
@@ -96,7 +96,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                    this.resizing_panel = Some(PanelDrag {
+                    this.layout.resizing_panel = Some(PanelDrag {
                         splitter,
                         start_mouse_x: f32::from(event.position.x),
                         start_width,
@@ -113,27 +113,27 @@ impl Workspace {
 
     /// Applies a splitter drag to the panel width as the mouse moves
     pub(super) fn drag_panel_splitter(&mut self, mouse_x: f32, window_w: f32) {
-        let Some(drag) = self.resizing_panel else {
+        let Some(drag) = self.layout.resizing_panel else {
             return;
         };
         let delta = mouse_x - drag.start_mouse_x;
         match drag.splitter {
             PanelSplitter::Navigator => {
-                let other = if self.show_right_panels {
-                    self.value_panel_width
+                let other = if self.layout.show_right_panels {
+                    self.layout.value_panel_width
                 } else {
                     0.0
                 };
-                self.navigator_width =
+                self.layout.navigator_width =
                     dragged_panel_width(drag.splitter, &drag, delta, window_w, other);
             }
             PanelSplitter::ValuePanel => {
-                self.value_panel_width = dragged_panel_width(
+                self.layout.value_panel_width = dragged_panel_width(
                     drag.splitter,
                     &drag,
                     delta,
                     window_w,
-                    self.navigator_width,
+                    self.layout.navigator_width,
                 );
             }
         }

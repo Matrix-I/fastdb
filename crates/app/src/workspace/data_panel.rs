@@ -12,7 +12,7 @@ impl Workspace {
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
         let view_mode = tab.view_mode;
-        let show_right_panels = self.show_right_panels;
+        let show_right_panels = self.layout.show_right_panels;
         let mut data_row = div().flex().flex_row().flex_1().w_full().overflow_hidden();
 
         // Left vertical toolstrip (Grid / Text)
@@ -102,15 +102,15 @@ impl Workspace {
                 .h_full()
                 .overflow_hidden()
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.is_filter_focused = false;
+                    this.input.is_filter_focused = false;
                     this.blur_fetch_size();
                     cx.notify();
                 }))
                 .child({
                     match view_mode {
                         DataViewMode::Grid => {
-                            let sidebar_w = self.navigator_width;
-                            let panels_w = if show_right_panels { self.value_panel_width } else { 0.0 };
+                            let sidebar_w = self.layout.navigator_width;
+                            let panels_w = if show_right_panels { self.layout.value_panel_width } else { 0.0 };
                             let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w - CENTER_CHROME_WIDTH - panels_w).max(200.0);
                             let available_viewport_h = (f32::from(window.viewport_size().height) - 180.0).max(200.0);
                             let is_running_query = self.operations.is_running();
@@ -124,7 +124,7 @@ impl Workspace {
                                 cx.defer_in(window, |this, _, cx| this.fetch_next_rows(cx));
                             }
 
-                            let active_resizing_col = self.resizing_column.and_then(|(t, c, _, _)| {
+                            let active_resizing_col = self.layout.resizing_column.and_then(|(t, c, _, _)| {
                                 if t == active_tab_idx { Some(c) } else { None }
                             });
 
@@ -195,11 +195,11 @@ impl Workspace {
                                                     if event.click_count >= 2 {
                                                         if let Some(tab) = this.tabs.get_mut(active_tab_idx) {
                                                             tab.grid.auto_fit_single_column(col_idx);
-                                                            this.resizing_column = None;
+                                                            this.layout.resizing_column = None;
                                                             cx.notify();
                                                         }
                                                     } else {
-                                                        this.resizing_column = Some((
+                                                        this.layout.resizing_column = Some((
                                                             active_tab_idx,
                                                             col_idx,
                                                             f32::from(event.position.x),
@@ -274,7 +274,7 @@ impl Workspace {
                 .py_3()
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.show_right_panels = !this.show_right_panels;
+                    this.layout.show_right_panels = !this.layout.show_right_panels;
                     cx.notify();
                 }))
                 .child(

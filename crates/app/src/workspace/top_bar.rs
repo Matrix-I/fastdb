@@ -28,7 +28,7 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .gap_2()
-                    .w(px(self.navigator_width))
+                    .w(px(self.layout.navigator_width))
                     .h_full()
                     .pl(px(top_bar_left_pad))
                     .pr_2()
@@ -89,7 +89,7 @@ impl Workspace {
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.active_tab = i;
-                                this.is_filter_focused = false;
+                                this.input.is_filter_focused = false;
                                 this.activate_script_connection(cx);
                                 cx.notify();
                             }))
@@ -158,7 +158,7 @@ impl Workspace {
                 )
             })
             // Update notification badge shown when a new release is available
-            .when_some(self.pending_update.clone(), |el, info| {
+            .when_some(self.updates.read(cx).pending(), |el, info| {
                 let info_for_click = info.clone();
                 let tag = info.tag_name.clone();
                 el.child(
@@ -179,8 +179,9 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(rgb(0x388bfd)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.update_dialog =
-                                Some(UpdateDialog::update_available(info_for_click.clone(), true));
+                            this.updates.update(cx, |updates, cx| {
+                                updates.show_release(info_for_click.clone(), cx)
+                            });
                             cx.notify();
                         }))
                         .child(div().child("⚡"))

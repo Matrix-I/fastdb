@@ -53,19 +53,9 @@ impl Workspace {
             return;
         }
 
-        if self.update_dialog.is_some() {
+        if self.updates.read(cx).is_open() {
             if event.keystroke.key == "escape" {
-                let is_downloading = matches!(
-                    self.update_dialog.as_ref().map(|d| &d.status),
-                    Some(UpdateDialogStatus::UpdateAvailable {
-                        download: DownloadUiState::Downloading { .. },
-                        ..
-                    })
-                );
-                if !is_downloading {
-                    self.close_update_dialog();
-                    cx.notify();
-                }
+                self.updates.update(cx, |updates, cx| updates.dismiss(cx));
             }
             return;
         }
@@ -85,17 +75,17 @@ impl Workspace {
             return;
         }
 
-        if self.column_menu.is_some() {
+        if self.menus.column_menu.is_some() {
             if event.keystroke.key == "escape" {
-                self.column_menu = None;
+                self.menus.column_menu = None;
                 cx.notify();
             }
             return;
         }
 
-        if self.nav_context_menu.is_some() {
+        if self.menus.nav_context_menu.is_some() {
             if event.keystroke.key == "escape" {
-                self.nav_context_menu = None;
+                self.menus.nav_context_menu = None;
                 cx.notify();
             }
             return;
@@ -116,7 +106,7 @@ impl Workspace {
             if event.keystroke.key == "tab" {
                 self.form.field_anchor = None;
                 self.form.field_cursor = usize::MAX;
-                self.cursor_visible = true;
+                self.input.cursor_visible = true;
                 self.form.active_field =
                     match (self.form.selected_driver_kind, self.form.active_field) {
                         (DbDriverKind::Sqlite, None) => Some(FormField::Name),
@@ -153,7 +143,7 @@ impl Workspace {
                 if consumed {
                     self.form.field_cursor = caret;
                     self.form.field_anchor = anchor;
-                    self.cursor_visible = true;
+                    self.input.cursor_visible = true;
                     cx.notify();
                 }
             }
@@ -174,11 +164,11 @@ impl Workspace {
             self.run_active_query(cx);
         } else if !self.tabs.is_empty() {
             let tab = &mut self.tabs[self.active_tab];
-            if self.is_fetch_size_focused {
+            if self.input.is_fetch_size_focused {
                 if event.keystroke.key == "escape" {
                     tab.fetch.size_text = tab.fetch.size.to_string();
-                    self.is_fetch_size_focused = false;
-                    self.fetch_size_anchor = None;
+                    self.input.is_fetch_size_focused = false;
+                    self.input.fetch_size_anchor = None;
                     cx.notify();
                 } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
                     // Like DBeaver, a new fetch size re-reads the result from the first row
@@ -186,22 +176,22 @@ impl Workspace {
                 } else {
                     let input = LineInput {
                         text: &mut tab.fetch.size_text,
-                        caret: &mut self.fetch_size_cursor,
-                        anchor: &mut self.fetch_size_anchor,
+                        caret: &mut self.input.fetch_size_cursor,
+                        anchor: &mut self.input.fetch_size_anchor,
                         digits_only: true,
                         history: &mut tab.fetch.size_history,
                     };
                     if handle_line_key(input, &event.keystroke, cx) {
-                        self.cursor_visible = true;
+                        self.input.cursor_visible = true;
                         cx.notify();
                     }
                 }
-            } else if self.is_filter_focused {
+            } else if self.input.is_filter_focused {
                 if self.handle_filter_suggest_key(&event.keystroke) {
                     cx.notify();
                 } else if event.keystroke.key == "escape" {
-                    self.is_filter_focused = false;
-                    self.filter_anchor = None;
+                    self.input.is_filter_focused = false;
+                    self.input.filter_anchor = None;
                     cx.notify();
                 } else if event.keystroke.key == "enter" || event.keystroke.key == "return" {
                     self.run_active_query(cx);
@@ -213,8 +203,8 @@ impl Workspace {
                     let before = tab.filter_sql.clone();
                     let input = LineInput {
                         text: &mut tab.filter_sql,
-                        caret: &mut self.filter_cursor,
-                        anchor: &mut self.filter_anchor,
+                        caret: &mut self.input.filter_cursor,
+                        anchor: &mut self.input.filter_anchor,
                         digits_only: false,
                         history: &mut tab.filter_history,
                     };
@@ -223,9 +213,9 @@ impl Workspace {
                         if self.tabs[self.active_tab].filter_sql != before {
                             self.refresh_filter_suggest(false);
                         } else {
-                            self.filter_suggest = None;
+                            self.input.filter_suggest = None;
                         }
-                        self.cursor_visible = true;
+                        self.input.cursor_visible = true;
                         cx.notify();
                     }
                 }
@@ -252,7 +242,7 @@ impl Workspace {
                 } else if !tab.editor.handle_key(&event.keystroke) {
                     return;
                 }
-                self.cursor_visible = true;
+                self.input.cursor_visible = true;
                 cx.notify();
             } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                 && event.keystroke.key.eq_ignore_ascii_case("c")
@@ -309,12 +299,12 @@ impl Workspace {
                     caret: &mut edit.caret,
                     anchor: &mut edit.anchor,
                     digits_only: false,
-                    history: &mut self.cell_edit_history,
+                    history: &mut self.input.cell_edit_history,
                 };
                 if !handle_line_key(input, keystroke, cx) {
                     return;
                 }
-                self.cursor_visible = true;
+                self.input.cursor_visible = true;
             }
         }
         cx.notify();

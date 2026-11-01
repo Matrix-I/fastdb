@@ -53,7 +53,7 @@ fn active_after_close(
 
 impl Workspace {
     pub(super) fn open_tab_context_menu(&mut self, tab_idx: usize, position: Point<Pixels>) {
-        self.tab_context_menu = Some(TabContextMenu { tab_idx, position });
+        self.menus.tab_context_menu = Some(TabContextMenu { tab_idx, position });
     }
 
     /// Closes every tab that `keep` rejects (by index) and re-points the active tab
@@ -91,7 +91,7 @@ impl Workspace {
         self.active_tab = active_id
             .and_then(|id| self.tabs.iter().position(|t| t.id == id))
             .unwrap_or(new_index);
-        self.is_filter_focused = false;
+        self.input.is_filter_focused = false;
         cx.notify();
     }
 
@@ -141,7 +141,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_surface_selected))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.tab_context_menu = None;
+                        this.menus.tab_context_menu = None;
                         this.run_tab_menu_action(action, target, cx);
                         cx.notify();
                     }));
@@ -163,7 +163,7 @@ impl Workspace {
             .border_color(theme.border)
             .shadow_lg()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.tab_context_menu = None;
+                this.menus.tab_context_menu = None;
                 cx.notify();
             }))
             .child(item(

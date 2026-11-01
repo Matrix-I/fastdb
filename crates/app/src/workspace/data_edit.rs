@@ -49,10 +49,10 @@ impl Workspace {
             caret: usize::MAX,
             anchor: Some(0),
         });
-        self.cell_edit_history.clear();
-        self.is_filter_focused = false;
+        self.input.cell_edit_history.clear();
+        self.input.is_filter_focused = false;
         self.blur_fetch_size();
-        self.cursor_visible = true;
+        self.input.cursor_visible = true;
     }
 
     /// Opens the editor on the focused cell
@@ -353,17 +353,10 @@ impl Workspace {
                 let Some(idx) = this.tabs.iter().position(|t| t.id == tab_id) else {
                     return;
                 };
-                if let Err(error) = &result {
-                    this.tabs[idx].last_error =
-                        Some(format!("Could not save row changes: {error:#}"));
-                }
-                if result.is_ok() && this.tabs[idx].grid.changeset == saved_changes {
-                    this.tabs[idx].grid.changeset.clear();
-                    this.tabs[idx].grid.changeset_history.clear();
-                    this.tabs[idx].grid.selection.clear();
-                    if idx == this.active_tab {
-                        this.run_active_query(cx);
-                    }
+                let saved = this.tabs[idx]
+                    .finish_row_save(&saved_changes, result.map_err(|error| format!("{error:#}")));
+                if saved && idx == this.active_tab {
+                    this.run_active_query(cx);
                 }
                 cx.notify();
             });
@@ -493,7 +486,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<(u64, usize, CellEditorRenderer)> {
         let edit = self.tabs.get(self.active_tab)?.grid.editing_cell.clone()?;
-        let caret_visible = self.cursor_visible;
+        let caret_visible = self.input.cursor_visible;
         let workspace = cx.entity().downgrade();
         let pick: CaretPick = Rc::new(move |index, kind, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
@@ -504,7 +497,7 @@ impl Workspace {
                 {
                     apply_pick(&mut e.caret, &mut e.anchor, index, kind, true);
                 }
-                this.cursor_visible = true;
+                this.input.cursor_visible = true;
                 cx.notify();
             });
         });

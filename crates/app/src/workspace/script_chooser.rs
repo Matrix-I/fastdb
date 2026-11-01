@@ -73,7 +73,7 @@ impl ScriptChooser {
 impl Workspace {
     pub(super) fn open_script_chooser(&mut self, conn_id: &str, cx: &mut Context<Self>) {
         self.script_chooser = Some(ScriptChooser::new(conn_id.to_owned(), vec![]));
-        self.cursor_visible = true;
+        self.input.cursor_visible = true;
         self.refresh_script_chooser(cx);
         cx.notify();
     }
@@ -157,7 +157,7 @@ impl Workspace {
                 if chooser.query != before {
                     chooser.query_edited();
                 }
-                self.cursor_visible = true;
+                self.input.cursor_visible = true;
             }
         }
         cx.notify();
@@ -170,7 +170,7 @@ impl Workspace {
             let _ = workspace.update(cx, |this, cx| {
                 if let Some(chooser) = this.script_chooser.as_mut() {
                     apply_pick(&mut chooser.caret, &mut chooser.anchor, index, kind, true);
-                    this.cursor_visible = true;
+                    this.input.cursor_visible = true;
                     cx.notify();
                 }
             });
@@ -315,7 +315,7 @@ impl Workspace {
                 true,
                 chooser.anchor,
                 chooser.caret,
-                self.cursor_visible,
+                self.input.cursor_visible,
                 theme,
                 &pick,
             ));

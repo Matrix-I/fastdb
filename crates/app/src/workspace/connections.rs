@@ -36,17 +36,6 @@ impl Workspace {
         self.save_queue.write(connections_config_path(), content);
     }
 
-    pub fn active_saved_connection(&self) -> Option<&SavedConnection> {
-        if let Some(ref id) = self.connections.active_connection_id {
-            self.connections
-                .saved_connections
-                .iter()
-                .find(|c| &c.id == id)
-        } else {
-            self.connections.saved_connections.first()
-        }
-    }
-
     pub fn test_connection(&mut self, cx: &mut Context<Self>) {
         if self.form.is_connecting {
             return;
@@ -208,7 +197,6 @@ impl Workspace {
                             ConnectionSession {
                                 kind: config.driver,
                                 driver: Some(driver),
-                                is_connected: true,
                                 ..ConnectionSession::default()
                             },
                         );
@@ -318,7 +306,7 @@ impl Workspace {
         });
         self.form.field_cursor = usize::MAX;
         self.form.field_anchor = None;
-        self.cursor_visible = true;
+        self.input.cursor_visible = true;
         self.form.show_password = false;
         self.form.form_history.clear();
         self.form.show_connection_modal = true;
@@ -329,7 +317,7 @@ impl Workspace {
         self.connections
             .sessions
             .get(conn_id)
-            .is_some_and(|s| s.is_connected)
+            .is_some_and(|s| s.driver.is_some())
     }
 
     fn activate_live_connection(&mut self, conn_id: &str) -> bool {
@@ -344,7 +332,6 @@ impl Workspace {
     pub fn disconnect_by_id(&mut self, conn_id: &str) {
         if let Some(session) = self.connections.sessions.get_mut(conn_id) {
             session.driver = None;
-            session.is_connected = false;
         }
     }
 
@@ -446,29 +433,35 @@ impl Workspace {
         self.connections.active_mut().table_indexes = idx_map;
 
         self.connections.active_mut().tables = metadata.tables;
+        let session = self.connections.active_mut();
+        let mut tree = BTreeMap::<String, Vec<TableSummary>>::new();
+        let mut properties = HashMap::new();
+        for table in &session.tables {
+            tree.entry(table.schema.clone())
+                .or_default()
+                .push(table.clone());
+            let key = (table.schema.clone(), table.name.clone());
+            let model = super::properties::model::TableProperties::new(
+                session.kind,
+                table.schema.clone(),
+                table.name.clone(),
+                session.table_columns.get(&key).cloned().unwrap_or_default(),
+                session
+                    .table_constraints
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default(),
+                session.table_indexes.get(&key).cloned().unwrap_or_default(),
+            );
+            properties.insert(key, Arc::new(model));
+        }
+        session.schema_tree = Arc::new(tree);
+        session.properties = properties;
     }
 
     pub fn open_new_connection_dialog(&mut self) {
-        self.form.invalidate();
-        self.form.editing_connection_id = None;
-        self.form.form_name = "".to_string();
-        self.form.selected_driver_kind = DbDriverKind::Postgres;
-        self.form.form_host = "localhost".to_string();
-        self.form.form_port = "5432".to_string();
-        self.form.form_database = "".to_string();
-        self.form.form_user = "postgres".to_string();
-        self.form.form_password = "".to_string();
-        self.form.form_use_unix_socket = false;
-        self.form.form_tls_enabled = false;
-        self.form.form_tls_ca_cert.clear();
-        self.form.active_field = Some(FormField::Name);
-        self.form.field_cursor = usize::MAX;
-        self.form.field_anchor = None;
-        self.cursor_visible = true;
-        self.form.show_password = false;
-        self.form.test_result = None;
-        self.form.form_history.clear();
-        self.form.show_connection_modal = true;
+        self.form.load(None, true);
+        self.input.cursor_visible = true;
     }
 
     pub fn edit_saved_connection(&mut self, conn_id: Option<&str>) {
@@ -490,26 +483,8 @@ impl Workspace {
         };
 
         if let Some(saved) = target_conn {
-            self.form.selected_driver_kind =
-                DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
-            self.form.form_name = saved.name.clone();
-            self.form.form_host = saved.host.clone();
-            self.form.form_port = saved.port.to_string();
-            self.form.form_database = saved.database.clone();
-            self.form.form_user = saved.user.clone();
-            self.form.form_password = saved.password.clone().unwrap_or_default();
-            self.form.form_use_unix_socket = saved.use_unix_socket;
-            self.form.form_tls_enabled = saved.tls_enabled;
-            self.form.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
-            self.form.editing_connection_id = Some(saved.id.clone());
-            self.form.test_result = None;
-            self.form.active_field = Some(FormField::Database);
-            self.form.field_cursor = usize::MAX;
-            self.form.field_anchor = None;
-            self.cursor_visible = true;
-            self.form.show_password = false;
-            self.form.form_history.clear();
-            self.form.show_connection_modal = true;
+            self.form.load(Some(&saved), true);
+            self.input.cursor_visible = true;
         } else {
             self.open_new_connection_dialog();
         }
@@ -519,7 +494,7 @@ impl Workspace {
         if self.form.is_connecting {
             return;
         }
-        if self.connections.active().is_connected
+        if self.connections.active().driver.is_some()
             && self.connections.active_connection_id.as_deref() == Some(conn_id)
         {
             self.connections.navigator_mut().nav_connection_expanded = true;
@@ -548,18 +523,7 @@ impl Workspace {
             return false;
         };
 
-        self.form.selected_driver_kind =
-            DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
-        self.form.form_name = saved.name.clone();
-        self.form.form_host = saved.host.clone();
-        self.form.form_port = saved.port.to_string();
-        self.form.form_database = saved.database.clone();
-        self.form.form_user = saved.user.clone();
-        self.form.form_password = saved.password.clone().unwrap_or_default();
-        self.form.form_use_unix_socket = saved.use_unix_socket;
-        self.form.form_tls_enabled = saved.tls_enabled;
-        self.form.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
-        self.form.editing_connection_id = Some(saved.id.clone());
+        self.form.load(Some(&saved), false);
         true
     }
 
@@ -569,7 +533,7 @@ impl Workspace {
             .retain(|c| c.id != conn_id);
         self.connections.sessions.remove(conn_id);
         if self.connections.active_connection_id.as_deref() == Some(conn_id) {
-            if self.connections.active().is_connected {
+            if self.connections.active().driver.is_some() {
                 self.disconnect();
             }
             self.connections.active_connection_id = self
@@ -647,75 +611,5 @@ impl Workspace {
 
         self.save_config();
         self.form.show_connection_modal = false;
-    }
-
-    pub fn select_preset_postgres(&mut self) {
-        self.form.selected_driver_kind = DbDriverKind::Postgres;
-        self.form.form_host = "localhost".to_string();
-        self.form.form_port = "5432".to_string();
-        self.form.form_database = "postgres".to_string();
-        self.form.form_user = "postgres".to_string();
-        self.form.form_password = "".to_string();
-        self.form.form_use_unix_socket = true;
-        self.form.form_tls_enabled = false;
-        self.form.form_tls_ca_cert.clear();
-        self.form.active_field = Some(FormField::Host);
-        self.form.field_cursor = usize::MAX;
-        self.form.test_result = None;
-    }
-
-    pub fn select_preset_mysql(&mut self) {
-        self.form.selected_driver_kind = DbDriverKind::MySql;
-        self.form.form_host = "localhost".to_string();
-        self.form.form_port = "3306".to_string();
-        self.form.form_database = "mysql".to_string();
-        self.form.form_user = "root".to_string();
-        self.form.form_password = "".to_string();
-        self.form.form_use_unix_socket = true;
-        self.form.form_tls_enabled = false;
-        self.form.form_tls_ca_cert.clear();
-        self.form.active_field = Some(FormField::Host);
-        self.form.field_cursor = usize::MAX;
-        self.form.test_result = None;
-    }
-
-    pub fn select_preset_mariadb(&mut self) {
-        self.select_preset_mysql();
-        self.form.selected_driver_kind = DbDriverKind::MariaDb;
-    }
-
-    pub fn select_preset_odbc(&mut self, kind: DbDriverKind) {
-        self.open_new_connection_dialog();
-        self.form.selected_driver_kind = kind;
-        self.form.form_port = kind.default_port().to_string();
-        self.form.form_user = match kind {
-            DbDriverKind::SqlServer => "sa",
-            DbDriverKind::Db2 => "db2inst1",
-            _ => "",
-        }
-        .to_string();
-        self.form.form_database = match kind {
-            DbDriverKind::SqlServer => "master",
-            DbDriverKind::Oracle => "FREEPDB1",
-            _ => "",
-        }
-        .to_string();
-        self.form.form_tls_enabled = kind == DbDriverKind::SqlServer;
-        self.form.active_field = Some(FormField::Host);
-    }
-
-    pub fn select_preset_sqlite(&mut self) {
-        self.form.selected_driver_kind = DbDriverKind::Sqlite;
-        self.form.form_host = "localhost".to_string();
-        self.form.form_port = "0".to_string();
-        self.form.form_database = "fastdb.sqlite".to_string();
-        self.form.form_user = "".to_string();
-        self.form.form_password = "".to_string();
-        self.form.form_use_unix_socket = false;
-        self.form.form_tls_enabled = false;
-        self.form.form_tls_ca_cert.clear();
-        self.form.active_field = Some(FormField::Database);
-        self.form.field_cursor = usize::MAX;
-        self.form.test_result = None;
     }
 }

@@ -65,25 +65,27 @@ impl Default for NavigatorState {
 
 pub(super) struct ConnectionSession {
     pub kind: DbDriverKind,
+    pub schema_tree: Arc<std::collections::BTreeMap<String, Vec<TableSummary>>>,
+    pub properties: HashMap<(String, String), Arc<super::properties::model::TableProperties>>,
     pub driver: Option<Arc<dyn DatabaseDriver>>,
     pub schema_cache: Arc<SchemaCache>,
     pub tables: Vec<TableSummary>,
     pub table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
     pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
     pub table_indexes: HashMap<(String, String), Vec<String>>,
-    pub is_connected: bool,
 }
 impl Default for ConnectionSession {
     fn default() -> Self {
         Self {
             kind: DbDriverKind::Postgres,
+            schema_tree: Arc::new(std::collections::BTreeMap::new()),
+            properties: HashMap::new(),
             driver: None,
             schema_cache: Arc::new(SchemaCache::new().expect("schema cache")),
             tables: Vec::new(),
             table_columns: HashMap::new(),
             table_constraints: HashMap::new(),
             table_indexes: HashMap::new(),
-            is_connected: false,
         }
     }
 }
@@ -205,6 +207,57 @@ impl ConnectionFormState {
     }
 }
 
+impl ConnectionFormState {
+    pub fn load(&mut self, saved: Option<&SavedConnection>, visible: bool) {
+        let request_id = self.request_id + 1;
+        *self = Self::from_saved(saved);
+        self.request_id = request_id;
+        self.show_connection_modal = visible;
+        if saved.is_some() {
+            self.active_field = Some(FormField::Database);
+        }
+    }
+    pub fn select_preset(&mut self, kind: DbDriverKind) {
+        self.invalidate();
+        self.selected_driver_kind = kind;
+        self.form_host = "localhost".into();
+        self.form_port = kind.default_port().to_string();
+        self.form_database = match kind {
+            DbDriverKind::Postgres => "postgres",
+            DbDriverKind::MySql | DbDriverKind::MariaDb => "mysql",
+            DbDriverKind::SqlServer => "master",
+            DbDriverKind::Oracle => "FREEPDB1",
+            DbDriverKind::Sqlite => "fastdb.sqlite",
+            DbDriverKind::Db2 => "",
+        }
+        .into();
+        self.form_user = match kind {
+            DbDriverKind::Postgres => "postgres",
+            DbDriverKind::MySql | DbDriverKind::MariaDb => "root",
+            DbDriverKind::SqlServer => "sa",
+            DbDriverKind::Db2 => "db2inst1",
+            _ => "",
+        }
+        .into();
+        self.form_password.clear();
+        self.form_use_unix_socket = matches!(
+            kind,
+            DbDriverKind::Postgres | DbDriverKind::MySql | DbDriverKind::MariaDb
+        );
+        self.form_tls_enabled = kind == DbDriverKind::SqlServer;
+        self.form_tls_ca_cert.clear();
+        self.form_history.clear();
+        self.test_result = None;
+        self.show_password = false;
+        self.active_field = Some(if kind == DbDriverKind::Sqlite {
+            FormField::Database
+        } else {
+            FormField::Host
+        });
+        self.field_cursor = usize::MAX;
+        self.field_anchor = None;
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{ConnectionManager, ConnectionSession};
@@ -294,5 +347,31 @@ mod form_tests {
         assert!(!form.accepts(request, &snapshot));
         form.form_port = "99999".into();
         assert!(form.build_config().is_err());
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::ConnectionFormState;
+    use db_wire::DbDriverKind;
+    #[test]
+    fn provider_presets_preserve_form_identity_and_invalidate_pending_requests() {
+        let mut form = ConnectionFormState::from_saved(None);
+        form.editing_connection_id = Some("existing".into());
+        form.show_connection_modal = true;
+        let request = form.begin_request();
+        let snapshot = form.snapshot();
+        for kind in [
+            DbDriverKind::Oracle,
+            DbDriverKind::SqlServer,
+            DbDriverKind::Db2,
+            DbDriverKind::MariaDb,
+        ] {
+            form.select_preset(kind);
+            assert_eq!(form.editing_connection_id.as_deref(), Some("existing"));
+            assert!(form.show_connection_modal);
+            assert_eq!(form.build_config().unwrap().driver, kind);
+        }
+        assert!(!form.accepts(request, &snapshot));
     }
 }

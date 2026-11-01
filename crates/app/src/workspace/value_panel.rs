@@ -154,7 +154,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(self.value_panel_width))
+            .w(px(self.layout.value_panel_width))
             .h_full()
             .bg(theme.bg_editor)
             .border_l_1()
@@ -199,7 +199,7 @@ impl Workspace {
                                     s.bg(theme.bg_surface_hover).text_color(theme.text_primary)
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.show_right_panels = false;
+                                    this.layout.show_right_panels = false;
                                     this.value_panel.show_format_menu = false;
                                     cx.notify();
                                 }))
@@ -218,7 +218,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.border_color(theme.text_primary))
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_right_panels = false;
+                            this.layout.show_right_panels = false;
                             this.value_panel.show_format_menu = false;
                             cx.notify();
                         })),

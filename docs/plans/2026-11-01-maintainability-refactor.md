@@ -116,12 +116,12 @@ Acceptance: UI mutation/render callbacks perform no script filesystem I/O. Autos
 
 Build on the ownership established above; file moves alone do not complete this phase.
 
-- [ ] Split grid width measurement/layout, state/edit commands, header rendering and row/cell rendering into cohesive modules. Keep virtualization, column sizing, selection, clipboard and undo/redo tests at their logical owners.
-- [ ] Extract navigator connection/schema/table nodes and section rendering. Build its metadata view model on connection/schema changes instead of repeatedly transforming all metadata on every render.
-- [ ] Split Properties sections into focused render functions/components using an explicit metadata view model. Remove hardcoded sample-table special cases and fabricated IDs/owners/statistics from production rendering; show unavailable values explicitly.
-- [ ] Extract updater check/download state and task orchestration from `Workspace`/`update_dialog.rs`. Render checking, available, downloading, complete and error states through small components. Keep platform installer behavior in `updater`.
-- [ ] Group focus/input/layout/menu state under appropriate owners. Reuse the existing text input/history abstractions instead of retaining parallel workspace-level caret/anchor flags.
-- [ ] Make extracted GPUI components own their state/subscriptions where useful. Existing cached `Pane` wrappers must not remain the only boundary while all actions still mutate the full workspace.
+- [x] Split grid width measurement/layout, state/edit commands, header rendering and row/cell rendering into cohesive modules. Keep virtualization, column sizing, selection, clipboard and undo/redo tests at their logical owners.
+- [x] Extract navigator connection/schema/table nodes and section rendering. Build its metadata view model on connection/schema changes instead of repeatedly transforming all metadata on every render.
+- [x] Split Properties sections into focused render functions/components using an explicit metadata view model. Remove hardcoded sample-table special cases and fabricated IDs/owners/statistics from production rendering; show unavailable values explicitly.
+- [x] Extract updater check/download state and task orchestration from `Workspace`/`update_dialog.rs`. Render checking, available, downloading, complete and error states through small components. Keep platform installer behavior in `updater`.
+- [x] Group focus/input/layout/menu state under appropriate owners. Reuse the existing text input/history abstractions instead of retaining parallel workspace-level caret/anchor flags.
+- [x] Make extracted GPUI components own their state/subscriptions where useful. Existing cached `Pane` wrappers must not remain the only boundary while all actions still mutate the full workspace.
 
 Acceptance: `Workspace` primarily composes components and routes commands; render functions receive narrow state. Large views have identifiable subcomponents, no database calls/filesystem writes in render, and no placeholder data generation there. Do not split cohesive code merely to meet an arbitrary line limit.
 
@@ -143,3 +143,43 @@ Acceptance: `Workspace` primarily composes components and routes commands; rende
 4. Autosave preserves revision ordering without synchronous filesystem work on the UI thread or cursor-driven workspace refreshes.
 5. Tests live beside their logic, large views are composed from focused parts, and CI enforces the clean formatting/lint baseline.
 6. Required automated checks and manual UI scenarios pass, with external-provider validation limitations recorded explicitly.
+
+
+## Implementation record (2026-11-01)
+
+All six implementation phases are delivered as one commit per phase, as requested. Phase 6 also finishes moving preset/load transitions into `ConnectionFormState` and routes updater Restart through the script-save barrier. `FASTDB_CONFIG_DIR` supports an isolated development profile while preserving the normal config location by default.
+
+Structural results:
+
+- Workspace state decreased from 72 fields to 22 composition/owner fields; connection sessions, form state, operation state, input/layout/menus and Software Update have explicit owners.
+- Grid rendering is composed from state, column measurement, header, row and scrolling modules. The root `grid_element.rs` is approximately 232 lines.
+- Navigator nodes render from a cached schema tree. Its root is approximately 179 lines; Properties uses cached immutable models and separate section/header renderers, with a root of approximately 279 lines.
+- Software Update is an independent GPUI entity. Download progress notifies that entity; only modal visibility and release-badge changes notify the workspace.
+- Properties displays unavailable metadata explicitly, including unknown foreign-key definitions and index properties. It no longer invents sample columns, index names, constraint names, owner names or object IDs.
+
+Final automated validation:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets --offline -- -D warnings`: passed.
+- `cargo test --workspace --offline`: passed, including 81 app tests, SQL planner tests and generated-write execution against bundled SQLite.
+- `cargo build -p fastdb-app --offline`: passed.
+- The app was launched with the isolated SQLite profile below and remained running without a startup failure. This verifies startup only, not interactive rendering or workflow correctness.
+- External database and TLS tests returned early because their environment variables were unset. The local Docker client points to a missing Podman socket, so live PostgreSQL/MySQL/ODBC/TLS validation was not available.
+- Computer Use returned `Computer Use permissions are not granted`. Interactive UI verification remains pending with the user; no claim of a completed UI smoke test is made.
+
+### User UI verification pending
+
+Disposable fixtures are in `/tmp/fastdb-refactor-smoke`: two SQLite databases with an `items` table, 300 rows each, and one script per connection. Launch the current source from the repository root:
+
+```bash
+FASTDB_CONFIG_DIR=/tmp/fastdb-refactor-smoke/profile cargo run -p fastdb-app
+```
+
+- [ ] Switch between Smoke A and Smoke B and their table/script tabs. Results, completion and unsaved edits must stay with the correct connection, including the same table name on both connections.
+- [ ] Edit a connection provider preset, then Cancel. Existing tabs must still execute with their session's provider and connection.
+- [ ] Run a long query, switch tab/connection and Cancel. The original query must be cancelled; close its tab during execution and verify the app remains responsive.
+- [ ] Exercise cell edit, undo/redo, Save and a failed Save. Failure must preserve edits and report the error in the originating tab.
+- [ ] Edit a script, then immediately Run, close its tab or Quit. Reopening must show the newest saved text; a save error must keep the tab/app open.
+- [ ] Check grid scrolling, fetch-next, column resize/auto-fit and clipboard copy; inspect Properties unavailable values and DDL preview; open/dismiss Check for Updates and inspect its checking/error/available states when reachable.
+
+No release, merge or push was performed. Interactive validation and configured live-provider validation are the remaining acceptance checks.

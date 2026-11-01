@@ -26,7 +26,7 @@ impl Workspace {
             self.active_tab = self.tabs.len() - 1;
         }
 
-        self.is_filter_focused = false;
+        self.input.is_filter_focused = false;
         self.run_active_query(cx);
     }
 
@@ -55,7 +55,7 @@ impl Workspace {
                 tab.script_sql = (!statement.is_empty()).then_some(statement);
             }
         }
-        self.is_fetch_size_focused = false;
+        self.input.is_fetch_size_focused = false;
         let (sql, paged) = self.build_fetch_query(index, 0);
         self.start_query(index, sql, paged, false, cx);
     }
@@ -136,7 +136,7 @@ impl Workspace {
                         if keep && !this.tabs.iter().any(|t| t.id == tab_id) {
                             this.cancel_running_query(cx);
                         }
-                        cx.notify();
+                        this.notify_result(cx);
                         keep
                     })
                     .unwrap_or(false);
@@ -153,7 +153,7 @@ impl Workspace {
                             "Query stream closed before completion".into(),
                         ));
                     }
-                    cx.notify();
+                    this.notify_result(cx);
                 }
             });
         })

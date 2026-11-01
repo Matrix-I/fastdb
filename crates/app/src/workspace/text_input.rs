@@ -426,7 +426,7 @@ impl Workspace {
                     kind,
                     was_active,
                 );
-                this.cursor_visible = true;
+                this.input.cursor_visible = true;
                 window.focus(&this.focus_handle);
                 cx.notify();
             });
@@ -438,22 +438,22 @@ impl Workspace {
         let workspace = cx.entity().downgrade();
         Rc::new(move |index, kind, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
-                let was_active = this.is_filter_focused;
+                let was_active = this.input.is_filter_focused;
                 if !was_active && kind == PickKind::Drag {
                     return;
                 }
                 this.commit_cell_edit();
                 this.blur_fetch_size();
-                this.is_filter_focused = true;
-                this.filter_suggest = None;
+                this.input.is_filter_focused = true;
+                this.input.filter_suggest = None;
                 apply_pick(
-                    &mut this.filter_cursor,
-                    &mut this.filter_anchor,
+                    &mut this.input.filter_cursor,
+                    &mut this.input.filter_anchor,
                     index,
                     kind,
                     was_active,
                 );
-                this.cursor_visible = true;
+                this.input.cursor_visible = true;
                 cx.notify();
             });
         })
@@ -466,7 +466,7 @@ impl Workspace {
         let workspace = cx.entity().downgrade();
         Rc::new(move |index, kind, _, cx| {
             let _ = workspace.update(cx, |this, cx| {
-                let was_active = this.is_fetch_size_focused;
+                let was_active = this.input.is_fetch_size_focused;
                 if !was_active && kind == PickKind::Drag {
                     return;
                 }
@@ -474,13 +474,13 @@ impl Workspace {
                     this.focus_fetch_size(false, index);
                 }
                 apply_pick(
-                    &mut this.fetch_size_cursor,
-                    &mut this.fetch_size_anchor,
+                    &mut this.input.fetch_size_cursor,
+                    &mut this.input.fetch_size_anchor,
                     index,
                     kind,
                     was_active,
                 );
-                this.cursor_visible = true;
+                this.input.cursor_visible = true;
                 cx.notify();
             });
         })
@@ -489,18 +489,18 @@ impl Workspace {
     /// Moves keyboard input to the fetch size box, leaving the filter bar
     pub(super) fn focus_fetch_size(&mut self, select_all: bool, caret: usize) {
         self.commit_cell_edit();
-        self.is_filter_focused = false;
-        self.is_fetch_size_focused = true;
-        self.fetch_size_anchor = select_all.then_some(0);
-        self.fetch_size_cursor = if select_all { usize::MAX } else { caret };
-        self.cursor_visible = true;
+        self.input.is_filter_focused = false;
+        self.input.is_fetch_size_focused = true;
+        self.input.fetch_size_anchor = select_all.then_some(0);
+        self.input.fetch_size_cursor = if select_all { usize::MAX } else { caret };
+        self.input.cursor_visible = true;
     }
 
     /// Leaves the fetch size box, keeping a valid typed size for the next fetch
     pub(super) fn blur_fetch_size(&mut self) {
-        if self.is_fetch_size_focused {
-            self.is_fetch_size_focused = false;
-            self.fetch_size_anchor = None;
+        if self.input.is_fetch_size_focused {
+            self.input.is_fetch_size_focused = false;
+            self.input.fetch_size_anchor = None;
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 tab.fetch.commit_size_text();
             }

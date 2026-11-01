@@ -351,6 +351,26 @@ impl TabState {
     }
 }
 
+impl TabState {
+    pub(super) fn finish_row_save(
+        &mut self,
+        saved: &ui_grid::Changeset,
+        result: Result<u64, String>,
+    ) -> bool {
+        if let Err(error) = result {
+            self.last_error = Some(format!("Could not save row changes: {error}"));
+            return false;
+        }
+        if self.grid.changeset != *saved {
+            return false;
+        }
+        self.last_error = None;
+        self.grid.changeset.clear();
+        self.grid.changeset_history.clear();
+        self.grid.selection.clear();
+        true
+    }
+}
 #[cfg(test)]
 mod relocated_tests {
     #[test]
@@ -675,5 +695,35 @@ mod save_revision_tests {
         assert_eq!(tab.editor.buffer.revision(), latest);
         tab.editor.undo();
         assert!(tab.is_dirty());
+    }
+}
+
+#[cfg(test)]
+mod row_save_tests {
+    #[test]
+    fn failure_and_newer_edits_are_retained_until_a_matching_save_succeeds() {
+        let mut tab = super::TabState::table(
+            1,
+            "s",
+            "t",
+            super::Theme::dark(),
+            std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap()),
+        );
+        tab.grid
+            .changeset
+            .set_cell(0, 0, None, Some("before".into()));
+        let saved = tab.grid.changeset.clone();
+        assert!(!tab.finish_row_save(&saved, Err("conflict".into())));
+        assert!(tab.grid.changeset.is_dirty());
+        assert!(tab.last_error.as_deref().unwrap().contains("conflict"));
+        tab.grid
+            .changeset
+            .set_cell(0, 0, None, Some("newer".into()));
+        assert!(!tab.finish_row_save(&saved, Ok(1)));
+        assert!(tab.grid.changeset.is_dirty());
+        let latest = tab.grid.changeset.clone();
+        assert!(tab.finish_row_save(&latest, Ok(1)));
+        assert!(!tab.grid.changeset.is_dirty());
+        assert!(tab.last_error.is_none());
     }
 }

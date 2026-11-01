@@ -32,7 +32,7 @@ impl Workspace {
             .and_then(|p| p.columns.get(col_idx))
             .map(|c| c.name.clone());
         if let Some(column) = column {
-            self.column_menu = Some(ColumnMenu {
+            self.menus.column_menu = Some(ColumnMenu {
                 tab_idx,
                 column,
                 position,
@@ -117,7 +117,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_surface_selected))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.column_menu = None;
+                        this.menus.column_menu = None;
                         this.run_column_menu_action(action, &menu, cx);
                         cx.notify();
                     }));
@@ -144,7 +144,7 @@ impl Workspace {
             .border_color(theme.border)
             .shadow_lg()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.column_menu = None;
+                this.menus.column_menu = None;
                 cx.notify();
             }))
             .child(item(

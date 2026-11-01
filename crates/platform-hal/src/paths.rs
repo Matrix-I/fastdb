@@ -15,6 +15,9 @@ pub fn project_dirs() -> Option<ProjectDirs> {
 
 /// Returns the configuration directory for FastDB
 pub fn config_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("FASTDB_CONFIG_DIR").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path);
+    }
     if let Some(proj) = project_dirs() {
         proj.config_dir().to_path_buf()
     } else {

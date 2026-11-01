@@ -111,7 +111,7 @@ These are goals of the project, but they are not available in the app today:
 - **Keychain-backed connection passwords.** OS keychain helpers exist, but saved connections still serialize passwords into JSON; keychain integration and migration remain to be done.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
-- **Placeholder metadata.** Some Properties fields (object ID, owner, tablespace, and the statistics table) show placeholder values rather than data read from the database. The status bar's "120 FPS" label is static text.
+- **Additional metadata.** Properties labels object ID, owner, tablespace, foreign key definitions, index definitions and statistics as unavailable when the driver does not provide them. The status bar's "120 FPS" label is static text.
 - **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
 - **Benchmarks.** None of the numbers under [Goals](#-goals) has been measured.
 
@@ -147,6 +147,8 @@ flowchart TD
     Grid -.->|"read visible cells"| Pager
 ```
 
+- Connection sessions own their provider, schema cache and metadata. Table/script tabs and asynchronous query/Save operations carry stable connection and tab identities, including the original cancellation driver.
+- Script snapshots are written by one background queue using atomic replacement; cursor blinking and query progress update the result pane independently. Software Update is a separate GPUI entity with its own state and tasks.
 - Every driver future runs on one shared multi-threaded Tokio runtime (`db_wire::run_on_shared_runtime`). Sockets and pool tasks therefore never depend on a short-lived caller runtime.
 - A query produces an ordered event stream:
   1. `SchemaReady(pager)`: the driver owns the result pager and hands it to the UI.
@@ -187,6 +189,8 @@ git clone https://github.com/Matrix-I/fastdb.git
 cd fastdb
 cargo run --release -p fastdb-app
 ```
+
+For an isolated development profile, set `FASTDB_CONFIG_DIR=/tmp/fastdb-smoke` before launching. This keeps saved connections, scripts and update preferences separate from your normal profile.
 
 Saved connections are written to `connections.json` in the user config directory (`~/Library/Application Support/com.fastdb.FastDB/` on macOS, `~/.config/fastdb/` on Linux), so they survive rebuilds and launches from Finder. A `.fastdb_config.json` left in the working directory by older builds is moved there on first launch. Passwords are currently stored in that file in plain text.
 
