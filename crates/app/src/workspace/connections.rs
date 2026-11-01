@@ -10,6 +10,8 @@ pub(super) struct SchemaMetadata {
     columns: Vec<(String, String, Vec<ColumnMeta>)>,
     constraints: Vec<(String, String, String, String)>,
     indexes: Vec<(String, String, String)>,
+    details: Vec<(String, String, db_wire::TableDetails)>,
+    details_error: Option<String>,
 }
 
 /// Loads tables, then columns, constraints and indexes in batch; only a failed
@@ -19,11 +21,18 @@ async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMeta
         .list_tables()
         .await
         .map_err(|e| format!("Connected but failed to list tables: {}", e))?;
+    let details = driver.list_table_details().await;
+    let details_error = details
+        .as_ref()
+        .err()
+        .map(|e| format!("Table details unavailable: {e}"));
     Ok(SchemaMetadata {
         tables,
         columns: driver.list_all_columns().await.unwrap_or_default(),
         constraints: driver.list_all_constraints().await.unwrap_or_default(),
         indexes: driver.list_all_indexes().await.unwrap_or_default(),
+        details: details.unwrap_or_default(),
+        details_error,
     })
 }
 
@@ -436,6 +445,11 @@ impl Workspace {
         let session = self.connections.active_mut();
         let mut tree = BTreeMap::<String, Vec<TableSummary>>::new();
         let mut properties = HashMap::new();
+        let mut details: HashMap<_, _> = metadata
+            .details
+            .into_iter()
+            .map(|(schema, table, details)| ((schema, table), details))
+            .collect();
         for table in &session.tables {
             tree.entry(table.schema.clone())
                 .or_default()
@@ -452,7 +466,8 @@ impl Workspace {
                     .cloned()
                     .unwrap_or_default(),
                 session.table_indexes.get(&key).cloned().unwrap_or_default(),
-            );
+            )
+            .with_metadata(details.remove(&key), metadata.details_error.clone());
             properties.insert(key, Arc::new(model));
         }
         session.schema_tree = Arc::new(tree);

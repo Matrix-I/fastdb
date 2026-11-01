@@ -55,7 +55,7 @@ What exists today that these targets build on: a paged result store with an LRU 
   - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit. The vertical scrollbar follows the actual grid bounds and reaches the bottom with the last row.
   - Cell/range selection and clipboard copy as TSV.
   - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Save generates SQL and applies the changes in one transaction.
-- **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and a partial DDL preview from available native column metadata. Missing index/constraint definitions are labeled as unavailable.
+- **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and a partial DDL preview from available native column metadata. PostgreSQL also shows native type precision/length, column comments, owner, OID, effective tablespace, table comment, RLS flags, persistence, partition key, estimated rows, table/index/total bytes and vacuum/analyze timestamps. Index methods, ordered expressions/INCLUDE columns, uniqueness, validity, predicates and full constraint/foreign-key definitions come from PostgreSQL catalogs. Metadata refreshes with the connection's schema refresh; unsupported or unknown values remain unavailable.
 - **Diagram**: a simple entity box listing the table's columns.
 
 ### SQL editor
@@ -126,7 +126,7 @@ These are goals of the project, but they are not available in the app today:
 - **Keychain-backed connection passwords.** OS keychain helpers exist, but saved connections still serialize passwords into JSON; keychain integration and migration remain to be done.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
-- **Additional metadata.** Properties labels object ID, owner, tablespace, foreign key definitions, index definitions and statistics as unavailable when the driver does not provide them. The status bar's "120 FPS" label is static text.
+- **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. The DDL tab remains a partial preview, not a complete schema dump. The status bar's "120 FPS" label is static text.
 - **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
 - **Benchmarks.** None of the numbers under [Goals](#-goals) has been measured.
 
@@ -314,7 +314,8 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
 - [ ] Grid copy as CSV / SQL `INSERT`
 - [ ] Export to CSV / SQL from the UI
-- [ ] Real table statistics and metadata in Properties
+- [x] PostgreSQL table statistics and catalog metadata in Properties
+- [ ] Rich table statistics and metadata for other providers
 - [x] TLS for PostgreSQL and MySQL with certificate/hostname verification and optional root CA
 - [x] Provider picker with PostgreSQL, Db2 for LUW, MariaDB, MySQL, Oracle, SQL Server and SQLite
 - [x] MariaDB provider preset using the MySQL-compatible driver

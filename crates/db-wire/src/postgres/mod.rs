@@ -1,4 +1,5 @@
 pub mod binary_decoder;
+mod metadata;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -316,69 +317,16 @@ impl DatabaseDriver for PostgresDriver {
 
     async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
         let client = self.get_or_connect().await?;
-        let sql = r#"
-            SELECT column_name, data_type, is_nullable, column_default, collation_name
-            FROM information_schema.columns
-            WHERE table_schema = $1 AND table_name = $2
-            ORDER BY ordinal_position;
-        "#;
-
-        let rows = client.query(sql, &[&schema, &table]).await?;
-        let cols = rows
+        Ok(metadata::columns(&client, Some(schema), Some(table))
+            .await?
             .into_iter()
-            .map(|r| {
-                let name: String = r.get(0);
-                let dtype_str: String = r.get(1);
-                let is_null_str: String = r.get(2);
-                let default_val: Option<String> = r.get(3);
-                let collation: Option<String> = r.get(4);
-                info_schema_column(name, &dtype_str, &is_null_str, default_val, collation)
-            })
-            .collect();
-
-        Ok(cols)
+            .flat_map(|(_, _, columns)| columns)
+            .collect())
     }
 
     async fn list_all_columns(&self) -> Result<Vec<(String, String, Vec<ColumnMeta>)>> {
         let client = self.get_or_connect().await?;
-        let sql = r#"
-            SELECT c.table_schema, c.table_name, c.column_name, c.data_type, c.is_nullable,
-                   COALESCE((
-                       SELECT 1 FROM information_schema.table_constraints tc
-                       JOIN information_schema.key_column_usage kcu
-                         ON tc.constraint_name = kcu.constraint_name
-                        AND tc.table_schema = kcu.table_schema
-                       WHERE tc.constraint_type = 'PRIMARY KEY'
-                         AND tc.table_schema = c.table_schema
-                         AND tc.table_name = c.table_name
-                         AND kcu.column_name = c.column_name
-                       LIMIT 1
-                   ), 0) as is_pk,
-                   c.column_default,
-                   c.collation_name
-            FROM information_schema.columns c
-            WHERE c.table_schema NOT IN ('information_schema', 'pg_catalog')
-            ORDER BY c.table_schema, c.table_name, c.ordinal_position;
-        "#;
-
-        let rows = client.query(sql, &[]).await?;
-        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> =
-            std::collections::BTreeMap::new();
-        for r in rows {
-            let schema: String = r.get(0);
-            let table: String = r.get(1);
-            let name: String = r.get(2);
-            let dtype_str: String = r.get(3);
-            let is_null_str: String = r.get(4);
-            let is_pk: i32 = r.get(5);
-            let default_val: Option<String> = r.get(6);
-            let collation: Option<String> = r.get(7);
-            let col = info_schema_column(name, &dtype_str, &is_null_str, default_val, collation)
-                .with_pk(is_pk > 0);
-            map.entry((schema, table)).or_default().push(col);
-        }
-
-        Ok(map.into_iter().map(|((s, t), cols)| (s, t, cols)).collect())
+        metadata::columns(&client, None, None).await
     }
 
     async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
@@ -409,6 +357,10 @@ impl DatabaseDriver for PostgresDriver {
             .into_iter()
             .map(|r| (r.get(0), r.get(1), r.get(2)))
             .collect())
+    }
+
+    async fn list_table_details(&self) -> Result<Vec<(String, String, crate::TableDetails)>> {
+        metadata::load(self.get_or_connect().await?.as_ref()).await
     }
 }
 

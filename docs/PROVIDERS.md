@@ -1,4 +1,41 @@
-# SQL Server, Oracle and Db2
+# Provider setup and validation
+
+## PostgreSQL metadata
+
+Properties loads PostgreSQL catalog details in the background on connection and
+schema refresh. It includes owner, OID, effective tablespace (including the database
+default), comments, persistence, RLS/forced RLS, partition keys, ordered constraint
+columns, foreign key references/actions/deferrability, and index methods,
+expressions, INCLUDE columns, uniqueness, validity and definitions/predicates.
+Column types retain precision/length and column comments and PK/FK membership.
+
+Rows are estimates from `pg_class.reltuples`; never-analyzed values remain unknown.
+Storage sizes use `pg_table_size`, `pg_indexes_size` and `pg_total_relation_size`;
+table bytes include TOAST and auxiliary storage. Sizes apply to the relation itself.
+Partition parents and views show unavailable sizes, not totals of their children.
+Vacuum/analyze timestamps come from `pg_stat_all_tables` and may be unknown or
+reset. These are read-only catalog queries; FastDB does not run COUNT, ANALYZE or
+VACUUM to populate Properties. Catalog visibility follows `information_schema`;
+metadata failures appear in the Properties header and Statistics section without
+preventing table browsing. The DDL tab is still a partial preview.
+
+Run the metadata integration test against a disposable database with schema/table
+creation privileges:
+
+```bash
+FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --test postgres_test test_postgres_catalog_details_and_native_columns
+```
+
+Optional settings: `FASTDB_TEST_PG_HOST`, `FASTDB_TEST_PG_USER`,
+`FASTDB_TEST_PG_PASSWORD`. The test uses the `postgres` database and creates/drops
+its own schema. Without `FASTDB_TEST_PG_PORT`, it skips unless CI sets
+`FASTDB_REQUIRE_DB_TESTS=1`.
+
+Catalog references: [pg_class](https://www.postgresql.org/docs/current/catalog-pg-class.html),
+[definition functions](https://www.postgresql.org/docs/current/functions-info.html),
+[table statistics](https://www.postgresql.org/docs/current/monitoring-stats.html).
+
+## SQL Server, Oracle and Db2
 
 These providers use installed vendor ODBC drivers. FastDB bundles the unixODBC
 manager on macOS/Linux, runs blocking client calls on worker threads, and keeps

@@ -145,6 +145,50 @@ pub struct TableSummary {
     pub estimated_rows: Option<u64>,
 }
 
+/// Optional catalog data. None means unknown or inapplicable, never zero/false.
+#[derive(Debug, Clone, Default)]
+pub struct TableDetails {
+    pub object_id: Option<String>,
+    pub owner: Option<String>,
+    pub tablespace: Option<String>,
+    pub comment: Option<String>,
+    pub persistence: Option<String>,
+    pub row_security: Option<bool>,
+    pub force_row_security: Option<bool>,
+    pub partitioned: Option<bool>,
+    pub partition_key: Option<String>,
+    pub estimated_rows: Option<i64>,
+    pub table_bytes: Option<i64>,
+    pub index_bytes: Option<i64>,
+    pub total_bytes: Option<i64>,
+    pub last_vacuum: Option<String>,
+    pub last_autovacuum: Option<String>,
+    pub last_analyze: Option<String>,
+    pub last_autoanalyze: Option<String>,
+    pub indexes: Vec<IndexDetails>,
+    pub constraints: Vec<ConstraintDetails>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexDetails {
+    pub name: String,
+    pub method: String,
+    /// Ordered key expressions, followed by any INCLUDE columns.
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub valid: bool,
+    pub definition: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConstraintDetails {
+    pub name: String,
+    pub kind: String,
+    pub columns: Vec<String>,
+    pub definition: String,
+    pub validated: bool,
+}
+
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
     /// Test connection to verify credentials and connectivity
@@ -216,6 +260,12 @@ pub trait DatabaseDriver: Send + Sync {
 
     /// Batch list all indexes across all tables: (schema, table, index_name)
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
+        Ok(Vec::new())
+    }
+
+    /// Optional table details, fetched during background schema refresh.
+    /// Unsupported providers return an empty list, preserving unavailable UI values.
+    async fn list_table_details(&self) -> Result<Vec<(String, String, TableDetails)>> {
         Ok(Vec::new())
     }
 }

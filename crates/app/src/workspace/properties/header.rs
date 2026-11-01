@@ -4,8 +4,34 @@ use ui_core::theme::Theme;
 impl TableProperties {
     pub(in crate::workspace) fn render_header(&self, theme: &Theme) -> AnyElement {
         let t_name = self.table.as_str();
-        let owner_name = "Unavailable";
-        let table_oid = "Unavailable";
+        let details = self.details.as_ref();
+        let owner_name = details
+            .and_then(|d| d.owner.clone())
+            .unwrap_or_else(|| "Unavailable".into());
+        let table_oid = details
+            .and_then(|d| d.object_id.clone())
+            .unwrap_or_else(|| "Unavailable".into());
+        let tablespace = details
+            .and_then(|d| d.tablespace.clone())
+            .unwrap_or_else(|| "Unavailable".into());
+        let comment = details
+            .map(|d| d.comment.clone().unwrap_or_else(|| "None".into()))
+            .unwrap_or_else(|| "Unavailable".into());
+        let partition_key = details
+            .and_then(|d| d.partition_key.clone())
+            .unwrap_or_else(|| "Unavailable".into());
+        let flags = self.metadata_error.clone().unwrap_or_else(|| {
+            let flag = |v| match v {
+                Some(true) => "Yes",
+                Some(false) => "No",
+                None => "Unavailable",
+            };
+            format!(
+                "RLS: {} / Partitioned: {}",
+                flag(details.and_then(|d| d.row_security)),
+                flag(details.and_then(|d| d.partitioned))
+            )
+        });
         let top_form = div()
             .id("props-top-form")
             .flex()
@@ -90,7 +116,7 @@ impl TableProperties {
                                         div()
                                             .text_size(px(11.5))
                                             .text_color(rgb(0xffffff))
-                                            .child("Unavailable"),
+                                            .child(tablespace),
                                     )
                                     .child(
                                         div()
@@ -161,7 +187,12 @@ impl TableProperties {
                                     .border_1()
                                     .border_color(theme.border)
                                     .rounded_xs()
-                                    .child(div())
+                                    .child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .text_color(theme.text_primary)
+                                            .child(comment),
+                                    )
                                     .child(
                                         div()
                                             .text_size(px(8.5))
@@ -174,7 +205,7 @@ impl TableProperties {
                         div()
                             .text_size(px(11.5))
                             .text_color(theme.text_muted)
-                            .child("Row-level security / partition metadata: Unavailable"),
+                            .child(flags),
                     )
                     // Owner
                     .child(
@@ -231,7 +262,10 @@ impl TableProperties {
                                     .bg(theme.bg_editor)
                                     .border_1()
                                     .border_color(theme.border)
-                                    .rounded_xs(),
+                                    .rounded_xs()
+                                    .text_size(px(11.5))
+                                    .text_color(theme.text_primary)
+                                    .child(partition_key),
                             ),
                     )
                     // Extra Options

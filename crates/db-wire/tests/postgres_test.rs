@@ -236,3 +236,92 @@ fn test_postgres_estimated_and_analyzed_json_plans() {
         }
     });
 }
+
+#[test]
+fn test_postgres_catalog_details_and_native_columns() {
+    let Some(config) = test_config() else {
+        eprintln!("skipped: FASTDB_TEST_PG_PORT not set");
+        return;
+    };
+    let driver = PostgresDriver::new(config);
+    db_wire::get_runtime().block_on(async {
+        let schema = format!("fastdb metadata {}", std::process::id());
+        let dialect = db_wire::sql::SqlDialect(DbDriverKind::Postgres);
+        let qschema = dialect.quote_ident(&schema);
+        let child_name = "Child's \"Rows\"";
+        let child = dialect.qualified_table(&schema, child_name);
+        let parent = dialect.qualified_table(&schema, "parent");
+        let partitioned = dialect.qualified_table(&schema, "partitioned");
+        let view = dialect.qualified_table(&schema, "view");
+        for sql in [
+            format!("CREATE SCHEMA {qschema}"),
+            format!("CREATE TABLE {parent} (a integer, b integer, PRIMARY KEY (a, b))"),
+            format!("CREATE UNLOGGED TABLE {child} (a integer, b integer, label varchar(42) DEFAULT 'x', amount numeric(12,2), CONSTRAINT composite_fk FOREIGN KEY (b, a) REFERENCES {parent}(a, b) ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED)"),
+            format!("ALTER TABLE {child} ADD CONSTRAINT positive CHECK (a > 0) NOT VALID"),
+            format!("COMMENT ON TABLE {child} IS 'A real table comment'"),
+            format!("COMMENT ON COLUMN {child}.label IS 'A real column comment'"),
+            format!("ALTER TABLE {child} ENABLE ROW LEVEL SECURITY"),
+            format!("ALTER TABLE {child} FORCE ROW LEVEL SECURITY"),
+            format!("CREATE UNIQUE INDEX expression_idx ON {child} (lower(label)) INCLUDE (amount) WHERE a > 0"),
+            format!("CREATE TABLE {partitioned} (id integer) PARTITION BY RANGE (id)"),
+            format!("CREATE VIEW {view} AS SELECT a FROM {parent}"),
+        ] {
+            driver.execute_query(&sql).await.unwrap();
+        }
+        let details = driver.list_table_details().await.unwrap();
+        let get = |name: &str| &details.iter().find(|(s, t, _)| s == &schema && t == name).unwrap().2;
+        let d = get(child_name);
+        assert!(d.object_id.as_ref().unwrap().parse::<u32>().unwrap() > 0);
+        assert!(d.owner.as_ref().is_some_and(|s| !s.is_empty()));
+        assert!(d.tablespace.as_ref().is_some_and(|s| !s.is_empty()));
+        assert_eq!(d.comment.as_deref(), Some("A real table comment"));
+        assert_eq!(d.persistence.as_deref(), Some("Unlogged"));
+        assert_eq!(d.row_security, Some(true));
+        assert_eq!(d.force_row_security, Some(true));
+        assert_eq!(d.partitioned, Some(false));
+        assert_eq!(d.estimated_rows, None, "unanalyzed rows must stay unknown");
+        assert!(d.total_bytes.unwrap() >= d.table_bytes.unwrap());
+        assert_eq!(d.total_bytes, Some(d.table_bytes.unwrap() + d.index_bytes.unwrap()));
+        assert_eq!(d.last_analyze, None);
+        let index = d.indexes.iter().find(|i| i.name == "expression_idx").unwrap();
+        assert_eq!(index.method, "btree");
+        assert!(index.unique && index.valid);
+        assert_eq!(index.columns.len(), 2);
+        assert!(index.columns[0].contains("lower"));
+        assert_eq!(index.columns[1], "amount");
+        assert!(index.definition.contains("WHERE"));
+        assert!(index.definition.contains("INCLUDE"));
+        let fk = d.constraints.iter().find(|c| c.kind == "FOREIGN KEY").unwrap();
+        assert_eq!(fk.columns, ["b", "a"]);
+        for fragment in ["REFERENCES", "ON UPDATE CASCADE", "ON DELETE SET NULL", "DEFERRABLE INITIALLY DEFERRED"] {
+            assert!(fk.definition.contains(fragment), "{}", fk.definition);
+        }
+        assert!(!d.constraints.iter().find(|c| c.name == "positive").unwrap().validated);
+        assert_eq!(get("partitioned").partitioned, Some(true));
+        assert_eq!(get("partitioned").partition_key.as_deref(), Some("RANGE (id)"));
+        assert_eq!(get("partitioned").total_bytes, None, "parent has no own storage");
+        assert_eq!(get("view").estimated_rows, None);
+        assert_eq!(get("view").table_bytes, None);
+        assert_eq!(get("view").row_security, None);
+        let columns = driver.list_columns(&schema, child_name).await.unwrap();
+        let label = columns.iter().find(|c| c.name == "label").unwrap();
+        assert_eq!(label.raw_type.as_deref(), Some("character varying(42)"));
+        assert_eq!(label.comment.as_deref(), Some("A real column comment"));
+        assert!(columns.iter().find(|c| c.name == "a").unwrap().is_foreign_key);
+        assert_eq!(columns.iter().find(|c| c.name == "amount").unwrap().raw_type.as_deref(), Some("numeric(12,2)"));
+        assert!(driver.list_columns(&schema, "parent").await.unwrap().iter().all(|c| c.is_primary_key));
+        assert!(driver.list_columns(&schema, "missing").await.unwrap().is_empty());
+
+        driver.execute_query(&format!("ANALYZE {child}")).await.unwrap();
+        let refreshed = driver.list_table_details().await.unwrap();
+        let refreshed = &refreshed.iter().find(|(s, t, _)| s == &schema && t == child_name).unwrap().2;
+        assert_eq!(refreshed.estimated_rows, Some(0), "known empty is distinct from unknown");
+        assert!(refreshed.last_analyze.is_some());
+        let all = driver.list_all_columns().await.unwrap();
+        let all_child = &all.iter().find(|(s, t, _)| s == &schema && t == child_name).unwrap().2;
+        assert_eq!(all_child.len(), columns.len());
+        assert_eq!(all_child[2].raw_type, label.raw_type);
+        driver.execute_query(&format!("DROP SCHEMA {qschema} CASCADE")).await.unwrap();
+        assert!(!driver.list_table_details().await.unwrap().iter().any(|(s, _, _)| s == &schema));
+    });
+}
