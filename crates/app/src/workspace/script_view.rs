@@ -1,5 +1,6 @@
 //! SQL script tab: a toolbar, the SQL editor, and the result of the last statement below it.
 
+use gpui::prelude::FluentBuilder;
 use std::rc::Rc;
 
 use super::script_tools::tool;
@@ -31,6 +32,7 @@ impl Workspace {
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
+        let supports_plan = self.tab_provider(tab_idx) == DbDriverKind::Postgres;
         let toolbar = div()
             .id("script-toolbar")
             .overflow_x_scroll()
@@ -93,6 +95,33 @@ impl Workspace {
             .child(tool("Run script").on_click(cx.listener(|this, _, _, cx| this.run_script(cx))))
             .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
             .child(tool("History").on_click(cx.listener(|this, _, _, cx| this.toggle_history(cx))))
+            .when(supports_plan && !is_running_query, |toolbar| {
+                toolbar
+                    .child(
+                        div()
+                            .id("btn-explain")
+                            .px_2()
+                            .cursor_pointer()
+                            .text_size(px(11.5))
+                            .text_color(theme.text_secondary)
+                            .child("Explain")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.explain_active_statement(false, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("btn-analyze")
+                            .px_2()
+                            .cursor_pointer()
+                            .text_size(px(11.5))
+                            .text_color(theme.text_secondary)
+                            .child("Analyze (executes SQL)")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.explain_active_statement(true, cx)
+                            })),
+                    )
+            })
             .child(
                 tool("Rename")
                     .on_click(cx.listener(|this, _, _, cx| this.open_script_action(false, cx))),
@@ -143,6 +172,9 @@ impl Workspace {
         let result_count = tab.result_count();
         let selected_result = tab.active_result;
         let history = tab.show_history.then(|| tab.query_history.clone());
+        let has_plan = tab.query_plan.is_some();
+        let show_plan = tab.show_plan && has_plan;
+        let tab_id = tab.id;
 
         let mut column = div()
             .flex()
@@ -222,6 +254,28 @@ impl Workspace {
             column = column.child(self.render_error_banner(&message));
         }
 
+        if has_plan {
+            column = column.child(
+                div()
+                    .id("toggle-plan-json")
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_secondary)
+                    .child(if show_plan {
+                        "Query plan · Show raw JSON"
+                    } else {
+                        "Raw JSON · Show query plan"
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
+                            tab.show_plan = !tab.show_plan;
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
         let mut result = div()
             .flex()
             .flex_col()
@@ -234,7 +288,9 @@ impl Workspace {
                 this.focus_script_editor(false);
                 cx.notify();
             }));
-        result = if no_result_set {
+        result = if show_plan {
+            result.child(self.render_query_plan(tab_idx, cx))
+        } else if no_result_set {
             let detail = elapsed
                 .map(|e| format!(" ({:.3}s)", e.as_secs_f64()))
                 .unwrap_or_default();

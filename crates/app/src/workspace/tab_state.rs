@@ -29,6 +29,9 @@ pub struct TabState {
     pub fetch: FetchState,
     /// Statement of a script tab's current result, read again by "fetch next"
     pub script_sql: Option<String>,
+    pub query_plan: Option<db_wire::query_plan::QueryPlan>,
+    pub plan_requested: bool,
+    pub show_plan: bool,
     /// Message of the last failed run, cleared when the next run starts
     pub last_error: Option<String>,
     /// In a script tab, whether keys go to the editor rather than the result grid
@@ -56,6 +59,8 @@ pub(super) struct ScriptResult {
     sql: Option<String>,
     error: Option<String>,
     elapsed: Option<u64>,
+    query_plan: Option<db_wire::query_plan::QueryPlan>,
+    show_plan: bool,
 }
 
 /// DBeaver-style incremental fetching: the first run reads `size` rows, and reaching the
@@ -245,6 +250,9 @@ impl TabState {
             execution_time_ms: None,
             fetch: FetchState::default(),
             script_sql: None,
+            query_plan: None,
+            plan_requested: false,
+            show_plan: false,
             last_error: None,
             editor_focused: false,
             script_path: None,
@@ -279,6 +287,8 @@ impl TabState {
         std::mem::swap(&mut self.script_sql, &mut result.sql);
         std::mem::swap(&mut self.last_error, &mut result.error);
         std::mem::swap(&mut self.execution_time_ms, &mut result.elapsed);
+        std::mem::swap(&mut self.query_plan, &mut result.query_plan);
+        std::mem::swap(&mut self.show_plan, &mut result.show_plan);
         // Keep inactive results in display order after removing the selected slot.
         let result = self.results.remove(slot);
         let old_slot = if index < self.active_result {
@@ -302,6 +312,8 @@ impl TabState {
                 sql: self.script_sql.take(),
                 error: self.last_error.take(),
                 elapsed: self.execution_time_ms.take(),
+                query_plan: self.query_plan.take(),
+                show_plan: std::mem::take(&mut self.show_plan),
             };
             self.results
                 .insert(self.active_result.min(self.results.len()), result);
@@ -327,6 +339,9 @@ impl TabState {
 
     /// Marks the start of a run; `append` keeps the current rows and adds the new ones after them
     pub fn begin_fetch(&mut self, paged: bool, append: bool) {
+        self.query_plan = None;
+        self.plan_requested = false;
+        self.show_plan = false;
         self.fetch.paged = paged;
         self.fetch.append = append.then(AppendSource::default);
         self.fetch.started_at = Some(Instant::now());
@@ -383,6 +398,23 @@ impl TabState {
                     fetch: now - schema_ready,
                     finished_at: chrono::Local::now(),
                 });
+                if self.plan_requested {
+                    self.plan_requested = false;
+                    let parsed = self
+                        .grid
+                        .pager
+                        .as_ref()
+                        .and_then(|p| p.get_cell(0, 0))
+                        .ok_or_else(|| anyhow::anyhow!("EXPLAIN returned no plan"))
+                        .and_then(|bytes| db_wire::query_plan::QueryPlan::parse(&bytes));
+                    match parsed {
+                        Ok(plan) => {
+                            self.query_plan = Some(plan);
+                            self.show_plan = true;
+                        }
+                        Err(error) => return self.fail_fetch(error.to_string()),
+                    }
+                }
                 QueryStatus::Done { rows, elapsed_ms }
             }
             StreamEvent::Error(e) => self.fail_fetch(e),
@@ -392,6 +424,7 @@ impl TabState {
     fn fail_fetch(&mut self, error: String) -> QueryStatus {
         // Rows copied before the failure stay; the next scroll to the end retries from there
         self.pending_statements.clear();
+        self.plan_requested = false;
         self.fetch.append = None;
         self.fetch.started_at = None;
         self.fetch.schema_ready_at = None;
@@ -892,5 +925,88 @@ mod script_result_tests {
             tab.new_script_result(format!("select {n}"));
         }
         assert_eq!(tab.result_count(), 20);
+    }
+}
+
+#[cfg(test)]
+mod query_plan_tests {
+    use super::{QueryStatus, TabState};
+    use db_wire::{ColumnMeta, DataType, QueryResultPager, StreamEvent};
+    use std::sync::Arc;
+
+    fn tab() -> TabState {
+        TabState::blank(42)
+    }
+
+    fn complete_plan(tab: &mut TabState, json: &[u8]) -> QueryStatus {
+        let pager = Arc::new(
+            QueryResultPager::new(vec![ColumnMeta::new("QUERY PLAN", DataType::Json)]).unwrap(),
+        );
+        pager.append_row([Some(json.to_vec())]).unwrap();
+        tab.apply_stream_event(StreamEvent::SchemaReady(pager));
+        tab.apply_stream_event(StreamEvent::Completed {
+            total_rows: 1,
+            elapsed_ms: 2,
+        })
+    }
+
+    #[test]
+    fn completion_builds_plan_and_next_execution_clears_it() {
+        let mut tab = tab();
+        tab.begin_fetch(false, false);
+        tab.plan_requested = true;
+        let status = complete_plan(
+            &mut tab,
+            br#"[{"Plan":{"Node Type":"Result","Plan Rows":1}}]"#,
+        );
+        assert!(matches!(status, QueryStatus::Done { .. }));
+        assert!(tab.query_plan.is_some());
+        assert!(tab.show_plan);
+        assert!(!tab.plan_requested);
+        assert!(!tab.fetch.has_more);
+        // The raw plan remains available without re-execution.
+        assert_eq!(tab.grid.pager.as_ref().unwrap().total_rows(), 1);
+        tab.begin_fetch(true, false);
+        assert!(tab.query_plan.is_none());
+        assert!(!tab.show_plan);
+        assert!(!tab.plan_requested);
+    }
+
+    #[test]
+    fn switching_results_restores_the_matching_plan() {
+        let mut tab = tab();
+        tab.new_script_result("EXPLAIN (FORMAT JSON) SELECT 1".into());
+        tab.begin_fetch(false, false);
+        tab.plan_requested = true;
+        complete_plan(&mut tab, br#"[{"Plan":{"Node Type":"Result"}}]"#);
+        tab.new_script_result("SELECT 2".into());
+        tab.begin_fetch(false, false);
+        assert!(tab.query_plan.is_none());
+        assert!(!tab.show_plan);
+        tab.select_result(0);
+        assert!(tab.query_plan.is_some());
+        assert!(tab.show_plan);
+        tab.select_result(1);
+        assert!(tab.query_plan.is_none());
+        assert!(!tab.show_plan);
+    }
+
+    #[test]
+    fn failed_and_malformed_plans_do_not_leave_pending_state() {
+        let mut tab = tab();
+        tab.begin_fetch(false, false);
+        tab.plan_requested = true;
+        assert!(matches!(
+            complete_plan(&mut tab, b"{}"),
+            QueryStatus::Failed(_)
+        ));
+        assert!(tab.query_plan.is_none());
+        assert!(!tab.plan_requested);
+        assert!(tab.last_error.is_some());
+        tab.begin_fetch(false, false);
+        tab.plan_requested = true;
+        tab.apply_stream_event(StreamEvent::Error("cancelled".into()));
+        assert!(!tab.plan_requested);
+        assert!(!tab.show_plan);
     }
 }

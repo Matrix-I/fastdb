@@ -31,6 +31,7 @@ mod properties;
 mod properties_panel;
 mod query;
 mod query_history;
+mod query_plan;
 mod script_tabs;
 mod script_tools;
 mod tab_state;

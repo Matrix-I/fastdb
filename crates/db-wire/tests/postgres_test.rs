@@ -22,6 +22,7 @@ fn test_config() -> Option<ConnectionConfig> {
         port,
         database: "postgres".to_string(),
         user: std::env::var("FASTDB_TEST_PG_USER").unwrap_or_else(|_| "postgres".to_string()),
+        password: std::env::var("FASTDB_TEST_PG_PASSWORD").ok(),
         use_unix_socket: false,
         ..ConnectionConfig::default()
     })
@@ -206,5 +207,32 @@ fn test_postgres_running_query_can_be_cancelled() {
             err.contains("canceling statement"),
             "unexpected error: {err}"
         );
+    });
+}
+
+#[test]
+fn test_postgres_estimated_and_analyzed_json_plans() {
+    use db_wire::query_plan::{QueryPlan, explain_sql};
+    let Some(config) = test_config() else {
+        eprintln!("skipped: FASTDB_TEST_PG_PORT not set");
+        return;
+    };
+    let driver = PostgresDriver::new(config);
+    db_wire::get_runtime().block_on(async {
+        for analyze in [false, true] {
+            let sql = explain_sql(
+                DbDriverKind::Postgres,
+                "SELECT sum(n) FROM generate_series(1, 10) AS n",
+                analyze,
+            )
+            .unwrap();
+            let (pager, rows, _) = driver.execute_query(&sql).await.unwrap();
+            assert_eq!(rows, 1);
+            let plan = QueryPlan::parse(&pager.get_cell(0, 0).unwrap()).unwrap();
+            assert!(plan.nodes.len() >= 2);
+            assert_eq!(plan.nodes[0].title, "Aggregate");
+            assert_eq!(plan.summary.contains("Execution Time"), analyze);
+            assert_eq!(plan.nodes[0].details.contains("Actual Rows"), analyze);
+        }
     });
 }

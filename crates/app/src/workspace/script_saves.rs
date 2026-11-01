@@ -119,6 +119,7 @@ pub(super) enum AfterSave {
     None,
     Run(u64),
     RunScript(u64),
+    Explain(u64, bool),
     Close(Vec<u64>),
     Quit,
     Restart,
@@ -207,6 +208,7 @@ impl Workspace {
             AfterSave::None => {}
             AfterSave::Run(id) => self.run_saved_query(id, cx),
             AfterSave::RunScript(id) => self.run_saved_script(id, cx),
+            AfterSave::Explain(id, analyze) => self.explain_saved_statement(id, analyze, cx),
             AfterSave::Close(ids) => self.close_saved_tabs(&ids, cx),
             AfterSave::Quit | AfterSave::Restart => {
                 let restart = matches!(action, AfterSave::Restart);
