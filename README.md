@@ -37,6 +37,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 - **PostgreSQL** (`tokio-postgres`), **MySQL / MariaDB** (`mysql_async`) and **SQLite** (`rusqlite`, bundled).
 - TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
 - Saved connections with create / edit / delete / test, plus quick presets per driver.
+- **TLS for PostgreSQL and MySQL**: enable TLS in the connection dialog to require encryption and verify the server certificate and hostname. Leave the root CA path empty for system trust, or supply a PEM/DER root CA certificate for a private CA. TLS uses TCP even when Unix socket discovery is enabled. Existing connections default to TLS disabled.
 - Saved connection passwords are currently stored in plain text in the config file. OS keychain helpers exist in `platform-hal`, but connection persistence does not use them yet.
 
 ### Database navigator
@@ -108,7 +109,6 @@ These are goals of the project, but they are not available in the app today:
 - **Keychain-backed connection passwords.** OS keychain helpers exist, but saved connections still serialize passwords into JSON; keychain integration and migration remain to be done.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
-- **TLS.** PostgreSQL connects without TLS, so servers that require SSL are not supported yet.
 - **Placeholder metadata.** Some Properties fields (object ID, owner, tablespace, and the statistics table) show placeholder values rather than data read from the database. The status bar's "120 FPS" label is static text.
 - **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
 - **Benchmarks.** None of the numbers under [Goals](#-goals) has been measured.
@@ -221,6 +221,10 @@ docker run -d --name fastdb-mysql -e MYSQL_ROOT_PASSWORD=fastdb -p 3306:3306 mys
 FASTDB_TEST_PG_PORT=5432 FASTDB_TEST_MYSQL_PORT=3306 FASTDB_TEST_MYSQL_PASSWORD=fastdb cargo test -p db-wire
 ```
 
+### TLS integration tests
+
+With Docker and OpenSSL available, run `./ci/test-tls.sh`. It creates disposable PostgreSQL and MySQL servers with a private test CA, checks encrypted sessions, rejects untrusted certificates and incorrect hostnames, verifies PostgreSQL TLS cancellation, and checks that PostgreSQL refuses plaintext fallback. The containers and temporary certificates are removed on exit. CI runs this after the regular driver tests.
+
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three jobs:
@@ -264,7 +268,7 @@ Packaging scripts live in [`ci/`](ci/):
 - [ ] Grid copy as CSV / SQL `INSERT`
 - [ ] Export to CSV / SQL from the UI
 - [ ] Real table statistics and metadata in Properties
-- [ ] TLS for PostgreSQL and MySQL
+- [x] TLS for PostgreSQL and MySQL with certificate/hostname verification and optional root CA
 - [ ] SSH bastion / jump host tunneling
 - [ ] Benchmarks for the goals above
 - [ ] Visual query plan (`EXPLAIN ANALYZE`) viewer

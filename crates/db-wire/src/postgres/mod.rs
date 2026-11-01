@@ -77,6 +77,20 @@ fn info_schema_column(
     col
 }
 
+/// Uses system roots plus an optional private CA, always verifying the server identity.
+fn tls_connector(config: &ConnectionConfig) -> Result<postgres_native_tls::MakeTlsConnector> {
+    let mut builder = native_tls::TlsConnector::builder();
+    builder.min_protocol_version(Some(native_tls::Protocol::Tlsv12));
+    if let Some(path) = &config.tls_ca_cert {
+        let bytes = std::fs::read(path).with_context(|| format!("Failed to read TLS CA certificate: {path}"))?;
+        let cert = native_tls::Certificate::from_pem(&bytes)
+            .or_else(|_| native_tls::Certificate::from_der(&bytes))
+            .with_context(|| format!("Invalid TLS CA certificate: {path}"))?;
+        builder.add_root_certificate(cert);
+    }
+    Ok(postgres_native_tls::MakeTlsConnector::new(builder.build()?))
+}
+
 impl PostgresDriver {
     pub fn new(config: ConnectionConfig) -> Self {
         Self {
@@ -111,7 +125,7 @@ impl PostgresDriver {
         pg_config.connect_timeout(config.connect_timeout);
 
         // Check for local Unix Domain Socket if enabled
-        let unix_socket = if config.use_unix_socket {
+        let unix_socket = if config.use_unix_socket && !config.tls_enabled {
             detect_local_unix_socket(DbKind::Postgres, &config.host, config.port)
         } else {
             None
@@ -126,16 +140,27 @@ impl PostgresDriver {
             pg_config.port(config.port);
         }
 
-        let (client, connection) = pg_config
-            .connect(NoTls)
-            .await
-            .with_context(|| format!("Failed to connect to PostgreSQL ({}:{})", config.host, config.port))?;
-
-        crate::get_runtime().spawn(async move {
-            if let Err(e) = connection.await {
-                warn!("PostgreSQL connection error: {}", e);
-            }
-        });
+        let client = if config.tls_enabled {
+            pg_config.ssl_mode(tokio_postgres::config::SslMode::Require);
+            let (client, connection) = pg_config.connect(tls_connector(&config)?).await
+                .with_context(|| format!("Failed to connect to PostgreSQL with TLS ({}:{})", config.host, config.port))?;
+            crate::get_runtime().spawn(async move {
+                if let Err(e) = connection.await {
+                    warn!("PostgreSQL connection error: {}", e);
+                }
+            });
+            client
+        } else {
+            pg_config.ssl_mode(tokio_postgres::config::SslMode::Disable);
+            let (client, connection) = pg_config.connect(NoTls).await
+                .with_context(|| format!("Failed to connect to PostgreSQL ({}:{})", config.host, config.port))?;
+            crate::get_runtime().spawn(async move {
+                if let Err(e) = connection.await {
+                    warn!("PostgreSQL connection error: {}", e);
+                }
+            });
+            client
+        };
 
         Ok(client)
     }
@@ -213,7 +238,11 @@ impl DatabaseDriver for PostgresDriver {
     async fn cancel_active_query(&self) -> Result<()> {
         let maybe_token = self.cancel_token.lock().clone();
         if let Some(token) = maybe_token {
-            token.cancel_query(NoTls).await?;
+            if self.config.tls_enabled {
+                token.cancel_query(tls_connector(&self.config)?).await?;
+            } else {
+                token.cancel_query(NoTls).await?;
+            }
             info!("Cancelled active PostgreSQL query");
         }
         Ok(())

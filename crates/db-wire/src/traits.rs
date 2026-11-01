@@ -29,6 +29,10 @@ pub struct ConnectionConfig {
     pub user: String,
     pub password: Option<String>,
     pub use_unix_socket: bool,
+    /// Require TLS with certificate and hostname verification (TCP only).
+    pub tls_enabled: bool,
+    /// Optional PEM or DER root CA certificate; system trust is used otherwise.
+    pub tls_ca_cert: Option<String>,
     pub ssh_tunnel: Option<SshTunnelConfig>,
     pub connect_timeout: Duration,
 }
@@ -43,6 +47,8 @@ impl Default for ConnectionConfig {
             user: "postgres".to_string(),
             password: None,
             use_unix_socket: true,
+            tls_enabled: false,
+            tls_ca_cert: None,
             ssh_tunnel: None,
             connect_timeout: Duration::from_secs(5),
         }

@@ -99,6 +99,7 @@ pub enum FormField {
     Database,
     User,
     Password,
+    TlsCa,
 }
 
 pub struct Workspace {
@@ -136,6 +137,8 @@ pub struct Workspace {
     pub form_user: String,
     pub form_password: String,
     pub form_use_unix_socket: bool,
+    pub form_tls_enabled: bool,
+    pub form_tls_ca_cert: String,
     pub active_field: Option<FormField>,
     /// Undo history of each connection form field, reset whenever the form is opened
     pub form_history: HashMap<FormField, LineHistory>,
@@ -273,6 +276,8 @@ impl Workspace {
             form_user,
             form_password,
             form_use_unix_socket: form_sock,
+            form_tls_enabled: initial_active_conn.as_ref().is_some_and(|c| c.tls_enabled),
+            form_tls_ca_cert: initial_active_conn.as_ref().and_then(|c| c.tls_ca_cert.clone()).unwrap_or_default(),
             active_field: Some(FormField::Name),
             form_history: HashMap::new(),
             show_password: false,

@@ -103,7 +103,8 @@ impl Workspace {
                     (_, Some(FormField::Port)) => Some(FormField::Database),
                     (_, Some(FormField::Database)) => Some(FormField::User),
                     (_, Some(FormField::User)) => Some(FormField::Password),
-                    (_, Some(FormField::Password)) => Some(FormField::Name),
+                    (_, Some(FormField::Password)) if self.form_tls_enabled => Some(FormField::TlsCa),
+                    (_, Some(FormField::Password | FormField::TlsCa)) => Some(FormField::Name),
                 };
                 cx.notify();
                 return;

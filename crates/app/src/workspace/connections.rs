@@ -11,6 +11,8 @@ pub struct SavedConnection {
     pub user: String,
     pub password: Option<String>,
     pub use_unix_socket: bool,
+    pub tls_enabled: bool,
+    pub tls_ca_cert: Option<String>,
 }
 
 /// Navigator metadata of one connection
@@ -126,6 +128,8 @@ impl Workspace {
                         user: u,
                         password: pw,
                         use_unix_socket: sock,
+                        tls_enabled: item["tls_enabled"].as_bool().unwrap_or(false),
+                        tls_ca_cert: item["tls_ca_cert"].as_str().filter(|s| !s.trim().is_empty()).map(str::to_owned),
                     });
                 }
             }
@@ -166,6 +170,8 @@ impl Workspace {
                     user: u,
                     password: pw,
                     use_unix_socket: sock,
+                    tls_enabled: false,
+                    tls_ca_cert: None,
                 });
             }
         }
@@ -209,6 +215,8 @@ impl Workspace {
                     "user": c.user,
                     "password": c.password.as_deref().filter(|p| !p.is_empty()),
                     "use_unix_socket": c.use_unix_socket,
+                    "tls_enabled": c.tls_enabled,
+                    "tls_ca_cert": c.tls_ca_cert,
                 })
             })
             .collect();
@@ -256,6 +264,8 @@ impl Workspace {
                 Some(self.form_password.clone())
             },
             use_unix_socket: self.form_use_unix_socket,
+            tls_enabled: self.selected_driver_kind != DbDriverKind::Sqlite && self.form_tls_enabled,
+            tls_ca_cert: if self.form_tls_ca_cert.trim().is_empty() { None } else { Some(self.form_tls_ca_cert.trim().to_string()) },
             ssh_tunnel: None,
             connect_timeout: std::time::Duration::from_millis(10000),
         }
@@ -402,6 +412,8 @@ impl Workspace {
                             user: config.user.clone(),
                             password: config.password.clone(),
                             use_unix_socket: config.use_unix_socket,
+                            tls_enabled: config.tls_enabled,
+                            tls_ca_cert: config.tls_ca_cert.clone(),
                         };
 
                         if let Some(pos) = this.saved_connections.iter().position(|c| c.id == conn_id) {
@@ -655,6 +667,8 @@ impl Workspace {
         self.form_user = "postgres".to_string();
         self.form_password = "".to_string();
         self.form_use_unix_socket = false;
+        self.form_tls_enabled = false;
+        self.form_tls_ca_cert.clear();
         self.active_field = Some(FormField::Name);
         self.field_cursor = usize::MAX;
         self.field_anchor = None;
@@ -687,6 +701,8 @@ impl Workspace {
             self.form_user = saved.user.clone();
             self.form_password = saved.password.clone().unwrap_or_default();
             self.form_use_unix_socket = saved.use_unix_socket;
+            self.form_tls_enabled = saved.tls_enabled;
+            self.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
             self.editing_connection_id = Some(saved.id.clone());
             self.test_result = None;
             self.active_field = Some(FormField::Database);
@@ -739,6 +755,8 @@ impl Workspace {
         self.form_user = saved.user.clone();
         self.form_password = saved.password.clone().unwrap_or_default();
         self.form_use_unix_socket = saved.use_unix_socket;
+        self.form_tls_enabled = saved.tls_enabled;
+        self.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
         self.editing_connection_id = Some(saved.id.clone());
         true
     }
@@ -795,6 +813,8 @@ impl Workspace {
             user: config.user.clone(),
             password: config.password.clone(),
             use_unix_socket: config.use_unix_socket,
+            tls_enabled: config.tls_enabled,
+            tls_ca_cert: config.tls_ca_cert.clone(),
         };
 
         if let Some(pos) = self.saved_connections.iter().position(|c| c.id == conn_id) {
@@ -815,6 +835,8 @@ impl Workspace {
         self.form_user = "postgres".to_string();
         self.form_password = "".to_string();
         self.form_use_unix_socket = true;
+        self.form_tls_enabled = false;
+        self.form_tls_ca_cert.clear();
         self.active_field = Some(FormField::Host);
         self.field_cursor = usize::MAX;
         self.test_result = None;
@@ -828,6 +850,8 @@ impl Workspace {
         self.form_user = "root".to_string();
         self.form_password = "".to_string();
         self.form_use_unix_socket = true;
+        self.form_tls_enabled = false;
+        self.form_tls_ca_cert.clear();
         self.active_field = Some(FormField::Host);
         self.field_cursor = usize::MAX;
         self.test_result = None;
@@ -841,8 +865,29 @@ impl Workspace {
         self.form_user = "".to_string();
         self.form_password = "".to_string();
         self.form_use_unix_socket = false;
+        self.form_tls_enabled = false;
+        self.form_tls_ca_cert.clear();
         self.active_field = Some(FormField::Database);
         self.field_cursor = usize::MAX;
         self.test_result = None;
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::Workspace;
+
+    #[test]
+    fn saved_tls_settings_round_trip_and_legacy_defaults_to_disabled() {
+        let legacy = r#"{"connections":[{"id":"pg","database":"postgres"}]}"#;
+        let (mut connections, _) = Workspace::load_saved_connections_from_str(legacy);
+        assert!(!connections[0].tls_enabled);
+        assert_eq!(connections[0].tls_ca_cert, None);
+        connections[0].tls_enabled = true;
+        connections[0].tls_ca_cert = Some("/path with spaces/root.pem".into());
+        let saved = Workspace::serialize_connections_config(&connections, Some("pg"));
+        let (loaded, active) = Workspace::load_saved_connections_from_str(&saved);
+        assert_eq!(loaded, connections);
+        assert_eq!(active.as_deref(), Some("pg"));
     }
 }

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use mem_engine::{ColumnMeta, DataType};
 use mysql_async::prelude::*;
-use mysql_async::{Opts, OptsBuilder, Params, Pool, TxOpts, Value};
+use mysql_async::{Opts, OptsBuilder, Params, Pool, SslOpts, TxOpts, Value};
 use parking_lot::Mutex;
 use platform_hal::socket::{detect_local_unix_socket, DbKind};
 
@@ -36,7 +36,7 @@ impl MySqlDriver {
         }
         builder = builder.db_name(Some(&self.config.database));
 
-        let socket = if self.config.use_unix_socket {
+        let socket = if self.config.use_unix_socket && !self.config.tls_enabled {
             detect_local_unix_socket(DbKind::MySql, &self.config.host, self.config.port)
         } else {
             None
@@ -48,6 +48,15 @@ impl MySqlDriver {
             builder = builder.ip_or_hostname(self.config.host.clone()).tcp_port(self.config.port);
         }
 
+        // Disable mysql_async's implicit TCP-to-socket upgrade when TLS is requested.
+        builder = builder.prefer_socket(self.config.use_unix_socket && !self.config.tls_enabled);
+        if self.config.tls_enabled {
+            let mut ssl = SslOpts::default();
+            if let Some(path) = &self.config.tls_ca_cert {
+                ssl = ssl.with_root_certs(vec![std::path::PathBuf::from(path).into()]);
+            }
+            builder = builder.ssl_opts(ssl);
+        }
         builder.into()
     }
 
@@ -366,5 +375,33 @@ mod tests {
             Some(b"2024-02-29 13:05:09".to_vec())
         );
         assert_eq!(mysql_value_to_bytes(Some(Value::Time(true, 1, 2, 3, 4, 0))), Some(b"-1d 02:03:04".to_vec()));
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::*;
+
+    #[test]
+    fn tls_requires_encryption_and_identity_verification_over_tcp() {
+        let opts = MySqlDriver::new(ConnectionConfig {
+            tls_enabled: true,
+            use_unix_socket: true,
+            tls_ca_cert: Some("/private-ca.pem".into()),
+            ..ConnectionConfig::default()
+        }).get_opts();
+        assert!(!opts.prefer_socket());
+        assert!(opts.socket().is_none());
+        let ssl = opts.ssl_opts().unwrap();
+        assert!(!ssl.skip_domain_validation());
+        assert!(!ssl.accept_invalid_certs());
+        assert_eq!(ssl.root_certs().len(), 1);
+    }
+
+    #[test]
+    fn legacy_connection_does_not_enable_tls() {
+        let opts = MySqlDriver::new(ConnectionConfig { use_unix_socket: false, ..ConnectionConfig::default() }).get_opts();
+        assert!(opts.ssl_opts().is_none());
+        assert!(!opts.prefer_socket());
     }
 }

@@ -110,6 +110,8 @@ mod tests {
                 user: "postgres".to_string(),
                 password: Some("secret".to_string()),
                 use_unix_socket: false,
+                tls_enabled: false,
+                tls_ca_cert: None,
             },
             SavedConnection {
                 id: "conn_mysql".to_string(),
@@ -121,6 +123,8 @@ mod tests {
                 user: "root".to_string(),
                 password: None,
                 use_unix_socket: false,
+                tls_enabled: false,
+                tls_ca_cert: None,
             },
             SavedConnection {
                 id: "conn_sqlite".to_string(),
@@ -132,6 +136,8 @@ mod tests {
                 user: "".to_string(),
                 password: None,
                 use_unix_socket: false,
+                tls_enabled: false,
+                tls_ca_cert: None,
             },
         ];
 
@@ -160,6 +166,8 @@ mod tests {
             user: "postgres".to_string(),
             password: None,
             use_unix_socket: false,
+            tls_enabled: false,
+            tls_ca_cert: None,
         }];
 
         let new_conn = SavedConnection {
@@ -172,6 +180,8 @@ mod tests {
             user: "root".to_string(),
             password: None,
             use_unix_socket: false,
+            tls_enabled: false,
+            tls_ca_cert: None,
         };
 
         if let Some(pos) = conns.iter().position(|c| c.id == new_conn.id) {
@@ -200,6 +210,8 @@ mod tests {
                 user: "postgres".to_string(),
                 password: None,
                 use_unix_socket: false,
+                tls_enabled: false,
+                tls_ca_cert: None,
             },
             SavedConnection {
                 id: "conn_2".to_string(),
@@ -211,6 +223,8 @@ mod tests {
                 user: "postgres".to_string(),
                 password: None,
                 use_unix_socket: false,
+                tls_enabled: false,
+                tls_ca_cert: None,
             },
         ];
 
@@ -224,6 +238,8 @@ mod tests {
             user: "admin".to_string(),
             password: Some("new_pass".to_string()),
             use_unix_socket: false,
+            tls_enabled: false,
+            tls_ca_cert: None,
         };
 
         if let Some(pos) = conns.iter().position(|c| c.id == updated.id) {
@@ -253,6 +269,8 @@ mod tests {
                 user: "postgres".to_string(),
                 password: None,
                 use_unix_socket: false,
+                tls_enabled: false,
+                tls_ca_cert: None,
             },
             SavedConnection {
                 id: "conn_2".to_string(),
@@ -264,6 +282,8 @@ mod tests {
                 user: "postgres".to_string(),
                 password: None,
                 use_unix_socket: false,
+                tls_enabled: false,
+                tls_ca_cert: None,
             },
         ];
 
@@ -366,6 +386,8 @@ mod tests {
             user: "postgres".to_string(),
             password: password.map(|p| p.to_string()),
             use_unix_socket: false,
+            tls_enabled: false,
+            tls_ca_cert: None,
         }
     }
 

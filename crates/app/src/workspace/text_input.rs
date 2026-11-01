@@ -361,6 +361,7 @@ impl Workspace {
             FormField::Database => &mut self.form_database,
             FormField::User => &mut self.form_user,
             FormField::Password => &mut self.form_password,
+            FormField::TlsCa => &mut self.form_tls_ca_cert,
         }
     }
 

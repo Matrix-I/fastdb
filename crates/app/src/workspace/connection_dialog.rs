@@ -1,6 +1,50 @@
 use super::*;
+use gpui::prelude::FluentBuilder;
 
 impl Workspace {
+    fn render_tls_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.selected_driver_kind == DbDriverKind::Sqlite {
+            return div().into_any_element();
+        }
+        let theme = &self.theme;
+        div().flex().flex_col().gap_2()
+            .child(
+                div().id("toggle-tls").cursor_pointer().text_size(px(12.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.form_tls_enabled = !this.form_tls_enabled;
+                        this.test_result = None;
+                        if !this.form_tls_enabled && this.active_field == Some(FormField::TlsCa) {
+                            this.active_field = Some(FormField::Password);
+                        }
+                        cx.notify();
+                    }))
+                    .child(if self.form_tls_enabled { "☑ TLS — verify certificate and hostname (TCP)" } else { "☐ TLS — verify certificate and hostname (TCP)" })
+            )
+            .when(self.form_tls_enabled, |tls| tls.child(
+                div().flex().flex_col().gap_1()
+                    .child(div().text_size(px(11.0)).text_color(theme.text_secondary).child("Root CA certificate (optional; system trust when empty)"))
+                    .child(
+                        div().id("tls-ca-path").px_3().py_2().rounded_md()
+                            .bg(theme.bg_app).border_1()
+                            .border_color(if self.active_field == Some(FormField::TlsCa) { theme.border_focused } else { theme.border })
+                            .text_size(px(12.0)).cursor_text()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.active_field = Some(FormField::TlsCa);
+                                this.field_cursor = usize::MAX;
+                                this.field_anchor = None;
+                                cx.notify();
+                            }))
+                            .child(render_field_content(
+                                &self.form_tls_ca_cert, "/path/to/ca.pem or ca.der",
+                                self.active_field == Some(FormField::TlsCa),
+                                self.field_anchor, self.field_cursor, self.cursor_visible,
+                                theme, &self.field_caret_pick(FormField::TlsCa, cx),
+                            ))
+                    )
+            ))
+            .into_any_element()
+    }
+
     /// Modal dialog for creating, editing and testing a database connection
     pub(super) fn render_connection_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme.clone();
@@ -437,6 +481,7 @@ impl Workspace {
                                 div()
                             })
                     )
+                    .child(self.render_tls_settings(cx))
                     // Test Result Notification Banner
                     .child({
                         match &self.test_result {

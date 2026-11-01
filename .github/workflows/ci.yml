@@ -45,11 +45,13 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install system libraries
         # keyring's Secret Service backend links against D-Bus
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libssl-dev openssl
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test engine and driver crates
         run: cargo test -p mem-engine -p db-wire -p platform-hal -p sql-intel
+      - name: Test TLS against isolated PostgreSQL and MySQL servers
+        run: ./ci/test-tls.sh
 
   # Full workspace, including the GPUI app, on the primary desktop target
   macos:

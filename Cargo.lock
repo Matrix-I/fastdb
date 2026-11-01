@@ -1604,8 +1604,10 @@ dependencies = [
  "futures",
  "mem-engine",
  "mysql_async",
+ "native-tls",
  "parking_lot",
  "platform-hal",
+ "postgres-native-tls",
  "postgres-types",
  "rusqlite",
  "russh",
@@ -5010,6 +5012,18 @@ dependencies = [
  "pollster",
  "static_assertions",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "postgres-native-tls"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fef4de47bb81477e0c3deaf153a1b10ae176484713ff1640969f4cb96b653ebc"
+dependencies = [
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres",
 ]
 
 [[package]]
