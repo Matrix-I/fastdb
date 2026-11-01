@@ -81,8 +81,41 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
    - run a large query and scroll the result grid.
 4. **Tag**: `git tag -a vX.Y.Z -m "Release vX.Y.Z - <one-line summary>"` and push the tag.
 5. **Build**: `./ci/build-macos.sh` locally; the `release.yml` workflow builds Linux on the tag push.
-6. **Publish**: create the GitHub Release on the tag, attach the macOS artifacts and `SHA256SUMS.txt`, check the Linux artifacts from the workflow, and write the notes from `git log <prev-tag>..vX.Y.Z`. Include the Gatekeeper and keychain notices.
+6. **Publish**: create the GitHub Release on the tag, attach the macOS artifacts and `SHA256SUMS.txt`, check the Linux artifacts from the workflow, and write the notes from `git log <prev-tag>..vX.Y.Z` using the template in 3.3. The Gatekeeper note is required in every release until the app is notarized.
 7. **Verify** by downloading the DMG from the release page on a clean user account and installing it.
+
+### 3.3 Release notes template
+
+Replace `X.Y.Z` and fill in the changes; keep the Gatekeeper section verbatim.
+
+````markdown
+## What's new
+
+- <user-visible change, from `git log <prev-tag>..vX.Y.Z`>
+
+## Downloads
+
+| Platform | File |
+|---|---|
+| macOS (Apple Silicon) | `FastDB-X.Y.Z-macos-arm64.dmg` or `FastDB-X.Y.Z-macos-arm64.zip` |
+| Linux (x86_64) | `fastdb_X.Y.Z_amd64.deb`, `FastDB-X.Y.Z-x86_64.AppImage` or `fastdb-X.Y.Z-linux-x86_64.tar.gz` |
+
+Verify downloads against `SHA256SUMS.txt`.
+
+## ⚠️ macOS Gatekeeper Note (Apple Silicon)
+
+Because FastDB is an independent open-source project and not yet notarized with an Apple Developer Account, macOS Gatekeeper will block the application on first launch.
+
+After copying `FastDB.app` into `/Applications`, open your terminal and run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/FastDB.app
+```
+
+Then launch FastDB normally from Spotlight, Launchpad, or the Applications folder.
+````
+
+Once connection passwords move to the keychain (blocker 2), add a keychain note: ad-hoc signed updates may make macOS ask again for access to the saved passwords.
 
 ## 4. Artifacts for v0.1.0
 
