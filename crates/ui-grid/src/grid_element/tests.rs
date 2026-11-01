@@ -375,3 +375,31 @@ mod state_and_width_tests {
         assert!(!grid.manual_column_widths.contains(&0));
     }
 }
+
+#[cfg(test)]
+mod scrollbar_tests {
+    use super::super::scrollbars::vertical_thumb;
+
+    #[test]
+    fn thumb_reaches_both_ends_of_actual_track() {
+        // The track includes the header, while the list viewport does not.
+        let track = 468.0;
+        let viewport = 472.0;
+        let max_scroll = 5200.0 - viewport;
+        let (top, height) = vertical_thumb(track, viewport, max_scroll, 0.0);
+        assert_eq!(top, 0.0);
+        let (bottom_top, _) = vertical_thumb(track, viewport, max_scroll, max_scroll);
+        assert!((bottom_top + height - track).abs() < 0.001);
+        let (middle, _) = vertical_thumb(track, viewport, max_scroll, max_scroll / 2.0);
+        assert!((middle * 2.0 - bottom_top).abs() < 0.001);
+    }
+
+    #[test]
+    fn thumb_stays_inside_short_tracks_and_clamps_offsets() {
+        assert_eq!(vertical_thumb(20.0, 50.0, 100.0, 100.0), (0.0, 20.0));
+        assert_eq!(vertical_thumb(0.0, 0.0, 0.0, 0.0), (0.0, 0.0));
+        assert_eq!(vertical_thumb(100.0, 50.0, 100.0, -10.0).0, 0.0);
+        let (top, height) = vertical_thumb(100.0, 50.0, 100.0, 200.0);
+        assert!((top + height - 100.0).abs() < 0.001);
+    }
+}

@@ -1,4 +1,22 @@
 use super::*;
+
+/// Thumb geometry uses the laid-out track and list, including header/scrollbar space.
+pub(super) fn vertical_thumb(
+    track: f32,
+    viewport: f32,
+    max_scroll: f32,
+    offset: f32,
+) -> (f32, f32) {
+    let ratio = (viewport / (viewport + max_scroll).max(1.0)).clamp(0.08, 0.85);
+    let height = (track * ratio).max(30.0).min(track);
+    let progress = if max_scroll > 0.0 {
+        (offset / max_scroll).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (progress * (track - height), height)
+}
+
 impl VirtualDataGrid {
     pub(super) fn render_scrolled_area(&self, scroller: AnyElement) -> AnyElement {
         let theme = &self.theme;
@@ -78,38 +96,8 @@ impl VirtualDataGrid {
 
         // Vertical scrollbar indicator when content exceeds viewport
         if has_vertical_overflow {
-            let scroll_y = (-f32::from(
-                self.vertical_scroll_handle
-                    .0
-                    .borrow()
-                    .base_handle
-                    .offset()
-                    .y,
-            ))
-            .max(0.0);
-            let max_scroll_y = (total_content_height - self.viewport_height).max(1.0);
-            let laid_out_max_y = f32::from(
-                self.vertical_scroll_handle
-                    .0
-                    .borrow()
-                    .base_handle
-                    .max_offset()
-                    .height,
-            );
-            let ratio_max_y = if laid_out_max_y > 0.0 {
-                laid_out_max_y
-            } else {
-                max_scroll_y
-            };
-            let scroll_ratio = (scroll_y / ratio_max_y).clamp(0.0, 1.0);
-
             let scrollbar_w = 14.0f32;
             let btn_h = 16.0f32;
-            let track_h = (self.viewport_height - btn_h * 2.0).max(40.0);
-            let thumb_ratio = (self.viewport_height / total_content_height).clamp(0.08, 0.85);
-            let thumb_height = (track_h * thumb_ratio).max(30.0);
-            let max_travel = (track_h - thumb_height).max(0.0);
-            let thumb_top = scroll_ratio * max_travel;
 
             let theme_border = theme.border;
             let theme_bg_header = theme.bg_grid_header;
@@ -146,6 +134,7 @@ impl VirtualDataGrid {
                         .justify_center()
                         .w_full()
                         .h(px(btn_h))
+                        .flex_none()
                         .cursor_pointer()
                         .text_size(px(8.0))
                         .text_color(theme_text_muted)
@@ -176,28 +165,60 @@ impl VirtualDataGrid {
                         .w_full()
                         .relative()
                         .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            move |event: &MouseDownEvent, window, _app| {
-                                let click_y = f32::from(event.position.y) - btn_h;
-                                let target_ratio = (click_y / track_h).clamp(0.0, 1.0);
-                                let target_row = (target_ratio * total_rows as f32) as usize;
-                                handle_track
-                                    .scroll_to_item_strict(target_row, ScrollStrategy::Center);
-                                window.refresh();
-                            },
-                        )
                         .child(
-                            div()
-                                .id("scroll-thumb-v")
-                                .absolute()
-                                .top(px(thumb_top))
-                                .left(px(2.0))
-                                .w(px(scrollbar_w - 4.0))
-                                .h(px(thumb_height))
-                                .rounded_xs()
-                                .bg(thumb_bg)
-                                .hover(move |s| s.bg(thumb_hover)),
+                            canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, _| {
+                                    // Paint after layout so resizing and scrolling use the same
+                                    // current-frame bounds and offset as the virtualized list.
+                                    let handle = handle_track.0.borrow().base_handle.clone();
+                                    let max_scroll = f32::from(handle.max_offset().height);
+                                    let (top, height) = vertical_thumb(
+                                        f32::from(bounds.size.height),
+                                        f32::from(handle.bounds().size.height),
+                                        max_scroll,
+                                        -f32::from(handle.offset().y),
+                                    );
+                                    let thumb_bounds = Bounds::new(
+                                        point(bounds.left() + px(2.0), bounds.top() + px(top)),
+                                        size(px(scrollbar_w - 4.0), px(height)),
+                                    );
+                                    let color = if thumb_bounds.contains(&window.mouse_position()) {
+                                        thumb_hover
+                                    } else {
+                                        thumb_bg
+                                    };
+                                    let mut quad = fill(thumb_bounds, color);
+                                    quad.corner_radii = px(2.0).into();
+                                    window.paint_quad(quad);
+                                    window.on_mouse_event(
+                                        move |event: &MouseDownEvent, phase, window, _| {
+                                            if phase != DispatchPhase::Bubble
+                                                || event.button != MouseButton::Left
+                                                || !bounds.contains(&event.position)
+                                            {
+                                                return;
+                                            }
+                                            let travel = f32::from(bounds.size.height) - height;
+                                            let ratio = if travel > 0.0 {
+                                                ((f32::from(event.position.y - bounds.top())
+                                                    - height / 2.0)
+                                                    / travel)
+                                                    .clamp(0.0, 1.0)
+                                            } else {
+                                                0.0
+                                            };
+                                            let offset = handle.offset();
+                                            handle.set_offset(point(
+                                                offset.x,
+                                                px(-ratio * max_scroll),
+                                            ));
+                                            window.refresh();
+                                        },
+                                    );
+                                },
+                            )
+                            .size_full(),
                         ),
                 )
                 .child(
@@ -208,6 +229,7 @@ impl VirtualDataGrid {
                         .justify_center()
                         .w_full()
                         .h(px(btn_h))
+                        .flex_none()
                         .cursor_pointer()
                         .text_size(px(8.0))
                         .text_color(theme_text_muted)
@@ -221,6 +243,8 @@ impl VirtualDataGrid {
                         .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
                             let cur_offset = handle_down.0.borrow().base_handle.offset();
                             let cur_y = f32::from(cur_offset.y);
+                            let max_scroll_y =
+                                f32::from(handle_down.0.borrow().base_handle.max_offset().height);
                             let new_y = (cur_y - 100.0).max(-max_scroll_y);
                             handle_down
                                 .0

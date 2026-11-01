@@ -50,7 +50,7 @@ What exists today that these targets build on: a paged result store with an LRU 
   - Results **stream into the grid**: the grid appears as soon as the columns are known and grows as row batches arrive.
   - While a query runs, the execute button becomes **Cancel**. Cancellation uses the PostgreSQL cancel token, `KILL QUERY` on MySQL, and `sqlite3_interrupt` on SQLite.
   - Filter bar for `WHERE` / `ORDER BY` / `GROUP BY` fragments, a row limit (default 200), and a grid or plain-text view.
-  - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit.
+  - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit. The vertical scrollbar follows the actual grid bounds and reaches the bottom with the last row.
   - Cell/range selection and clipboard copy as TSV.
   - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Save generates SQL and applies the changes in one transaction.
 - **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and a partial DDL preview from available native column metadata. Missing index/constraint definitions are labeled as unavailable.
