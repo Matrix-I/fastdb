@@ -22,18 +22,20 @@ This plan adapts the release process used by
 
 FastDB already has most of the pieces, but they need work before a public build:
 
-- `ci/build-macos.sh` builds `FastDB.app` and a `.dmg`, but it has **no ad-hoc signature, no app icon, no `/Applications` symlink** in the DMG, and the version is hard-coded to `0.1.0`.
+- `ci/build-macos.sh` builds `FastDB.app` and a `.dmg` with an ad-hoc signature and app icon. The DMG still has **no `/Applications` symlink**, and the version is hard-coded to `0.1.0`.
 - `ci/build-linux.sh` builds a `.deb` and an AppImage, also with a hard-coded version. It falls back to a host build, so running it on macOS silently produces a macOS binary inside a `.deb`.
 - `.github/workflows/ci.yml` builds and tests on macOS and Linux but publishes nothing.
-- There is no `[profile.release]` tuning in the workspace `Cargo.toml`.
-- `dist/` is not in `.gitignore`.
-- No tags exist yet.
+- The workspace `Cargo.toml` has release tuning with thin LTO, one codegen unit, abort-on-panic and stripped symbols.
+- `/dist` is in `.gitignore`.
+- No tags exist in the local checkout.
+
+Status checked against repository code on 2026-11-01; runtime smoke tests and published release state have not been verified.
 
 ### Release blockers found while reviewing
 
-1. **Saved connections use a relative path.** `crates/app/src/workspace/connections.rs:163` and `:199` read and write `.fastdb_config.json` in the current directory. An app launched from Finder or Spotlight starts with `/` as its working directory, so the write fails (the error is discarded with `let _ =`) and connections are lost on every launch. Move the file under `platform_hal::paths::project_dirs()` (`~/Library/Application Support/...` on macOS, `~/.config/...` on Linux), and migrate an existing `./.fastdb_config.json` once.
-2. **Keychain access with an ad-hoc signature.** Passwords live in the macOS keychain under `com.fastdb.credentials`. Keychain item access is tied to the app's code signature; an ad-hoc signature changes with every build, so after each update macOS will ask the user again to allow access. Acceptable for v0.1.0, but say so in the release notes, and plan for a Developer ID certificate later.
-3. **No app icon.** The bundle copies `assets/icons/` (UI icons embedded via `rust-embed` anyway) instead of a `FastDB.icns`. Add `resources/FastDB.icns` and `CFBundleIconFile`.
+1. **Resolved: saved connection path.** Connections now use `platform_hal::paths::config_dir()/connections.json`, with migration from a legacy `./.fastdb_config.json`.
+2. **Saved passwords are still plaintext.** OS keychain helpers exist under `com.fastdb.credentials`, but connection load/save does not call them. Wire up credential storage and migrate existing plaintext passwords before claiming keychain-backed storage. Once integrated, verify access across ad-hoc signed updates and document any re-prompts; Developer ID signing remains a later goal.
+3. **Resolved: app icon.** The macOS bundle copies `resources/FastDB.icns` and sets `CFBundleIconFile`.
 
 ## 3. Target process for FastDB
 
@@ -43,27 +45,30 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
 
 - [x] Fix blocker 1 (config path): connections now live in `platform_hal::paths::config_dir()/connections.json`, and a legacy `./.fastdb_config.json` is moved there on first load.
 - [x] Add the icon (blocker 3): `resources/icon.svg` is the source; `resources/FastDB.icns` and `resources/icon.png` are rendered from it.
-- [ ] Add to the workspace `Cargo.toml`:
+- [x] Add release tuning to the workspace `Cargo.toml` (implemented with thin LTO):
   ```toml
   [profile.release]
   opt-level = 3
-  lto = "fat"
+  lto = "thin"
   codegen-units = 1
   panic = "abort"
   strip = true
   ```
-  Check that `panic = "abort"` does not break any `catch_unwind` in the tokio/GPUI paths before keeping it; drop it if it does.
-- [ ] Move `Info.plist` out of the heredoc into `resources/Info.plist` (like laplace), adding `CFBundleIconFile`, `LSMinimumSystemVersion` and `NSPrincipalClass = NSApplication`.
+- [ ] Verify that `panic = "abort"` does not break required panic recovery in the tokio/GPUI paths; drop it if it does.
+- [ ] Integrate keychain-backed connection passwords and migrate plaintext credentials (blocker 2).
+- [ ] Move `Info.plist` out of the heredoc into `resources/Info.plist` (like laplace), preserving the existing `CFBundleIconFile` and adding `LSMinimumSystemVersion` and `NSPrincipalClass = NSApplication`.
 - [ ] In both `ci/build-*.sh`, read the version from Cargo instead of hard-coding it:
   ```bash
   VERSION="$(cargo metadata --no-deps --format-version 1 \
     | jq -r '.packages[] | select(.name == "fastdb-app") | .version')"
   ```
   and stamp it into `Info.plist` with `plutil -replace CFBundleShortVersionString -string "$VERSION"`.
-- [ ] `ci/build-macos.sh`: sign ad-hoc (`codesign --force --deep --sign -`), stage the DMG with an `Applications` symlink, also produce `FastDB-$VERSION-macos-arm64.zip`, and write `SHA256SUMS.txt`.
+- [x] `ci/build-macos.sh`: sign ad-hoc (`codesign --force --deep --sign -`).
+- [ ] `ci/build-macos.sh`: stage the DMG with an `Applications` symlink, also produce `FastDB-$VERSION-macos-arm64.zip`, and write `SHA256SUMS.txt`.
 - [ ] `ci/build-linux.sh`: fail instead of falling back when not on Linux; add `fastdb-$VERSION-linux-x86_64.tar.gz` next to the `.deb` and AppImage.
-- [ ] Add `/dist` to `.gitignore`.
+- [x] Add `/dist` to `.gitignore`.
 - [ ] Add a `.github/workflows/release.yml` triggered on `v*` tags that runs the Linux script on `ubuntu-latest` (same apt packages as `linux-app` in `ci.yml`) and attaches its artifacts to the draft release. macOS stays a local build for now, as in laplace, since there is no signing certificate to put in CI.
+- [ ] Add a `LICENSE` file matching the workspace MIT declaration.
 - [ ] README: add an Installation section with the `xattr -dr com.apple.quarantine /Applications/FastDB.app` notice and links to `releases/latest`.
 
 ### 3.2 Per-release checklist

@@ -37,7 +37,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 - **PostgreSQL** (`tokio-postgres`), **MySQL / MariaDB** (`mysql_async`) and **SQLite** (`rusqlite`, bundled).
 - TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
 - Saved connections with create / edit / delete / test, plus quick presets per driver.
-- **Passwords are stored in the OS keychain** (macOS Keychain, Linux Secret Service), never in the config file. Passwords left in an older plaintext config are migrated to the keychain on startup.
+- Saved connection passwords are currently stored in plain text in the config file. OS keychain helpers exist in `platform-hal`, but connection persistence does not use them yet.
 
 ### Database navigator
 - DBeaver-style tree: connection → databases → schemas → tables → columns, constraints, foreign keys, indexes.
@@ -49,6 +49,8 @@ What exists today that these targets build on: a paged result store with an LRU 
   - While a query runs, the execute button becomes **Cancel**. Cancellation uses the PostgreSQL cancel token, `KILL QUERY` on MySQL, and `sqlite3_interrupt` on SQLite.
   - Filter bar for `WHERE` / `ORDER BY` / `GROUP BY` fragments, a row limit (default 200), and a grid or plain-text view.
   - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit.
+  - Cell/range selection and clipboard copy as TSV.
+  - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Save generates SQL and applies the changes in one transaction.
 - **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and generated DDL.
 - **Diagram**: a simple entity box listing the table's columns.
 
@@ -102,7 +104,8 @@ What exists today that these targets build on: a paged result store with an LRU 
 These are goals of the project, but they are not available in the app today:
 
 - **SQL editor extras.** Running a whole script, several result tabs, selection and copy inside the editor, renaming or deleting scripts, query history and SQL formatting are not built yet.
-- **Grid selection, copy and inline editing.** Range selection with TSV / CSV / SQL `INSERT` copy, and inline edits that generate `UPDATE` statements, exist in `ui-grid` with tests, but they are not connected to mouse or keyboard input.
+- **Additional grid copy formats.** TSV copy is wired to the clipboard; CSV and SQL `INSERT` copy options are not available in the UI.
+- **Keychain-backed connection passwords.** OS keychain helpers exist, but saved connections still serialize passwords into JSON; keychain integration and migration remain to be done.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
 - **TLS.** PostgreSQL connects without TLS, so servers that require SSL are not supported yet.
@@ -154,13 +157,13 @@ flowchart TD
 | Crate | Kind | Responsibility | State |
 | :--- | :--- | :--- | :--- |
 | `app` | binary | Window, workspace UI, connection management, query orchestration | Used |
-| `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used |
+| `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used (keychain helpers unused) |
 | `mem-engine` | library | Slotted pages, LRU pager, LZ4 disk spill | Used |
 | `db-wire` | library | Drivers, streaming, cancellation, CSV/SQL export, SSH (stub) | Used (export and SSH unused) |
 | `sql-intel` | library | Tree-sitter SQL parsing, schema cache, completion | Used |
 | `ui-core` | library | Theme and shared actions | Used |
 | `ui-editor` | library | Rope buffer and SQL editor view | Used |
-| `ui-grid` | library | Virtualized grid, selection, changeset | Grid used; selection and editing not wired |
+| `ui-grid` | library | Virtualized grid, selection, changeset | Used, including selection and editing |
 
 ---
 
@@ -250,10 +253,15 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] Complete PostgreSQL binary decoding (no false `NULL`s)
 - [x] DBeaver-style navigator and table tabs (data, properties, diagram)
 - [x] Virtualized grid with auto-fit and resizable columns
-- [x] Keychain-backed password storage
 - [x] CI with live PostgreSQL and MySQL
-- [ ] SQL editor tabs with statement-at-cursor execution and autocompletion
-- [ ] Grid selection, copy, and inline editing with `UPDATE` generation
+- [x] SQL editor tabs with statement-at-cursor execution and autocompletion
+- [x] Per-connection SQL script files, autosave and script chooser
+- [x] In-app update checks, release notes and installer download
+- [x] Grid selection, TSV copy, and inline editing with `UPDATE` generation
+- [x] Row insertion, duplication and deletion with transactional Save / Cancel
+- [ ] Keychain-backed connection passwords and migration from plaintext config
+- [ ] SQL editor extras: whole-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and formatting
+- [ ] Grid copy as CSV / SQL `INSERT`
 - [ ] Export to CSV / SQL from the UI
 - [ ] Real table statistics and metadata in Properties
 - [ ] TLS for PostgreSQL and MySQL
