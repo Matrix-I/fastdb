@@ -64,12 +64,15 @@ cp "$WORKSPACE_ROOT/resources/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/$A
 echo "Ad-hoc signing .app bundle..."
 codesign --force --deep --sign - "$APP_BUNDLE"
 
-# Create .dmg if hdiutil is available
-if command -v hdiutil &> /dev/null; then
+# Create .dmg with the current macOS tool, or the older hdiutil fallback.
+if command -v diskutil &> /dev/null || command -v hdiutil &> /dev/null; then
     DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION-arm64.dmg"
+    DMG_STAGING="$(mktemp -d "$DIST_DIR/dmg_staging.XXXXXX")"
+    trap 'rm -rf "$DMG_STAGING"' EXIT
+    cp -R "$APP_BUNDLE" "$DMG_STAGING/"
+    ln -s /Applications "$DMG_STAGING/Applications"
     echo "Creating .dmg installer at $DMG_PATH..."
-    rm -f "$DMG_PATH"
-    hdiutil create -volname "$APP_NAME" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG_PATH"
+    bash "$SCRIPT_DIR/create-macos-dmg.sh" "$DMG_STAGING" "$DMG_PATH" "$APP_NAME"
     echo "Successfully generated $DMG_PATH"
 fi
 

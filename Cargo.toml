@@ -11,7 +11,7 @@ members = [
     "crates/ui-grid",
 ]
 # Vendored patch crates are not workspace members
-exclude = ["vendor/xattr"]
+exclude = ["vendor/xattr", "vendor/block", "vendor/proc-macro-error2"]
 
 [workspace.package]
 version = "0.1.0"
@@ -77,6 +77,10 @@ ui-grid = { path = "crates/ui-grid" }
 # `cargo tree -i xattr` no longer shows xattr 0.2.x.
 [patch.crates-io]
 xattr = { path = "vendor/xattr" }
+# These transitive GPUI/MySQL dependencies trigger future-incompatibility lints.
+# Remove each patch once the dependency graph resolves to an upstream fix.
+block = { path = "vendor/block" }
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }
 
 # Unoptimized GPUI makes every re-render (one per key press or hover change) visibly slow,
 # so dev builds optimize dependencies fully and our own crates lightly

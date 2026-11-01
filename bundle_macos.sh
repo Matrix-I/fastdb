@@ -79,8 +79,7 @@ trap 'rm -rf "$DMG_STAGING"' EXIT
 echo "==> Creating installable disk image..."
 cp -R "$APP_DIR" "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
-hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGING" \
-    -ov -format UDZO "$DMG_PATH"
+bash "$DIR/ci/create-macos-dmg.sh" "$DMG_STAGING" "$DMG_PATH" "$APP_NAME"
 
 echo "==> Creating standalone binary and zip archive..."
 cp "$BINARY" "$DIST_DIR/fastdb-macos"
