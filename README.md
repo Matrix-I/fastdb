@@ -187,6 +187,19 @@ flowchart TD
   sudo apt-get install -y build-essential pkg-config libdbus-1-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig1-dev libasound2-dev libvulkan-dev libssl-dev
   ```
 
+### Install the macOS preview
+
+Download the Apple Silicon DMG or ZIP from [GitHub Releases](https://github.com/Matrix-I/fastdb/releases/latest) and copy FastDB.app into `/Applications`.
+The v0.1.0 release is an early preview for macOS Apple Silicon; Linux packages are not included.
+The app is ad-hoc signed and not notarized. If Gatekeeper blocks it, run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/FastDB.app
+```
+
+Saved connection passwords are stored in plaintext JSON. Keychain storage is planned;
+consider this limitation before saving credentials. Performance figures above remain unmeasured targets.
+
 ### Run
 
 ```bash
@@ -308,4 +321,4 @@ Packaging scripts live in [`ci/`](ci/):
 
 ## 📄 License
 
-MIT, as declared in `Cargo.toml`. A `LICENSE` file has not been added yet.
+MIT. See [LICENSE](LICENSE).

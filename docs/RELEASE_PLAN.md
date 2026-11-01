@@ -133,3 +133,14 @@ Intel Macs are out of scope for v0.1.0; a universal binary (`lipo` over `x86_64-
 - Build macOS in `release.yml` once signing secrets exist.
 - [x] In-app auto-update checker and installer downloader (GitHub Releases API).
 - Homebrew cask.
+
+## v0.1.0 preview release decision (2026-11-01)
+
+The first release is an early preview for macOS Apple Silicon. Keychain integration
+is deferred with an explicit plaintext-password disclosure in installation instructions
+and release notes. It remains required before claiming secure credential persistence.
+Linux artifacts and release automation are deferred until built and verified on Linux.
+The local `bundle_macos.sh --no-install` flow supplies the app, DMG with Applications
+shortcut, and ZIP. Release assets are copied to versioned filenames and checksummed.
+The remaining one-time setup checklist above tracks future packaging work, not a
+claim that every item has shipped in this preview.
