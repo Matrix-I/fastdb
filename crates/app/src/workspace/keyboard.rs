@@ -35,7 +35,7 @@ impl Workspace {
                 self.form.show_connection_modal = false;
                 self.form.field_anchor = None;
             } else if !self.tabs.is_empty() {
-                self.close_tab(self.active_tab);
+                self.close_tab(self.active_tab, cx);
             }
             cx.notify();
             return;

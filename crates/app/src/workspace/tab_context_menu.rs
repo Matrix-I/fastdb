@@ -57,7 +57,21 @@ impl Workspace {
     }
 
     /// Closes every tab that `keep` rejects (by index) and re-points the active tab
-    pub(super) fn close_tabs_where(&mut self, fallback: usize, keep: impl Fn(usize) -> bool) {
+    pub(super) fn close_tabs_where(
+        &mut self,
+        fallback: usize,
+        keep: impl Fn(usize) -> bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(op) = self.operations.active()
+            && self
+                .tabs
+                .iter()
+                .enumerate()
+                .any(|(i, t)| t.id == op.tab_id && !keep(i))
+        {
+            self.cancel_running_query(cx);
+        }
         let len = self.tabs.len();
         let old_active = self.active_tab;
         let new_active = active_after_close(len, old_active, fallback, &keep);
@@ -80,9 +94,14 @@ impl Workspace {
         }
     }
 
-    fn run_tab_menu_action(&mut self, action: TabMenuAction, target: usize) {
+    fn run_tab_menu_action(
+        &mut self,
+        action: TabMenuAction,
+        target: usize,
+        cx: &mut Context<Self>,
+    ) {
         if target < self.tabs.len() {
-            self.close_tabs_where(target, |idx| action.keeps(idx, target));
+            self.close_tabs_where(target, |idx| action.keeps(idx, target), cx);
         }
     }
 
@@ -122,7 +141,7 @@ impl Workspace {
                     .hover(|s| s.bg(theme.bg_surface_selected))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tab_context_menu = None;
-                        this.run_tab_menu_action(action, target);
+                        this.run_tab_menu_action(action, target, cx);
                         cx.notify();
                     }));
             }

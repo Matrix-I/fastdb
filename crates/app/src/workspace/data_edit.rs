@@ -15,7 +15,8 @@ impl Workspace {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return false;
         };
-        tab.table_name.is_some()
+        !self.operations.is_running()
+            && tab.table_name.is_some()
             && tab.grid.pager.is_some()
             && self.tab_session(self.active_tab).driver.is_some()
     }
@@ -66,6 +67,9 @@ impl Workspace {
 
     /// Closes the in-place editor, staging its text in the changeset as one undo step
     pub(super) fn commit_cell_edit(&mut self) {
+        if self.operations.is_running() {
+            return;
+        }
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
@@ -105,6 +109,9 @@ impl Workspace {
 
     /// Closes the in-place editor without keeping what was typed
     pub(super) fn cancel_cell_edit(&mut self) {
+        if self.operations.is_running() {
+            return;
+        }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.grid.editing_cell = None;
         }
@@ -222,6 +229,9 @@ impl Workspace {
 
     /// Drops every staged edit of the active tab (the Cancel button); Cmd+Z brings them back
     pub(super) fn discard_pending_edits(&mut self) {
+        if self.operations.is_running() {
+            return;
+        }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.grid.editing_cell = None;
             let had_rows = !tab.grid.changeset.inserted_rows.is_empty();
@@ -235,6 +245,9 @@ impl Workspace {
     /// Undoes (`redo == false`) or redoes the last staged change of the active table:
     /// a cell edit, added, duplicated or deleted rows, or Cancel
     pub(super) fn step_pending_edits(&mut self, redo: bool) {
+        if self.operations.is_running() {
+            return;
+        }
         self.commit_cell_edit();
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
@@ -255,7 +268,7 @@ impl Workspace {
         if !tab.grid.changeset.is_dirty() {
             return;
         }
-        if self.is_running_query {
+        if self.operations.is_running() {
             cx.notify();
             return;
         }
@@ -306,7 +319,17 @@ impl Workspace {
             .changeset
             .generate_sql(&target, &pager, &key_cols, dialect);
         let tab_id = tab.id;
-        self.is_running_query = true;
+        let connection_id = tab
+            .connection_id
+            .clone()
+            .expect("table tab owns a connection");
+        let saved_changes = tab.grid.changeset.clone();
+        let Some(operation_id) =
+            self.operations
+                .begin(tab_id, connection_id, driver.clone(), OperationKind::Save)
+        else {
+            return;
+        };
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -315,11 +338,17 @@ impl Workspace {
             })
             .await;
             let _ = this.update(cx, |this, cx| {
-                this.is_running_query = false;
+                if !this.operations.finish(operation_id) {
+                    return;
+                }
                 let Some(idx) = this.tabs.iter().position(|t| t.id == tab_id) else {
                     return;
                 };
-                if result.is_ok() {
+                if let Err(error) = &result {
+                    this.tabs[idx].last_error =
+                        Some(format!("Could not save row changes: {error:#}"));
+                }
+                if result.is_ok() && this.tabs[idx].grid.changeset == saved_changes {
                     this.tabs[idx].grid.changeset.clear();
                     this.tabs[idx].grid.changeset_history.clear();
                     this.tabs[idx].grid.selection.clear();
@@ -341,7 +370,7 @@ impl Workspace {
             .tabs
             .get(self.active_tab)
             .is_some_and(|t| t.grid.selection.focus.is_some());
-        let dirty = self.has_pending_edits() && !self.is_running_query;
+        let dirty = self.has_pending_edits() && !self.operations.is_running();
 
         let button =
             |id: &'static str, icon: &'static str, label: Option<&'static str>, enabled: bool| {

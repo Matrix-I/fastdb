@@ -19,14 +19,19 @@ mod data_edit;
 mod data_panel;
 mod ddl;
 mod diagram_panel;
+mod fetch_plan;
 mod filter_suggest;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
+mod operations;
 mod panel_resize;
 mod panes;
 mod properties_panel;
 mod query;
+mod script_tabs;
+mod tab_state;
+use operations::{OperationKind, Operations};
 mod script_chooser;
 mod script_store;
 mod script_view;
@@ -51,12 +56,12 @@ pub use filter_suggest::FilterSuggest;
 pub use nav_context_menu::NavContextMenu;
 use panel_resize::{CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH, PanelDrag, PanelSplitter};
 pub use panes::Panes;
-#[cfg(test)]
-pub use query::{QueryStatus, script_fetch_query};
-pub use query::{TabState, group_thousands};
 pub use script_chooser::ScriptChooser;
 pub use script_store::{ScriptFile, ScriptStore, filter_scripts};
 pub use tab_context_menu::TabContextMenu;
+#[cfg(test)]
+pub use tab_state::{QueryStatus, script_fetch_query};
+pub use tab_state::{TabState, group_thousands};
 use text_input::{
     CaretPick, LineHistory, LineInput, apply_pick, handle_line_key, render_caret_text,
     selection_range,
@@ -115,10 +120,7 @@ pub struct Workspace {
     pub focus_handle: FocusHandle,
     pub active_tab: usize,
     pub tabs: Vec<TabState>,
-    pub is_running_query: bool,
-    /// Incremented per query run so events from a superseded run are ignored
-    pub query_generation: u64,
-    pub cancel_requested: bool,
+    operations: Operations,
     pub next_tab_id: u64,
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
@@ -193,9 +195,7 @@ impl Workspace {
             focus_handle,
             active_tab: 0,
             tabs: Vec::new(),
-            is_running_query: false,
-            query_generation: 0,
-            cancel_requested: false,
+            operations: Operations::default(),
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),
             script_chooser: None,

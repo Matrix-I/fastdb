@@ -128,7 +128,7 @@ impl Workspace {
                                     .cursor_pointer()
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
-                                        this.close_tab(i);
+                                        this.close_tab(i, cx);
                                         cx.notify();
                                     }))
                                     .child("✕"),

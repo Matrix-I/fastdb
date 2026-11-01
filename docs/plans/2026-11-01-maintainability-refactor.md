@@ -70,12 +70,12 @@ Acceptance: form state has no path to select an established session's SQL dialec
 
 Depends on Phase 2 session identity.
 
-- [ ] Split `query.rs` into tab/result state, fetch planning, execution coordination and script-tab actions. Keep pure state transitions independent of `Context<Workspace>`.
-- [ ] Replace `is_running_query`, `cancel_requested` and generation fields with an explicit run state carrying run/tab/connection identity. Keep the existing one-active-operation-per-workspace policy for this refactor; per-session concurrency is a separate feature.
-- [ ] Capture the actual driver in every run/cancel/save operation. Switching the selected connection must not cancel or write through a different driver.
-- [ ] Route streaming events by stable identities and reject stale events. On closing a running tab, cancel its operation through the captured owner; handle terminal errors and a channel closing without a terminal event.
-- [ ] Model row-edit Save as an owned asynchronous operation too. Report failure to the originating tab, retain pending edits on failure, and prevent edits during Save or clear only the saved revision on success.
-- [ ] Keep row appends incremental and preserve the pager, fetch size, ordering and error-banner behavior.
+- [x] Split `query.rs` into tab/result state, fetch planning, execution coordination and script-tab actions. Keep pure state transitions independent of `Context<Workspace>`.
+- [x] Replace `is_running_query`, `cancel_requested` and generation fields with an explicit run state carrying run/tab/connection identity. Keep the existing one-active-operation-per-workspace policy for this refactor; per-session concurrency is a separate feature.
+- [x] Capture the actual driver in every run/cancel/save operation. Switching the selected connection must not cancel or write through a different driver.
+- [x] Route streaming events by stable identities and reject stale events. On closing a running tab, cancel its operation through the captured owner; handle terminal errors and a channel closing without a terminal event.
+- [x] Model row-edit Save as an owned asynchronous operation too. Report failure to the originating tab, retain pending edits on failure, and prevent edits during Save or clear only the saved revision on success.
+- [x] Keep row appends incremental and preserve the pager, fetch size, ordering and error-banner behavior.
 
 Regression cases: tab activation/reordering/closure during a run; connection switch before Cancel; disconnect/reconnect during a run; late completion from an obsolete run; Save failure; tab closure or edits while Save completes; fetch-next append and schema mismatch.
 

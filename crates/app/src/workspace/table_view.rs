@@ -54,7 +54,7 @@ impl Workspace {
                     let show_sql_dialog = self.tabs[active_tab_idx].show_sql_dialog;
                     let filter_sql = self.tabs[active_tab_idx].filter_sql.clone();
                     let is_filter_focused = self.is_filter_focused;
-                    let is_running_query = self.is_running_query;
+                    let is_running_query = self.operations.is_running();
 
                     let mut center_col = div()
                         .flex()
@@ -268,7 +268,7 @@ impl Workspace {
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         // While a query runs, the button cancels it
-                                        if this.is_running_query {
+                                        if this.operations.is_running() {
                                             this.cancel_running_query(cx);
                                         } else {
                                             this.run_active_query(cx);
@@ -484,7 +484,7 @@ impl Workspace {
         let total_rows = tab.loaded_rows();
         let fetch_size_text = tab.fetch.size_text.clone();
         let is_fetch_size_focused = self.is_fetch_size_focused;
-        let is_running_query = self.is_running_query;
+        let is_running_query = self.operations.is_running();
         let can_fetch_next = has_more_rows && !is_running_query;
         let row_count = format!(
             "{}{}",

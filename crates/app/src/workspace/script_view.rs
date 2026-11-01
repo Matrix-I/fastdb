@@ -16,7 +16,7 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
-        let is_running_query = self.is_running_query;
+        let is_running_query = self.operations.is_running();
         let caret_visible = self.cursor_visible;
         let connection_name = self.tabs[tab_idx]
             .connection_id
@@ -66,7 +66,7 @@ impl Workspace {
                     .text_color(rgb(0xffffff))
                     .on_click(cx.listener(|this, _, _, cx| {
                         // While a query runs, the button cancels it
-                        if this.is_running_query {
+                        if this.operations.is_running() {
                             this.cancel_running_query(cx);
                         } else {
                             this.run_active_query(cx);

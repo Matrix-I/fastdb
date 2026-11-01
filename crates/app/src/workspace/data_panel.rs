@@ -113,7 +113,7 @@ impl Workspace {
                             let panels_w = if show_right_panels { self.value_panel_width } else { 0.0 };
                             let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w - CENTER_CHROME_WIDTH - panels_w).max(200.0);
                             let available_viewport_h = (f32::from(window.viewport_size().height) - 180.0).max(200.0);
-                            let is_running_query = self.is_running_query;
+                            let is_running_query = self.operations.is_running();
                             let tab = &mut self.tabs[active_tab_idx];
                             tab.grid.update_viewport_width(available_viewport_w);
                             tab.grid.update_viewport_height(available_viewport_h);
