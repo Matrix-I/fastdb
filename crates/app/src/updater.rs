@@ -296,11 +296,70 @@ async fn check_github_latest_release_inner(
         return Ok(UpdateCheckResult::UpdateAvailable(Box::new(info)));
     }
 
-    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let user_agent = format!("FastDB/{}", current_version);
+    let api_url = format!("https://api.github.com/repos/{repo}/releases/latest");
+    let web_url = format!("https://github.com/{repo}/releases/latest");
+    let tag_prefix = format!("https://github.com/{repo}/releases/tag/");
+    let user_agent = format!("FastDB/{current_version}");
+    let Some(info) =
+        fetch_latest_release(http_client, &api_url, &web_url, &tag_prefix, &user_agent).await?
+    else {
+        return Ok(UpdateCheckResult::UpToDate {
+            current_version: current_version.to_string(),
+        });
+    };
 
+    Ok(classify_release(info, current_version, state, is_manual))
+}
+
+fn classify_release(
+    info: ReleaseInfo,
+    current_version: &str,
+    state: &UpdateState,
+    is_manual: bool,
+) -> UpdateCheckResult {
+    if is_version_newer(&info.tag_name, current_version) {
+        if !is_manual && state.skipped_version.as_deref() == Some(&info.tag_name) {
+            return UpdateCheckResult::Skipped(Box::new(info));
+        }
+        UpdateCheckResult::UpdateAvailable(Box::new(info))
+    } else {
+        UpdateCheckResult::UpToDate {
+            current_version: current_version.to_string(),
+        }
+    }
+}
+
+async fn fetch_latest_release(
+    http_client: &reqwest::Client,
+    api_url: &str,
+    web_url: &str,
+    tag_prefix: &str,
+    user_agent: &str,
+) -> Result<Option<ReleaseInfo>> {
+    match fetch_release_from_api(http_client, api_url, user_agent).await {
+        Ok(release) => Ok(release),
+        Err(api_error) => {
+            // Like Litty, use the public release redirect when the API is unavailable.
+            // This lookup does not consume the unauthenticated REST API quota.
+            fetch_release_redirect(http_client, web_url, tag_prefix, user_agent)
+                .await
+                .map_err(|fallback_error| {
+                    anyhow::anyhow!(
+                        "{api_error:#}. Release page fallback failed: {fallback_error:#}"
+                    )
+                })
+        }
+    }
+}
+
+async fn fetch_release_from_api(
+    http_client: &reqwest::Client,
+    api_url: &str,
+    user_agent: &str,
+) -> Result<Option<ReleaseInfo>> {
     let resp = http_client
-        .get(&url)
+        .get(api_url)
+        .timeout(std::time::Duration::from_secs(30))
         .header("User-Agent", user_agent)
         .header("Accept", "application/vnd.github.v3+json")
         .send()
@@ -312,9 +371,7 @@ async fn check_github_latest_release_inner(
         info!(
             "GitHub Releases returned 404: no published releases yet, treating current version as latest"
         );
-        return Ok(UpdateCheckResult::UpToDate {
-            current_version: current_version.to_string(),
-        });
+        return Ok(None);
     }
 
     if !resp.status().is_success() {
@@ -339,7 +396,7 @@ async fn check_github_latest_release_inner(
 
     let matching_asset = find_matching_asset(&assets);
 
-    let info = ReleaseInfo {
+    Ok(Some(ReleaseInfo {
         tag_name: dto.tag_name.clone(),
         name: dto.name.unwrap_or_else(|| dto.tag_name.clone()),
         body: dto.body.unwrap_or_default(),
@@ -347,22 +404,74 @@ async fn check_github_latest_release_inner(
         published_at: dto.published_at.unwrap_or_default(),
         assets,
         matching_asset,
-    };
+    }))
+}
 
-    if is_version_newer(&dto.tag_name, current_version) {
-        // If automatic check and user previously skipped this version, ignore
-        if !is_manual
-            && let Some(ref skipped) = state.skipped_version
-            && skipped == &dto.tag_name
-        {
-            return Ok(UpdateCheckResult::Skipped(Box::new(info)));
-        }
-        Ok(UpdateCheckResult::UpdateAvailable(Box::new(info)))
-    } else {
-        Ok(UpdateCheckResult::UpToDate {
-            current_version: current_version.to_string(),
-        })
+fn release_tag_from_url<'a>(url: &'a str, tag_prefix: &str) -> Result<&'a str> {
+    let tag = url
+        .strip_prefix(tag_prefix)
+        .context("Release redirect did not resolve to this repository's release tag")?;
+    // Only accept plain semantic version tags, never paths, queries or fragments.
+    anyhow::ensure!(
+        tag.len() <= 64
+            && tag
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b)),
+        "Release redirect contains an invalid version tag"
+    );
+    semver::Version::parse(clean_version_str(tag)).context("Invalid release version")?;
+    Ok(tag)
+}
+
+async fn fetch_release_redirect(
+    http_client: &reqwest::Client,
+    web_url: &str,
+    tag_prefix: &str,
+    user_agent: &str,
+) -> Result<Option<ReleaseInfo>> {
+    let response = http_client
+        .head(web_url)
+        .header("User-Agent", user_agent)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to connect to the GitHub release page")?
+        .error_for_status()
+        .context("GitHub release page request failed")?;
+    let html_url = response.url().as_str().to_string();
+    if Some(html_url.as_str()) == tag_prefix.strip_suffix("/tag/") {
+        // With no published releases, GitHub redirects /latest to /releases.
+        // Confirm the empty page rather than treating any non-tag redirect as current.
+        let page = http_client
+            .get(&html_url)
+            .header("User-Agent", user_agent)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await?
+            .error_for_status()?;
+        anyhow::ensure!(
+            page.url().as_str() == html_url,
+            "Unexpected release page redirect"
+        );
+        let body = page.text().await?;
+        anyhow::ensure!(
+            body.contains("There aren’t any releases here")
+                || body.contains("There aren't any releases here")
+                || body.contains("There aren&#39;t any releases here"),
+            "GitHub did not identify a latest release or confirm an empty release list"
+        );
+        return Ok(None);
     }
+    let tag_name = release_tag_from_url(&html_url, tag_prefix)?.to_string();
+    Ok(Some(ReleaseInfo {
+        name: format!("FastDB {tag_name}"),
+        tag_name,
+        html_url,
+        body: "Release details could not be loaded from the GitHub API. View the release on GitHub for notes and downloads.".into(),
+        published_at: String::new(),
+        assets: Vec::new(),
+        matching_asset: None,
+    }))
 }
 
 /// Downloads a release asset to destination path with progress notifications
@@ -701,6 +810,204 @@ pub fn restart_application() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup_release(responses: Vec<(&'static str, String)>) -> Result<Option<ReleaseInfo>> {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (path, response) in responses {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "Missing {path}");
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("HTTP accept failed: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let count = socket.read(&mut chunk).unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&chunk[..count]);
+                    assert!(request.len() <= 64 * 1024);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert_eq!(request.split_whitespace().nth(1), Some(path));
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let result = futures::executor::block_on(db_wire::run_on_shared_runtime(async move {
+            let client = reqwest::Client::builder().no_proxy().build()?;
+            fetch_latest_release(
+                &client,
+                &format!("{base_url}/api"),
+                &format!("{base_url}/latest"),
+                &format!("{base_url}/releases/tag/"),
+                "FastDB-test",
+            )
+            .await
+        }));
+        server.join().unwrap();
+        result
+    }
+
+    fn response(status: &str, headers: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[test]
+    fn release_api_success_preserves_metadata_and_assets() {
+        let release = lookup_release(vec![("/api", response("200 OK", "", r#"{
+            "tag_name":"v0.2.0", "name":"FastDB 0.2.0", "body":"Release notes",
+            "html_url":"https://github.com/Matrix-I/fastdb/releases/tag/v0.2.0",
+            "assets":[{"name":"FastDB-arm64.dmg","browser_download_url":"https://github.com/Matrix-I/fastdb/releases/download/v0.2.0/FastDB-arm64.dmg","size":123}]
+        }"#))]).unwrap().unwrap();
+        assert_eq!(release.body, "Release notes");
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].size, 123);
+    }
+
+    #[test]
+    fn rate_limit_and_invalid_json_use_the_release_redirect() {
+        for api_response in [
+            response(
+                "403 Forbidden",
+                "X-RateLimit-Remaining: 0\r\n",
+                "rate limited",
+            ),
+            response("429 Too Many Requests", "", "rate limited"),
+            response("200 OK", "", "invalid json"),
+        ] {
+            let release = lookup_release(vec![
+                ("/api", api_response),
+                (
+                    "/latest",
+                    response("302 Found", "Location: /releases/tag/v0.2.0\r\n", ""),
+                ),
+                ("/releases/tag/v0.2.0", response("200 OK", "", "")),
+            ])
+            .unwrap()
+            .unwrap();
+            assert_eq!(release.tag_name, "v0.2.0");
+            assert!(release.assets.is_empty());
+            assert!(release.matching_asset.is_none());
+            assert!(matches!(
+                classify_release(release.clone(), "0.2.0", &UpdateState::default(), true),
+                UpdateCheckResult::UpToDate { .. }
+            ));
+            assert!(matches!(
+                classify_release(release.clone(), "0.1.0", &UpdateState::default(), true),
+                UpdateCheckResult::UpdateAvailable(_)
+            ));
+            let state = UpdateState {
+                skipped_version: Some("v0.2.0".into()),
+                ..UpdateState::default()
+            };
+            assert!(matches!(
+                classify_release(release.clone(), "0.1.0", &state, false),
+                UpdateCheckResult::Skipped(_)
+            ));
+            assert!(matches!(
+                classify_release(release, "0.1.0", &state, true),
+                UpdateCheckResult::UpdateAvailable(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn failed_fallback_remains_an_error() {
+        let error = lookup_release(vec![
+            ("/api", response("403 Forbidden", "", "")),
+            ("/latest", response("500 Internal Server Error", "", "")),
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("403"), "{error}");
+        assert!(error.contains("500"), "{error}");
+        assert!(
+            lookup_release(vec![
+                ("/api", response("403 Forbidden", "", "")),
+                ("/latest", response("200 OK", "", "login page")),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn release_redirect_requires_the_expected_repository_and_a_version() {
+        let prefix = "https://github.com/Matrix-I/fastdb/releases/tag/";
+        assert_eq!(
+            release_tag_from_url(&format!("{prefix}v1.2.3"), prefix).unwrap(),
+            "v1.2.3"
+        );
+        for url in [
+            "https://github.com/Matrix-I/other/releases/tag/v1.2.3",
+            "http://github.com/Matrix-I/fastdb/releases/tag/v1.2.3",
+            "https://github.com.evil.test/Matrix-I/fastdb/releases/tag/v1.2.3",
+        ] {
+            assert!(release_tag_from_url(url, prefix).is_err());
+        }
+        for tag in [
+            "",
+            "latest",
+            "v1.2.3/asset",
+            "v1.2.3?query",
+            "v1.2.3#fragment",
+            "v1.2.3%2fasset",
+        ] {
+            assert!(release_tag_from_url(&format!("{prefix}{tag}"), prefix).is_err());
+        }
+    }
+
+    #[test]
+    fn no_published_release_preserves_the_existing_behavior() {
+        assert!(
+            lookup_release(vec![("/api", response("404 Not Found", "", ""))])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            lookup_release(vec![
+                ("/api", response("403 Forbidden", "", "")),
+                (
+                    "/latest",
+                    response("302 Found", "Location: /releases\r\n", "")
+                ),
+                ("/releases", response("200 OK", "", "")),
+                (
+                    "/releases",
+                    response("200 OK", "", "<h2>There aren’t any releases here</h2>")
+                ),
+            ])
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            lookup_release(vec![
+                ("/api", response("403 Forbidden", "", "")),
+                (
+                    "/latest",
+                    response("302 Found", "Location: /releases\r\n", "")
+                ),
+                ("/releases", response("200 OK", "", "")),
+                ("/releases", response("200 OK", "", "Unrecognized page")),
+            ])
+            .is_err()
+        );
+    }
 
     // GPUI polls background work without entering a Tokio runtime. Exercise the
     // same entry points with a plain executor and a local HTTP server.

@@ -12,6 +12,11 @@ impl UpdateController {
             .as_ref()
             .map(|d| d.status.clone())
             .unwrap_or(UpdateDialogStatus::Checking);
+        let card_width = if matches!(dialog_status, UpdateDialogStatus::UpdateAvailable { .. }) {
+            480.0
+        } else {
+            380.0
+        };
 
         div()
             .id("update-dialog-backdrop")
@@ -38,16 +43,17 @@ impl UpdateController {
             .child(
                 div()
                     .id("update-dialog-card")
-                    .w(px(560.0))
+                    .w(px(card_width))
+                    .max_w_full()
                     .bg(theme.bg_surface)
                     .border_1()
                     .border_color(theme.border_focused)
                     .rounded_lg()
                     .shadow_lg()
-                    .p_5()
+                    .p_4()
                     .flex()
                     .flex_col()
-                    .gap_4()
+                    .gap_2()
                     .on_click(|_, _, cx| {
                         cx.stop_propagation();
                     })
@@ -59,13 +65,13 @@ impl UpdateController {
                             .justify_between()
                             .border_b_1()
                             .border_color(theme.border)
-                            .pb_3()
+                            .pb_2()
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .text_size(px(16.0))
+                                    .text_size(px(14.0))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme.text_primary)
                                     .child(

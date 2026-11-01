@@ -22,6 +22,8 @@ impl UpdateController {
         let state = self.update_state.clone();
         let repo = DEFAULT_REPO.to_string();
         let current_version = env!("CARGO_PKG_VERSION").to_string();
+        #[cfg(target_os = "macos")]
+        let check_window = cx.active_window();
         let (tx, rx) = flume::bounded::<UpdateCheckResult>(1);
 
         let executor = cx.background_executor().clone();
@@ -69,6 +71,28 @@ impl UpdateController {
                         }
                         UpdateCheckResult::UpToDate { current_version } => {
                             if is_manual {
+                                #[cfg(target_os = "macos")]
+                                if let Some(handle) = check_window
+                                    && let Ok(answer) = handle.update(cx, |_, window, cx| {
+                                        window.prompt(
+                                            PromptLevel::Info,
+                                            "FastDB",
+                                            Some(&format!(
+                                                "You're up to date!\nFastDB v{current_version}"
+                                            )),
+                                            &["OK"],
+                                            cx,
+                                        )
+                                    })
+                                {
+                                    workspace.update_dialog = None;
+                                    cx.notify();
+                                    cx.spawn(async move |_, _| {
+                                        let _ = answer.await;
+                                    })
+                                    .detach();
+                                    return;
+                                }
                                 workspace.update_dialog =
                                     Some(UpdateDialog::up_to_date(current_version, true));
                                 cx.notify();

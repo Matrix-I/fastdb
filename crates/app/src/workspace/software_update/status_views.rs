@@ -10,9 +10,10 @@ impl UpdateController {
             .flex_col()
             .items_center()
             .justify_center()
-            .py_8()
-            .gap_3()
-            .child(div().text_size(px(28.0)).child("🔄"))
+            .py_3()
+            .gap_2()
+            .text_center()
+            .child(div().text_size(px(24.0)).child("🔄"))
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -24,10 +25,11 @@ impl UpdateController {
                 div()
                     .text_size(px(12.0))
                     .text_color(theme.text_secondary)
-                    .child("Connecting to GitHub Releases to check for newer versions."),
+                    .w_full()
+                    .child("Checking GitHub Releases for a newer version."),
             )
             .child(
-                div().pt_3().child(
+                div().pt_2().child(
                     div()
                         .id("btn-cancel-checking")
                         .px_4()
@@ -63,11 +65,12 @@ impl UpdateController {
             .flex_col()
             .items_center()
             .justify_center()
-            .py_6()
-            .gap_3()
+            .py_3()
+            .gap_2()
+            .text_center()
             .child(
                 div()
-                    .text_size(px(32.0))
+                    .text_size(px(24.0))
                     .text_color(rgb(0x3fb950))
                     .child("✓"),
             )
@@ -82,13 +85,14 @@ impl UpdateController {
                 div()
                     .text_size(px(12.0))
                     .text_color(theme.text_secondary)
+                    .w_full()
                     .child(format!(
-                        "FastDB v{} is currently the newest version available.",
+                        "FastDB v{} is the newest version available.",
                         cur_ver
                     )),
             )
             .child(
-                div().pt_4().child(
+                div().pt_2().child(
                     div()
                         .id("btn-uptodate-ok")
                         .px_5()
@@ -122,11 +126,12 @@ impl UpdateController {
             .flex_col()
             .items_center()
             .justify_center()
-            .py_6()
-            .gap_3()
+            .py_3()
+            .gap_2()
+            .text_center()
             .child(
                 div()
-                    .text_size(px(28.0))
+                    .text_size(px(24.0))
                     .text_color(rgb(0xf85149))
                     .child("⚠"),
             )
@@ -141,7 +146,8 @@ impl UpdateController {
                 div()
                     .text_size(px(12.0))
                     .text_color(theme.text_secondary)
-                    .px_4()
+                    .w_full()
+                    .px_2()
                     .child(err_msg),
             )
             .child(
@@ -149,7 +155,7 @@ impl UpdateController {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .pt_4()
+                    .pt_2()
                     .child(
                         div()
                             .id("btn-error-close")
@@ -200,11 +206,11 @@ impl UpdateController {
     ) -> AnyElement {
         let release_clone = release.clone();
         let html_url = release.html_url.clone();
-        let pub_date = if release.published_at.len() >= 10 {
-            &release.published_at[..10]
-        } else {
-            &release.published_at
-        };
+        let release_date = release
+            .published_at
+            .get(..10)
+            .map(|date| format!(" Released on {date}."))
+            .unwrap_or_default();
         let current_pkg_version = env!("CARGO_PKG_VERSION");
 
         div()
@@ -229,8 +235,8 @@ impl UpdateController {
                             .text_size(px(12.0))
                             .text_color(theme.text_secondary)
                             .child(format!(
-                                "FastDB {} is now available (you have v{}). Released on {}.",
-                                release.tag_name, current_pkg_version, pub_date
+                                "FastDB {} is now available (you have v{}).{}",
+                                release.tag_name, current_pkg_version, release_date
                             )),
                     ),
             )

@@ -30,13 +30,13 @@ impl Workspace {
             .child(
                 div()
                     .id("about-card")
-                    .w(px(460.0))
-                    .p_6()
-                    .py_8()
+                    .w(px(300.0))
+                    .max_w_full()
+                    .p_4()
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap_4()
+                    .gap_2()
                     .bg(rgb(0x242424))
                     .text_color(theme.text_primary)
                     .border_1()
@@ -44,15 +44,15 @@ impl Workspace {
                     .rounded_lg()
                     .shadow_lg()
                     .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(img(icon.clone()).size(px(104.0)))
+                    .child(img(icon.clone()).size(px(64.0)))
                     .child(
                         div()
-                            .mt_2()
-                            .text_size(px(28.0))
+                            .mt_1()
+                            .text_size(px(20.0))
                             .font_weight(FontWeight::BOLD)
                             .child("FastDB"),
                     )
-                    .child(div().text_size(px(20.0)).child(format!(
+                    .child(div().text_size(px(13.0)).child(format!(
                         "Version {version} ({version})",
                         version = env!("CARGO_PKG_VERSION")
                     )))

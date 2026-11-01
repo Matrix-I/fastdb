@@ -44,15 +44,20 @@ fn quit(_: &Quit, cx: &mut App) {
 
 fn check_for_updates(_: &CheckForUpdates, cx: &mut App) {
     info!("Triggering Check for Updates from App menu");
-    for handle in cx.windows() {
-        if let Some(handle) = handle.downcast::<Workspace>() {
-            let _ = handle.update(cx, |workspace, window, cx| {
-                window.activate_window();
-                window.focus(&workspace.focus_handle);
-                workspace.trigger_update_check(true, cx);
-            });
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                if let Err(error) = handle.update(cx, |workspace, window, cx| {
+                    window.activate_window();
+                    window.focus(&workspace.focus_handle);
+                    workspace.trigger_update_check(true, cx);
+                }) {
+                    tracing::warn!("Failed to open update check: {error}");
+                }
+                break;
+            }
         }
-    }
+    });
 }
 
 fn main() -> Result<()> {
