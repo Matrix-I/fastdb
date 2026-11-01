@@ -57,7 +57,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 - **Diagram**: a simple entity box listing the table's columns.
 
 ### SQL editor
-- Scripts are `.sql` files saved per connection under `<config dir>/scripts/<connection id>/Script-<n>.sql` (on macOS `~/Library/Application Support/com.fastdb.FastDB/scripts`), written automatically as you type, before a run, when the tab closes and on quit.
+- Scripts are `.sql` files saved per connection under `<config dir>/scripts/<connection id>/Script-<n>.sql` (on macOS `~/Library/Application Support/com.fastdb.FastDB/scripts`), saved atomically in the background after a short pause in typing. Run, tab close and Quit wait for pending saves; a save failure keeps the tab open and shows an error.
 - `Cmd + ]`, the **+ SQL** button or **SQL Editor** in a connection's right-click menu reopens the connection's latest script, or creates `Script-1` when it has none. When the latest script is already open, a **Choose SQL script** dialog lists the connection's scripts by time with a search box, a **New script** button and **Show scripts for all connections**.
 - Table and script tabs keep their connection identity, results and staged edits when switching connections. Editing a connection preset does not change an open session's SQL dialect.
 - A script tab runs on its own connection: selecting it switches the active connection, and the toolbar shows which one.

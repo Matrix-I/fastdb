@@ -1,4 +1,4 @@
-use super::connection_config::{ConnectionRepository, write_connections_config};
+use super::connection_config::ConnectionRepository;
 fn connections_config_path() -> std::path::PathBuf {
     platform_hal::paths::config_dir().join("connections.json")
 }
@@ -33,13 +33,7 @@ impl Workspace {
             &self.connections.saved_connections,
             self.connections.active_connection_id.as_deref(),
         );
-        if let Err(e) = write_connections_config(&connections_config_path(), &content) {
-            tracing::error!(
-                "Failed to save connections to {}: {}",
-                connections_config_path().display(),
-                e
-            );
-        }
+        self.save_queue.write(connections_config_path(), content);
     }
 
     pub fn active_saved_connection(&self) -> Option<&SavedConnection> {

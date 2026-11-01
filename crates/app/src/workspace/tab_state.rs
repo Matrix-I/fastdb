@@ -39,6 +39,7 @@ pub struct TabState {
     pub connection_id: Option<String>,
     /// Text last written to the script file, to tell whether the editor has unsaved changes
     pub saved_text: String,
+    pub saved_revision: u64,
 }
 
 /// DBeaver-style incremental fetching: the first run reads `size` rows, and reaching the
@@ -195,8 +196,14 @@ impl TabState {
     }
 
     /// Whether a script tab's editor holds changes not yet written to its file
+    pub fn mark_saved(&mut self, revision: u64, text: String) {
+        if revision >= self.saved_revision {
+            self.saved_revision = revision;
+            self.saved_text = text;
+        }
+    }
     pub fn is_dirty(&self) -> bool {
-        self.script_path.is_some() && self.editor.buffer.text() != self.saved_text
+        self.script_path.is_some() && self.editor.buffer.revision() != self.saved_revision
     }
 
     /// Whether this tab runs SQL typed in its editor rather than reading a table
@@ -227,6 +234,7 @@ impl TabState {
             script_path: None,
             connection_id: None,
             saved_text: String::new(),
+            saved_revision: 0,
         }
     }
 
@@ -628,5 +636,44 @@ mod append_tests {
             QueryStatus::Failed(_)
         ));
         assert_eq!(old.total_rows(), 0);
+    }
+}
+
+#[cfg(test)]
+mod save_revision_tests {
+    use super::TabState;
+    use std::sync::Arc;
+    #[test]
+    fn an_old_write_completion_does_not_mark_new_edits_saved() {
+        let file = super::ScriptFile {
+            path: "/tmp/revision-test.sql".into(),
+            connection_id: "a".into(),
+            name: "revision-test".into(),
+            modified: std::time::SystemTime::now(),
+            preview: String::new(),
+        };
+        let mut tab = TabState::script(
+            1,
+            &file,
+            "",
+            super::Theme::dark(),
+            Arc::new(sql_intel::SchemaCache::new().unwrap()),
+        );
+        tab.editor.insert_text("old");
+        let old_revision = tab.editor.buffer.revision();
+        let old_text = tab.editor.buffer.text();
+        tab.editor.insert_text("new");
+        let latest = tab.editor.buffer.revision();
+        let text = tab.editor.buffer.text();
+        tab.mark_saved(old_revision, old_text.clone());
+        assert!(tab.is_dirty());
+        tab.mark_saved(latest, text);
+        assert!(!tab.is_dirty());
+        tab.mark_saved(old_revision, old_text);
+        assert!(!tab.is_dirty());
+        tab.editor.buffer.move_left();
+        assert_eq!(tab.editor.buffer.revision(), latest);
+        tab.editor.undo();
+        assert!(tab.is_dirty());
     }
 }

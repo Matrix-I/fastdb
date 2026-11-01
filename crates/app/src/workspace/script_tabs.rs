@@ -5,55 +5,90 @@ impl Workspace {
     /// offers the script chooser when the latest one is already open
     pub fn open_sql_script(&mut self, conn_id: Option<&str>, cx: &mut Context<Self>) {
         let Some(conn_id) = conn_id
-            .map(str::to_string)
+            .map(str::to_owned)
             .or_else(|| self.connections.active_connection_id.clone())
         else {
-            self.form.show_connection_modal = true;
+            self.open_new_connection_dialog();
+            cx.notify();
             return;
         };
-        let script = match self.script_store.most_recent(&conn_id) {
-            Some(recent)
-                if self
-                    .tabs
-                    .iter()
-                    .any(|t| t.script_path.as_deref() == Some(recent.path.as_path())) =>
-            {
-                self.open_script_chooser(&conn_id);
-                return;
-            }
-            Some(recent) => recent,
-            None => match self.script_store.create(&conn_id) {
-                Ok(script) => script,
-                Err(e) => {
-                    tracing::warn!("{e:#}");
-                    return;
+        let store = self.script_store.clone();
+        cx.spawn(async move |this, cx| {
+            let id = conn_id.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    store
+                        .most_recent(&id)
+                        .map(Ok)
+                        .unwrap_or_else(|| store.create(&id))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(script) => {
+                    if this
+                        .tabs
+                        .iter()
+                        .any(|t| t.script_path.as_ref() == Some(&script.path))
+                    {
+                        this.open_script_chooser(&conn_id, cx);
+                    } else {
+                        this.open_script_file(&script, cx);
+                    }
                 }
-            },
-        };
-        self.open_script_file(&script, cx);
+                Err(error) => tracing::warn!("{error:#}"),
+            });
+        })
+        .detach();
     }
 
-    /// Activates the tab showing `script`, or reads it into a new tab, on its connection
     pub fn open_script_file(&mut self, script: &ScriptFile, cx: &mut Context<Self>) {
         if let Some(idx) = self
             .tabs
             .iter()
-            .position(|t| t.script_path.as_deref() == Some(script.path.as_path()))
+            .position(|t| t.script_path.as_ref() == Some(&script.path))
+        {
+            self.active_tab = idx;
+            self.activate_script_connection(cx);
+            cx.notify();
+            return;
+        }
+        let script = script.clone();
+        let store = self.script_store.clone();
+        cx.spawn(async move |this, cx| {
+            let file = script.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.read(&file) })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(text) => this.install_script_tab(&script, &text, cx),
+                Err(error) => tracing::warn!("{error:#}"),
+            });
+        })
+        .detach();
+    }
+    fn install_script_tab(&mut self, script: &ScriptFile, text: &str, cx: &mut Context<Self>) {
+        if !self
+            .connections
+            .saved_connections
+            .iter()
+            .any(|c| c.id == script.connection_id)
+        {
+            return;
+        }
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.script_path.as_ref() == Some(&script.path))
         {
             self.active_tab = idx;
         } else {
-            let text = match self.script_store.read(script) {
-                Ok(text) => text,
-                Err(e) => {
-                    tracing::warn!("{e:#}");
-                    return;
-                }
-            };
             let id = self.allocate_tab_id();
             self.tabs.push(TabState::script(
                 id,
                 script,
-                &text,
+                text,
                 self.theme.clone(),
                 self.connections
                     .session(&script.connection_id)
@@ -65,6 +100,21 @@ impl Workspace {
         self.is_filter_focused = false;
         self.blur_fetch_size();
         self.activate_script_connection(cx);
+        cx.notify();
+    }
+    pub(super) fn create_script(&mut self, connection_id: String, cx: &mut Context<Self>) {
+        let store = self.script_store.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.create(&connection_id) })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(script) => this.install_script_tab(&script, "", cx),
+                Err(error) => tracing::warn!("{error:#}"),
+            });
+        })
+        .detach();
     }
 
     /// Makes the active script tab's connection the active connection, so it runs there
@@ -80,28 +130,6 @@ impl Workspace {
             || !self.connections.active().is_connected
         {
             self.connect_saved_by_id(&conn_id, cx);
-        }
-    }
-
-    /// Writes a script tab's text to its file when it changed; a failure shows in its banner
-    pub fn save_script_tab(&mut self, idx: usize) {
-        let Some(tab) = self.tabs.get_mut(idx).filter(|t| t.is_dirty()) else {
-            return;
-        };
-        let Some(path) = tab.script_path.clone() else {
-            return;
-        };
-        let text = tab.editor.buffer.text();
-        match self.script_store.write(&path, &text) {
-            Ok(()) => tab.saved_text = text,
-            Err(e) => tab.last_error = Some(format!("{e:#}")),
-        }
-    }
-
-    /// Saves every script tab with unsaved changes
-    pub fn save_dirty_scripts(&mut self) {
-        for idx in 0..self.tabs.len() {
-            self.save_script_tab(idx);
         }
     }
 

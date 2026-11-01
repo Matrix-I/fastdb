@@ -33,7 +33,9 @@ mod script_tabs;
 mod tab_state;
 use operations::{OperationKind, Operations};
 mod script_chooser;
+mod script_saves;
 mod script_store;
+use script_saves::{AfterSave, SaveQueue};
 mod script_view;
 mod sql_script;
 mod tab_context_menu;
@@ -124,6 +126,9 @@ pub struct Workspace {
     pub next_tab_id: u64,
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
+    save_queue: SaveQueue,
+    script_request_id: u64,
+    pub(super) allow_quit: bool,
     /// "Choose SQL script" dialog, if open
     pub script_chooser: Option<ScriptChooser>,
 
@@ -198,6 +203,9 @@ impl Workspace {
             operations: Operations::default(),
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),
+            save_queue: SaveQueue::default(),
+            script_request_id: 0,
+            allow_quit: false,
             script_chooser: None,
 
             // Connection Setup Form Defaults
@@ -255,8 +263,11 @@ impl Workspace {
                 if this
                     .update(cx, |this, cx| {
                         this.cursor_visible = !this.cursor_visible;
-                        this.save_dirty_scripts();
-                        cx.notify();
+                        if this.form.show_connection_modal || this.script_chooser.is_some() {
+                            cx.notify();
+                        } else if let Some(panes) = &this.panes {
+                            panes.notify_table(cx);
+                        }
                     })
                     .is_err()
                 {

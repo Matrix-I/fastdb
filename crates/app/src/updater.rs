@@ -724,6 +724,7 @@ mod tests {
                     Err(e) => panic!("HTTP accept failed: {e}"),
                 }
             };
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();

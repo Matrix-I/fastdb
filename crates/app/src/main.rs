@@ -27,6 +27,12 @@ fn about(_: &About, cx: &mut App) {
 
 fn quit(_: &Quit, cx: &mut App) {
     info!("Closing FastDB via Quit action");
+    for handle in cx.windows() {
+        if let Some(handle) = handle.downcast::<Workspace>() {
+            let _ = handle.update(cx, |workspace, _, cx| workspace.request_quit(cx));
+            return;
+        }
+    }
     cx.quit();
 }
 
@@ -103,8 +109,23 @@ fn main() -> Result<()> {
             ..Default::default()
         };
 
-        cx.open_window(window_options, |_window, cx| cx.new(Workspace::new))
-            .expect("Failed to open FastDB main window");
+        cx.open_window(window_options, |window, cx| {
+            let workspace = cx.new(Workspace::new);
+            let weak = workspace.downgrade();
+            window.on_window_should_close(cx, move |_, cx| {
+                weak.update(cx, |workspace, cx| {
+                    if workspace.allow_quit {
+                        true
+                    } else {
+                        workspace.request_quit(cx);
+                        false
+                    }
+                })
+                .unwrap_or(true)
+            });
+            workspace
+        })
+        .expect("Failed to open FastDB main window");
     });
 
     Ok(())

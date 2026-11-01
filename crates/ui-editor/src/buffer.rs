@@ -9,6 +9,7 @@ pub struct TextEdit {
 }
 
 pub struct RopeyBuffer {
+    revision: u64,
     rope: Rope,
     cursor_offset: usize,
     undo_stack: Vec<TextEdit>,
@@ -26,12 +27,17 @@ impl Default for RopeyBuffer {
 impl RopeyBuffer {
     pub fn new(initial_text: &str) -> Self {
         Self {
+            revision: 0,
             rope: Rope::from_str(initial_text),
             cursor_offset: initial_text.len(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             open_run: None,
         }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn text(&self) -> String {
@@ -184,6 +190,9 @@ impl RopeyBuffer {
     /// Records `edit` as an undo step, or folds it into the last step when it continues
     /// a run of typing or of backspaces, so Cmd+Z takes back a word rather than a letter
     fn record(&mut self, edit: TextEdit, kind: EditKind) {
+        if edit.old_text != edit.new_text {
+            self.revision += 1;
+        }
         self.redo_stack.clear();
         let joins = kind != EditKind::Other && self.open_run == Some(kind);
         self.open_run = (kind != EditKind::Other).then_some(kind);
@@ -318,6 +327,7 @@ impl RopeyBuffer {
         self.cursor_offset = edit.offset + edit.old_text.len();
         self.open_run = None;
         self.redo_stack.push(edit);
+        self.revision += 1;
         true
     }
 
@@ -337,6 +347,7 @@ impl RopeyBuffer {
         self.cursor_offset = edit.offset + edit.new_text.len();
         self.open_run = None;
         self.undo_stack.push(edit);
+        self.revision += 1;
         true
     }
 }

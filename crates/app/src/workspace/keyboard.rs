@@ -6,12 +6,24 @@ impl Workspace {
     /// Handles every key press for the window: app shortcuts, the connection form,
     /// the filter bar and the SQL editor
     pub(super) fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let before = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| (t.id, t.editor.buffer.revision()));
+        self.handle_workspace_key_down(event, cx);
+        if let Some((id, revision)) = before
+            && let Some(tab) = self.tabs.iter().find(|t| t.id == id)
+            && tab.editor.buffer.revision() != revision
+        {
+            self.schedule_autosave(id, tab.editor.buffer.revision(), cx);
+        }
+    }
+    fn handle_workspace_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         // Intercept Cmd+Q (macOS) / Ctrl+Q (Linux/Windows) unconditionally to close the app
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("q")
         {
-            self.save_dirty_scripts();
-            cx.quit();
+            self.request_quit(cx);
             return;
         }
 

@@ -37,11 +37,18 @@ impl Workspace {
     }
 
     pub fn run_active_query(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            self.save_then(vec![tab.id], AfterSave::Run(tab.id), cx);
+        }
+    }
+    pub(super) fn run_saved_query(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
+            return;
+        };
         if self.tabs.is_empty() {
             return;
         }
-        self.save_script_tab(self.active_tab);
-        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+        if let Some(tab) = self.tabs.get_mut(index) {
             tab.fetch.commit_size_text();
             if tab.is_script() {
                 let statement = tab.editor.active_statement();
@@ -49,8 +56,8 @@ impl Workspace {
             }
         }
         self.is_fetch_size_focused = false;
-        let (sql, paged) = self.build_fetch_query(self.active_tab, 0);
-        self.start_query(sql, paged, false, cx);
+        let (sql, paged) = self.build_fetch_query(index, 0);
+        self.start_query(index, sql, paged, false, cx);
     }
 
     /// Reads the next chunk of the active tab's result and appends it to the grid.
@@ -68,21 +75,19 @@ impl Workspace {
         }
         let offset = tab.loaded_rows();
         let (sql, paged) = self.build_fetch_query(self.active_tab, offset);
-        self.start_query(sql, paged, true, cx);
+        self.start_query(self.active_tab, sql, paged, true, cx);
     }
 
     pub(super) fn start_query(
         &mut self,
+        index: usize,
         sql: String,
         paged: bool,
         append: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
-            let owner = self
-                .tabs
-                .get(self.active_tab)
-                .and_then(|t| t.connection_id.clone());
+        let Some(driver) = self.tab_session(index).driver.clone() else {
+            let owner = self.tabs.get(index).and_then(|t| t.connection_id.clone());
             self.edit_saved_connection(owner.as_deref());
             cx.notify();
             return;
@@ -100,7 +105,7 @@ impl Workspace {
             return;
         }
 
-        let tab = &mut self.tabs[self.active_tab];
+        let tab = &mut self.tabs[index];
         tab.begin_fetch(paged, append);
         let tab_id = tab.id;
         let connection_id = tab

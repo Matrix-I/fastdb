@@ -12,6 +12,7 @@ const VISIBLE_ROWS: usize = 14;
 pub struct ScriptChooser {
     /// Connection the dialog was opened for
     pub connection_id: String,
+    request_id: u64,
     pub query: String,
     pub caret: usize,
     pub anchor: Option<usize>,
@@ -27,6 +28,7 @@ impl ScriptChooser {
     pub fn new(connection_id: String, scripts: Vec<ScriptFile>) -> Self {
         Self {
             connection_id,
+            request_id: 0,
             query: String::new(),
             caret: usize::MAX,
             anchor: None,
@@ -69,36 +71,57 @@ impl ScriptChooser {
 }
 
 impl Workspace {
-    pub(super) fn open_script_chooser(&mut self, conn_id: &str) {
-        let scripts = self.script_store.list(Some(conn_id));
-        self.script_chooser = Some(ScriptChooser::new(conn_id.to_string(), scripts));
+    pub(super) fn open_script_chooser(&mut self, conn_id: &str, cx: &mut Context<Self>) {
+        self.script_chooser = Some(ScriptChooser::new(conn_id.to_owned(), vec![]));
         self.cursor_visible = true;
+        self.refresh_script_chooser(cx);
+        cx.notify();
     }
-
-    /// Opens a script picked in the chooser and closes it
     fn choose_script(&mut self, script: ScriptFile, cx: &mut Context<Self>) {
         self.script_chooser = None;
         self.open_script_file(&script, cx);
     }
-
     fn choose_new_script(&mut self, cx: &mut Context<Self>) {
-        let Some(chooser) = self.script_chooser.take() else {
-            return;
-        };
-        match self.script_store.create(&chooser.connection_id) {
-            Ok(script) => self.open_script_file(&script, cx),
-            Err(e) => tracing::warn!("{e:#}"),
+        if let Some(chooser) = self.script_chooser.take() {
+            self.create_script(chooser.connection_id, cx);
         }
     }
-
-    fn toggle_all_connections(&mut self) {
+    fn toggle_all_connections(&mut self, cx: &mut Context<Self>) {
+        if let Some(chooser) = self.script_chooser.as_mut() {
+            chooser.all_connections = !chooser.all_connections;
+            chooser.selected = 0;
+        }
+        self.refresh_script_chooser(cx);
+    }
+    fn refresh_script_chooser(&mut self, cx: &mut Context<Self>) {
         let Some(chooser) = self.script_chooser.as_mut() else {
             return;
         };
-        chooser.all_connections = !chooser.all_connections;
-        let filter = (!chooser.all_connections).then_some(chooser.connection_id.as_str());
-        chooser.scripts = self.script_store.list(filter);
-        chooser.selected = 0;
+        self.script_request_id += 1;
+        chooser.request_id = self.script_request_id;
+        let request = chooser.request_id;
+        let connection_id = chooser.connection_id.clone();
+        let all = chooser.all_connections;
+        let store = self.script_store.clone();
+        cx.spawn(async move |this, cx| {
+            let id = connection_id.clone();
+            let scripts = cx
+                .background_executor()
+                .spawn(async move { store.list((!all).then_some(id.as_str())) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(chooser) = this.script_chooser.as_mut().filter(|c| {
+                    c.connection_id == connection_id
+                        && c.all_connections == all
+                        && c.request_id == request
+                }) {
+                    chooser.scripts = scripts;
+                    chooser.selected = 0;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Keys while the chooser is open: arrows move, Enter opens, Escape closes, the rest search
@@ -328,7 +351,7 @@ impl Workspace {
                     .text_size(px(12.0))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_all_connections();
+                        this.toggle_all_connections(cx);
                         cx.notify();
                     }))
                     .child(

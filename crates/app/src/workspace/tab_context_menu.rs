@@ -63,35 +63,36 @@ impl Workspace {
         keep: impl Fn(usize) -> bool,
         cx: &mut Context<Self>,
     ) {
-        if let Some(op) = self.operations.active()
-            && self
-                .tabs
-                .iter()
-                .enumerate()
-                .any(|(i, t)| t.id == op.tab_id && !keep(i))
+        let ids = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !keep(*i))
+            .map(|(_, t)| t.id)
+            .collect::<Vec<_>>();
+        let _ = fallback;
+        self.save_then(ids.clone(), AfterSave::Close(ids), cx);
+    }
+
+    pub(super) fn close_saved_tabs(&mut self, ids: &[u64], cx: &mut Context<Self>) {
+        if self
+            .operations
+            .active()
+            .is_some_and(|op| ids.contains(&op.tab_id))
         {
             self.cancel_running_query(cx);
         }
-        let len = self.tabs.len();
-        let old_active = self.active_tab;
-        let new_active = active_after_close(len, old_active, fallback, &keep);
-        for idx in (0..len).filter(|&i| !keep(i)) {
-            self.save_script_tab(idx);
-        }
-        let mut idx = 0;
-        self.tabs.retain(|_| {
-            let kept = keep(idx);
-            idx += 1;
-            kept
-        });
-        self.active_tab = if self.tabs.is_empty() {
-            0
-        } else {
-            new_active.min(self.tabs.len() - 1)
-        };
-        if self.tabs.is_empty() || !keep(old_active) {
-            self.is_filter_focused = false;
-        }
+        let active_id = self.tabs.get(self.active_tab).map(|t| t.id);
+        let new_index =
+            active_after_close(self.tabs.len(), self.active_tab, self.active_tab, |i| {
+                !ids.contains(&self.tabs[i].id)
+            });
+        self.tabs.retain(|tab| !ids.contains(&tab.id));
+        self.active_tab = active_id
+            .and_then(|id| self.tabs.iter().position(|t| t.id == id))
+            .unwrap_or(new_index);
+        self.is_filter_focused = false;
+        cx.notify();
     }
 
     fn run_tab_menu_action(

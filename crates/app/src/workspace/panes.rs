@@ -86,3 +86,9 @@ impl Panes {
         )
     }
 }
+
+impl Panes {
+    pub(super) fn notify_table(&self, cx: &mut App) {
+        self.table_view.update(cx, |_, cx| cx.notify());
+    }
+}

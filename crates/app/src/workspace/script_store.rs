@@ -1,7 +1,7 @@
 //! SQL scripts saved as `.sql` files, one folder per connection:
 //! `<config_dir>/scripts/<connection id>/Script-<n>.sql`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -19,6 +19,7 @@ pub struct ScriptFile {
 }
 
 /// Reads and writes the script files under one root folder
+#[derive(Clone)]
 pub struct ScriptStore {
     root: PathBuf,
 }
@@ -119,15 +120,27 @@ impl ScriptStore {
         let dir = self.dir(connection_id);
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("Cannot create {}", dir.display()))?;
-        let next = std::fs::read_dir(&dir)?
+        let mut next = std::fs::read_dir(&dir)?
             .flatten()
             .filter_map(|e| e.file_name().to_str().and_then(Self::number))
             .max()
             .unwrap_or(0)
             + 1;
-        let name = format!("{PREFIX}{next}");
-        let path = dir.join(format!("{name}.sql"));
-        std::fs::write(&path, "").with_context(|| format!("Cannot create {}", path.display()))?;
+        let (name, path) = loop {
+            let name = format!("{PREFIX}{next}");
+            let path = dir.join(format!("{name}.sql"));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => break (name, path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => next += 1,
+                Err(error) => {
+                    return Err(error).with_context(|| format!("Cannot create {}", path.display()));
+                }
+            }
+        };
         Ok(ScriptFile {
             path,
             connection_id: connection_id.to_string(),
@@ -140,10 +153,6 @@ impl ScriptStore {
     pub fn read(&self, script: &ScriptFile) -> Result<String> {
         std::fs::read_to_string(&script.path)
             .with_context(|| format!("Cannot read {}", script.path.display()))
-    }
-
-    pub fn write(&self, path: &Path, text: &str) -> Result<()> {
-        std::fs::write(path, text).with_context(|| format!("Cannot save {}", path.display()))
     }
 }
 
@@ -197,10 +206,10 @@ mod tests {
         let root = temp_root("list");
         let store = ScriptStore::new(root.clone());
         let old = store.create("pg").unwrap();
-        store.write(&old.path, "\n  SELECT 1;\nSELECT 2;").unwrap();
+        super::super::script_saves::atomic_write(&old.path, "\n  SELECT 1;\nSELECT 2;").unwrap();
         touch(&old.path, 60);
         let new = store.create("pg").unwrap();
-        store.write(&new.path, "drop index x;").unwrap();
+        super::super::script_saves::atomic_write(&new.path, "drop index x;").unwrap();
         store.create("mysql").unwrap();
 
         let pg = store.list(Some("pg"));
@@ -232,7 +241,7 @@ mod tests {
         let root = temp_root("filter");
         let store = ScriptStore::new(root.clone());
         let a = store.create("pg").unwrap();
-        store.write(&a.path, "explain analyze select 1").unwrap();
+        super::super::script_saves::atomic_write(&a.path, "explain analyze select 1").unwrap();
         touch(&a.path, 60);
         store.create("pg").unwrap();
         let all = store.list(Some("pg"));

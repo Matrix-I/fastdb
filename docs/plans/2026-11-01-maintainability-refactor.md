@@ -101,12 +101,12 @@ Acceptance: `ui-grid` no longer generates SQL or selects a provider dialect. Que
 
 Depends on Phase 3 script/result ownership.
 
-- [ ] Expose editor content revisions/change notifications. Schedule a separate debounce after text changes; cursor movement, selection and blinking do not schedule saves.
-- [ ] Capture an immutable script path/text/revision snapshot and write through a background executor. Serialize writes per path so an older slow write cannot overwrite newer text.
-- [ ] Use atomic temporary-file replacement for script writes. Update the saved revision only after the matching snapshot succeeds; preserve dirty state if later edits exist.
-- [ ] Preserve save-before-run, close and quit semantics. Await the required save snapshot asynchronously; keep a tab open on close-save failure, and do not exit before required saves finish or the user explicitly discards them. Report errors on the owning tab.
-- [ ] Move directory listing/script reads and connection-config writes off UI callbacks where they may block. Keep storage interfaces injectable for deterministic ordering/error tests.
-- [ ] Restrict the cursor timer to the focused input/editor region. Notify only affected panes for query progress, selection and cursor updates; remove periodic workspace-wide notifications caused by blinking.
+- [x] Expose editor content revisions/change notifications. Schedule a separate debounce after text changes; cursor movement, selection and blinking do not schedule saves.
+- [x] Capture an immutable script path/text/revision snapshot and write through a background executor. Serialize writes per path so an older slow write cannot overwrite newer text.
+- [x] Use atomic temporary-file replacement for script writes. Update the saved revision only after the matching snapshot succeeds; preserve dirty state if later edits exist.
+- [x] Preserve save-before-run, close and quit semantics. Await the required save snapshot asynchronously; keep a tab open on close-save failure, and do not exit before required saves finish or the user explicitly discards them. Report errors on the owning tab.
+- [x] Move directory listing/script reads and connection-config writes off UI callbacks where they may block. Keep storage interfaces injectable for deterministic ordering/error tests.
+- [x] Restrict the cursor timer to the focused input/editor region. Notify only affected panes for query progress, selection and cursor updates; remove periodic workspace-wide notifications caused by blinking.
 
 Regression cases: rapid edits coalesce; edit during an in-flight write; slow writes complete out of order; write failure and retry; close/quit during debounce; no writes on cursor-only changes. Use controlled completion/fake storage rather than timing-sensitive sleeps.
 
