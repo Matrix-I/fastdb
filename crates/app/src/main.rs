@@ -9,7 +9,21 @@ mod assets;
 pub mod updater;
 use workspace::Workspace;
 use assets::FastDbAssetSource;
-use ui_core::actions::{CheckForUpdates, Quit};
+use ui_core::actions::{About, CheckForUpdates, Quit};
+
+fn about(_: &About, cx: &mut App) {
+    for handle in cx.windows() {
+        if let Some(handle) = handle.downcast::<Workspace>() {
+            let _ = handle.update(cx, |workspace, window, cx| {
+                window.activate_window();
+                window.focus(&workspace.focus_handle);
+                workspace.show_about_dialog = true;
+                cx.notify();
+            });
+            break;
+        }
+    }
+}
 
 fn quit(_: &Quit, cx: &mut App) {
     info!("Closing FastDB via Quit action");
@@ -49,6 +63,7 @@ fn main() -> Result<()> {
     app.run(|cx: &mut App| {
         cx.activate(true);
         cx.on_action(quit);
+        cx.on_action(about);
         cx.on_action(check_for_updates);
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
@@ -57,6 +72,8 @@ fn main() -> Result<()> {
         cx.set_menus(vec![Menu {
             name: "FastDB".into(),
             items: vec![
+                MenuItem::action("About FastDB", About),
+                MenuItem::separator(),
                 MenuItem::action("Check for Updates...", CheckForUpdates),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),

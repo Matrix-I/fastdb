@@ -4,6 +4,7 @@ actions!(
     fastdb,
     [
         Quit,
+        About,
         RunQuery,
         CancelQuery,
         SaveChanges,

@@ -8,6 +8,7 @@ use ui_core::theme::Theme;
 use ui_editor::SqlEditorView;
 use ui_grid::VirtualDataGrid;
 
+mod about_dialog;
 mod column_menu;
 mod connection_dialog;
 mod connections;
@@ -198,6 +199,7 @@ pub struct Workspace {
     pub update_state: UpdateState,
     /// Active Software Update modal dialog, if open
     pub update_dialog: Option<UpdateDialog>,
+    pub show_about_dialog: bool,
     /// Discovered update info waiting to be applied/viewed
     pub pending_update: Option<ReleaseInfo>,
 }
@@ -329,6 +331,7 @@ impl Workspace {
             http_client: reqwest::Client::new(),
             update_state: UpdateState::load(),
             update_dialog: None,
+            show_about_dialog: false,
             pending_update: None,
         };
 
@@ -470,6 +473,9 @@ impl Render for Workspace {
         }
         if self.update_dialog.is_some() {
             root = root.child(self.render_update_dialog(cx));
+        }
+        if self.show_about_dialog {
+            root = root.child(self.render_about_dialog(cx));
         }
 
         root

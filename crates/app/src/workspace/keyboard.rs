@@ -15,6 +15,17 @@ impl Workspace {
             return;
         }
 
+        if self.show_about_dialog {
+            if event.keystroke.key == "escape"
+                || ((event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                    && event.keystroke.key.eq_ignore_ascii_case("w"))
+            {
+                self.show_about_dialog = false;
+                cx.notify();
+            }
+            return;
+        }
+
         // Intercept Cmd+W (macOS) / Ctrl+W (Linux/Windows) to close active tab
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("w")
