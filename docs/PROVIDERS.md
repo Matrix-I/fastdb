@@ -120,3 +120,17 @@ architecture requirements and the Db2 image's setup workaround.
 Table browsing and row edits share provider-aware identifier quoting and pagination in `db-wire::sql`. SQL Server identifiers use brackets and string literals preserve Unicode. Default-only row inserts are rejected for Oracle and Db2 until their provider-specific behavior has live coverage; enter at least one column instead. Generated row edits still run through the driver's exactly-one-row transactional contract.
 
 DDL in Properties is a partial metadata preview, not an exact reconstruction. Incomplete native column types make the preview unavailable; index and constraint names without definitions appear only as comments. SQL planning has deterministic unit coverage for all presets. Unit coverage does not replace the configured live provider and TLS tests described above.
+
+## Visual query plans
+
+PostgreSQL script tabs offer Explain (estimated JSON plan) and Analyze (executes
+the statement with ANALYZE and BUFFERS). The original statement is not paged or
+wrapped in a subquery. Analyze can change data and run functions with side
+effects, just like executing the statement normally. Results use the standard
+streaming/cancellation path. The tree displays inclusive estimated costs relative
+to the root, row estimates, actual per-loop times/rows, loops, conditions and
+buffer counts; raw JSON remains available for all other fields. Other providers
+currently expose plans only through manually entered provider-specific SQL.
+
+PostgreSQL integration tests also accept `FASTDB_TEST_PG_PASSWORD` when the local
+test server requires password authentication. Leave it unset for trust/peer setups.
