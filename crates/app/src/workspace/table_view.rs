@@ -2,7 +2,7 @@ use super::*;
 
 impl Workspace {
     /// Center area: tab strip and the active table tab (data, properties, diagram)
-    pub(super) fn render_table_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_table_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let active_tab_idx = self.active_tab;
@@ -467,7 +467,7 @@ impl Workspace {
 
     /// Status bar under a result: edit toolbar, fetch size, fetch next, row count and the
     /// summary of the last fetch, laid out like DBeaver's result panel status bar
-    pub(super) fn render_result_footer(&mut self, tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_result_footer(&mut self, tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[tab_idx];

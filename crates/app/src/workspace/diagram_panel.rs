@@ -2,7 +2,7 @@ use super::*;
 
 impl Workspace {
     /// Diagram sub-tab: entity box listing the table columns
-    pub(super) fn render_diagram_panel(&self, active_tab_idx: usize) -> impl IntoElement {
+    pub(super) fn render_diagram_panel(&self, active_tab_idx: usize) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];

@@ -8,7 +8,7 @@ use super::*;
 
 impl Workspace {
     /// Script tab: Execute toolbar, editor on top, error banner, result grid and its footer
-    pub(super) fn render_script_view(&mut self, tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_script_view(&mut self, tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let is_running_query = self.is_running_query;
@@ -177,7 +177,7 @@ impl Workspace {
     }
 
     /// Red strip with the message of the last failed run
-    pub(super) fn render_error_banner(&self, message: &str) -> impl IntoElement {
+    pub(super) fn render_error_banner(&self, message: &str) -> impl IntoElement + use<> {
         div()
             .flex()
             .flex_none()

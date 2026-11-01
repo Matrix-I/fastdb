@@ -5,7 +5,7 @@ pub(super) const TOP_BAR_HEIGHT: f32 = 38.0;
 
 impl Workspace {
     /// Window title bar with connection actions and toolbar
-    pub(super) fn render_top_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_top_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let active_tab_idx = self.active_tab;

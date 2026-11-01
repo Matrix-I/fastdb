@@ -2,7 +2,7 @@ use super::*;
 
 impl Workspace {
     /// DBeaver-style database navigator tree in the left sidebar
-    pub(super) fn render_navigator(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_navigator(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         div()

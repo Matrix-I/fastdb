@@ -43,7 +43,7 @@ pub(super) fn dragged_panel_width(splitter: PanelSplitter, drag: &PanelDrag, del
 impl Workspace {
     /// Thin drag handle laid over a panel's inner edge (right edge of the navigator,
     /// left edge of the value panel); the parent must be `relative()`
-    pub(super) fn render_panel_splitter(&self, splitter: PanelSplitter, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_panel_splitter(&self, splitter: PanelSplitter, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = &self.theme;
         let is_active = self.resizing_panel.map(|d| d.splitter) == Some(splitter);
         let bg = if is_active {

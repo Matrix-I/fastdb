@@ -113,7 +113,7 @@ impl Workspace {
     }
 
     /// DBeaver-style "Value" panel showing the focused grid cell in a chosen format
-    pub(super) fn render_value_panel(&mut self, active_tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_value_panel(&mut self, active_tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let cell = self.focused_cell_value(active_tab_idx);
         let detected = cell
@@ -319,7 +319,7 @@ impl Workspace {
         panel
     }
 
-    fn render_format_menu(&self, current: ValueFormat, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_format_menu(&self, current: ValueFormat, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let state = &self.value_panel;
         let mut menu = div()
             .id("value-format-menu")

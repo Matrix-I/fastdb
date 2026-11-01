@@ -151,7 +151,7 @@ impl Workspace {
     }
 
     /// The list under the filter input, if open
-    pub(super) fn render_filter_suggest(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    pub(super) fn render_filter_suggest(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let suggest = self.filter_suggest.as_ref().filter(|_| self.is_filter_focused)?;
         let theme = &self.theme;
         let first = suggest.selected.saturating_sub(VISIBLE_ITEMS - 1);

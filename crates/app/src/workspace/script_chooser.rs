@@ -140,7 +140,7 @@ impl Workspace {
         })
     }
 
-    pub(super) fn render_script_chooser(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_script_chooser(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let pick = self.chooser_caret_pick(cx);

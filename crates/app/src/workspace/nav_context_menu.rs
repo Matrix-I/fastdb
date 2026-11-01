@@ -23,7 +23,7 @@ impl Workspace {
         self.nav_context_menu = Some(NavContextMenu { conn_id: conn_id.to_string(), position });
     }
 
-    pub(super) fn render_nav_context_menu(&mut self, menu: NavContextMenu, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_nav_context_menu(&mut self, menu: NavContextMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let is_connected = self.is_connection_live(&menu.conn_id);
 

@@ -264,7 +264,7 @@ impl SqlEditorView {
         true
     }
 
-    pub fn render_editor(&mut self, focused: bool, caret_visible: bool, on_pick: EditorPick) -> impl IntoElement {
+    pub fn render_editor(&mut self, focused: bool, caret_visible: bool, on_pick: EditorPick) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
         if std::mem::take(&mut self.caret_moved) {
@@ -308,7 +308,7 @@ impl SqlEditorView {
         root
     }
 
-    fn render_completion_popup(&self, top: f32, left: f32, theme: &Theme) -> impl IntoElement {
+    fn render_completion_popup(&self, top: f32, left: f32, theme: &Theme) -> impl IntoElement + use<> {
         let mut popup = div()
             .occlude()
             .w(px(280.0))

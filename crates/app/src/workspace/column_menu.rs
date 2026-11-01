@@ -51,7 +51,7 @@ impl Workspace {
         self.run_active_query(cx);
     }
 
-    pub(super) fn render_column_menu(&mut self, menu: ColumnMenu, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_column_menu(&mut self, menu: ColumnMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let tab = self.tabs.get(menu.tab_idx);
         let current = tab.and_then(|t| t.grid.ordering.clone());

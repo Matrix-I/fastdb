@@ -88,7 +88,7 @@ impl Workspace {
     }
 
     /// Modal dialog for creating, editing and testing a database connection
-    pub(super) fn render_connection_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_connection_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let is_sqlite = self.selected_driver_kind == DbDriverKind::Sqlite;

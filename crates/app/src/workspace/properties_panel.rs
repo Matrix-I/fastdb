@@ -2,7 +2,7 @@ use super::*;
 
 impl Workspace {
     /// Properties sub-tab: table header form plus columns, constraints, indexes and DDL
-    pub(super) fn render_properties_panel(&mut self, active_tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_properties_panel(&mut self, active_tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];

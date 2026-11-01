@@ -172,7 +172,7 @@ flowchart TD
 
 ### Prerequisites
 
-- **Rust** stable, with `cargo` (see `rust-toolchain.toml`).
+- **Rust** stable, with `cargo` (see `rust-toolchain.toml`). All workspace crates use Rust edition **2024**.
 - **macOS** with Xcode command line tools.
 - **Linux** system libraries (Debian/Ubuntu):
   ```bash

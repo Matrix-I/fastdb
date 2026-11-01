@@ -565,7 +565,7 @@ impl VirtualDataGrid {
         self.scroll_left = (self.scroll_left + delta_x).max(0.0);
     }
 
-    pub fn render_grid(&mut self) -> impl IntoElement {
+    pub fn render_grid(&mut self) -> impl IntoElement + use<> {
         self.render_grid_interactive(None, None, None, None, |_col_idx, _width| {
             div()
                 .w(px(8.0))
@@ -582,7 +582,7 @@ impl VirtualDataGrid {
         on_header_menu: Option<HeaderMenuHandler>,
         cell_editor: Option<(u64, usize, CellEditorRenderer)>,
         mut make_resizer: F,
-    ) -> impl IntoElement
+    ) -> impl IntoElement + use<F>
     where
         F: FnMut(usize, f32) -> AnyElement,
     {

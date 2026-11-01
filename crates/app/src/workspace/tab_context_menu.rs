@@ -77,7 +77,7 @@ impl Workspace {
         }
     }
 
-    pub(super) fn render_tab_context_menu(&mut self, menu: TabContextMenu, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_tab_context_menu(&mut self, menu: TabContextMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let target = menu.tab_idx;
         let len = self.tabs.len();

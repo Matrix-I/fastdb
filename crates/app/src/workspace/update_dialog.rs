@@ -240,7 +240,7 @@ impl Workspace {
     }
 
     /// Renders the complete Software Update modal dialog
-    pub(super) fn render_update_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_update_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let auto_check = self.update_state.auto_check_enabled;
@@ -871,7 +871,7 @@ impl Workspace {
                         .child("Applying update to application bundle and verifying signature..."),
                 )
                 .into_any_element(),
-            DownloadUiState::Complete { ref new_version } => div()
+            DownloadUiState::Complete { new_version } => div()
                 .flex()
                 .flex_col()
                 .gap_1p5()

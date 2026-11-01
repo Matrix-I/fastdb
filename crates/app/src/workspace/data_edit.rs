@@ -240,7 +240,7 @@ impl Workspace {
     }
 
     /// Save / Cancel and the row editing buttons at the start of the result footer
-    pub(super) fn render_edit_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_edit_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = &self.theme;
         let can_edit = self.can_edit_active_rows();
         let has_selection = self.tabs.get(self.active_tab).is_some_and(|t| t.grid.selection.focus.is_some());

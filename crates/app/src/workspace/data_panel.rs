@@ -2,7 +2,7 @@ use super::*;
 
 impl Workspace {
     /// Data sub-tab: result grid or text view, with the optional record side panel
-    pub(super) fn render_data_panel(&mut self, active_tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_data_panel(&mut self, active_tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
