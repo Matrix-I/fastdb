@@ -1,19 +1,8 @@
-use super::*;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SavedConnection {
-    pub id: String,
-    pub name: String,
-    pub driver: String,
-    pub host: String,
-    pub port: u16,
-    pub database: String,
-    pub user: String,
-    pub password: Option<String>,
-    pub use_unix_socket: bool,
-    pub tls_enabled: bool,
-    pub tls_ca_cert: Option<String>,
+use super::connection_config::{ConnectionRepository, write_connections_config};
+fn connections_config_path() -> std::path::PathBuf {
+    platform_hal::paths::config_dir().join("connections.json")
 }
+use super::*;
 
 /// Navigator metadata of one connection
 pub(super) struct SchemaMetadata {
@@ -21,24 +10,6 @@ pub(super) struct SchemaMetadata {
     columns: Vec<(String, String, Vec<ColumnMeta>)>,
     constraints: Vec<(String, String, String, String)>,
     indexes: Vec<(String, String, String)>,
-}
-
-/// An open connection parked in the background while another one is active.
-/// Holds everything the navigator needs so switching back needs no reconnect.
-pub struct LiveConnection {
-    driver: Arc<dyn DatabaseDriver>,
-    tables: Vec<TableSummary>,
-    table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
-    table_constraints: HashMap<(String, String), Vec<(String, String)>>,
-    table_indexes: HashMap<(String, String), Vec<String>>,
-    nav_databases_expanded: bool,
-    nav_database_expanded: bool,
-    nav_schemas_expanded: bool,
-    nav_schema_expanded: HashSet<String>,
-    nav_tables_expanded: HashSet<String>,
-    nav_table_expanded: HashSet<String>,
-    nav_subfolder_expanded: HashSet<String>,
-    selected_table_name: Option<String>,
 }
 
 /// Loads tables, then columns, constraints and indexes in batch; only a failed
@@ -56,213 +27,13 @@ async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMeta
     })
 }
 
-/// Where builds before the config dir kept the connections, relative to the working directory
-const LEGACY_CONFIG_FILE: &str = ".fastdb_config.json";
-
-/// The saved connections file, in the user's config dir so every build and launch shares it
-fn connections_config_path() -> std::path::PathBuf {
-    platform_hal::paths::config_dir().join("connections.json")
-}
-
-fn write_connections_config(content: &str) -> std::io::Result<()> {
-    let path = connections_config_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    // Written beside the file and renamed over it, so a crash mid-write never loses the connections
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, &path)
-}
-
 impl Workspace {
-    pub fn load_saved_connections_from_str(
-        content: &str,
-    ) -> (Vec<SavedConnection>, Option<String>) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
-            return (Vec::new(), None);
-        };
-
-        let mut connections = Vec::new();
-
-        if let Some(arr) = v["connections"].as_array() {
-            for (idx, item) in arr.iter().enumerate() {
-                let id = item["id"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("conn_{}", idx + 1));
-                let d = item["database"].as_str().unwrap_or("").to_string();
-                let drv_str = item["driver"].as_str().unwrap_or("Postgres").to_string();
-                let default_name = if drv_str == "Sqlite" {
-                    std::path::Path::new(&d)
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or(&d)
-                        .to_string()
-                } else if !d.is_empty() {
-                    format!("{}-local", d)
-                } else {
-                    format!("{}-conn", drv_str)
-                };
-                let name = item["name"]
-                    .as_str()
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or(&default_name)
-                    .to_string();
-                let h = item["host"].as_str().unwrap_or("localhost").to_string();
-                let p = if let Some(n) = item["port"].as_u64() {
-                    n as u16
-                } else if let Some(s) = item["port"].as_str() {
-                    s.parse::<u16>().unwrap_or_else(|_| {
-                        DbDriverKind::from_name(&drv_str)
-                            .unwrap_or(DbDriverKind::Postgres)
-                            .default_port()
-                    })
-                } else {
-                    DbDriverKind::from_name(&drv_str)
-                        .unwrap_or(DbDriverKind::Postgres)
-                        .default_port()
-                };
-                let u = item["user"].as_str().unwrap_or("postgres").to_string();
-                let pw = item["password"].as_str().map(|s| s.to_string());
-                let sock = item["use_unix_socket"].as_bool().unwrap_or(false);
-
-                if !d.is_empty() || drv_str == "Sqlite" {
-                    connections.push(SavedConnection {
-                        id,
-                        name,
-                        driver: drv_str,
-                        host: h,
-                        port: p,
-                        database: d,
-                        user: u,
-                        password: pw,
-                        use_unix_socket: sock,
-                        tls_enabled: item["tls_enabled"].as_bool().unwrap_or(false),
-                        tls_ca_cert: item["tls_ca_cert"]
-                            .as_str()
-                            .filter(|s| !s.trim().is_empty())
-                            .map(str::to_owned),
-                    });
-                }
-            }
-        } else {
-            // Legacy single connection format migration
-            let d = v["database"].as_str().unwrap_or("").to_string();
-            let has = v["has_saved_connection"].as_bool().unwrap_or(!d.is_empty());
-            if has && !d.is_empty() {
-                let drv_str = v["driver"].as_str().unwrap_or("Postgres").to_string();
-                let h = v["host"].as_str().unwrap_or("localhost").to_string();
-                let p = if let Some(n) = v["port"].as_u64() {
-                    n as u16
-                } else if let Some(s) = v["port"].as_str() {
-                    s.parse::<u16>().unwrap_or_else(|_| {
-                        DbDriverKind::from_name(&drv_str)
-                            .unwrap_or(DbDriverKind::Postgres)
-                            .default_port()
-                    })
-                } else {
-                    DbDriverKind::from_name(&drv_str)
-                        .unwrap_or(DbDriverKind::Postgres)
-                        .default_port()
-                };
-                let u = v["user"].as_str().unwrap_or("postgres").to_string();
-                let pw = v["password"].as_str().map(|s| s.to_string());
-                let sock = v["use_unix_socket"].as_bool().unwrap_or(false);
-                let name = if drv_str == "Sqlite" {
-                    std::path::Path::new(&d)
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or(&d)
-                        .to_string()
-                } else {
-                    format!("{}-local", d)
-                };
-
-                connections.push(SavedConnection {
-                    id: "conn_1".to_string(),
-                    name,
-                    driver: drv_str,
-                    host: h,
-                    port: p,
-                    database: d,
-                    user: u,
-                    password: pw,
-                    use_unix_socket: sock,
-                    tls_enabled: false,
-                    tls_ca_cert: None,
-                });
-            }
-        }
-
-        let active_id = v["active_connection_id"]
-            .as_str()
-            .map(|s| s.to_string())
-            .or_else(|| connections.first().map(|c| c.id.clone()));
-
-        (connections, active_id)
-    }
-
-    /// Reads the saved connections from the user's config dir. A config left by older builds
-    /// in the working directory is picked up once and moved there.
-    pub fn load_saved_connections() -> (Vec<SavedConnection>, Option<String>) {
-        let path = connections_config_path();
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            return Self::load_saved_connections_from_str(&content);
-        }
-        let Ok(content) = std::fs::read_to_string(LEGACY_CONFIG_FILE) else {
-            return (Vec::new(), None);
-        };
-        let loaded = Self::load_saved_connections_from_str(&content);
-        if let Err(e) = write_connections_config(&content) {
-            tracing::warn!(
-                "Failed to move {} to {}: {}",
-                LEGACY_CONFIG_FILE,
-                path.display(),
-                e
-            );
-        }
-        loaded
-    }
-
-    pub fn serialize_connections_config(
-        connections: &[SavedConnection],
-        active_id: Option<&str>,
-    ) -> String {
-        let connections_json: Vec<serde_json::Value> = connections
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "id": c.id,
-                    "name": c.name,
-                    "driver": c.driver,
-                    "host": c.host,
-                    "port": c.port.to_string(),
-                    "database": c.database,
-                    "user": c.user,
-                    "password": c.password.as_deref().filter(|p| !p.is_empty()),
-                    "use_unix_socket": c.use_unix_socket,
-                    "tls_enabled": c.tls_enabled,
-                    "tls_ca_cert": c.tls_ca_cert,
-                })
-            })
-            .collect();
-
-        let save_data = serde_json::json!({
-            "has_saved_connection": !connections.is_empty(),
-            "active_connection_id": active_id,
-            "connections": connections_json,
-        });
-
-        serde_json::to_string_pretty(&save_data).unwrap_or_else(|_| save_data.to_string())
-    }
-
     pub fn save_config(&self) {
-        let content = Self::serialize_connections_config(
-            &self.saved_connections,
-            self.active_connection_id.as_deref(),
+        let content = ConnectionRepository::serialize_connections_config(
+            &self.connections.saved_connections,
+            self.connections.active_connection_id.as_deref(),
         );
-        if let Err(e) = write_connections_config(&content) {
+        if let Err(e) = write_connections_config(&connections_config_path(), &content) {
             tracing::error!(
                 "Failed to save connections to {}: {}",
                 connections_config_path().display(),
@@ -272,52 +43,35 @@ impl Workspace {
     }
 
     pub fn active_saved_connection(&self) -> Option<&SavedConnection> {
-        if let Some(ref id) = self.active_connection_id {
-            self.saved_connections.iter().find(|c| &c.id == id)
+        if let Some(ref id) = self.connections.active_connection_id {
+            self.connections
+                .saved_connections
+                .iter()
+                .find(|c| &c.id == id)
         } else {
-            self.saved_connections.first()
-        }
-    }
-
-    pub fn build_current_config(&self) -> ConnectionConfig {
-        let port: u16 = self
-            .form_port
-            .parse()
-            .unwrap_or(self.selected_driver_kind.default_port());
-
-        ConnectionConfig {
-            driver: self.selected_driver_kind,
-            host: self.form_host.clone(),
-            port,
-            database: self.form_database.clone(),
-            user: self.form_user.clone(),
-            password: if self.form_password.is_empty() {
-                None
-            } else {
-                Some(self.form_password.clone())
-            },
-            use_unix_socket: self.form_use_unix_socket,
-            tls_enabled: self.selected_driver_kind != DbDriverKind::Sqlite && self.form_tls_enabled,
-            tls_ca_cert: if self.form_tls_ca_cert.trim().is_empty() {
-                None
-            } else {
-                Some(self.form_tls_ca_cert.trim().to_string())
-            },
-            ssh_tunnel: None,
-            connect_timeout: std::time::Duration::from_millis(10000),
+            self.connections.saved_connections.first()
         }
     }
 
     pub fn test_connection(&mut self, cx: &mut Context<Self>) {
-        if self.is_connecting {
+        if self.form.is_connecting {
             return;
         }
 
-        self.is_connecting = true;
-        self.test_result = None;
+        self.form.is_connecting = true;
+        self.form.test_result = None;
         cx.notify();
 
-        let config = self.build_current_config();
+        let config = match self.form.build_config() {
+            Ok(config) => config,
+            Err(error) => {
+                self.form.is_connecting = false;
+                self.form.test_result = Some(Err(error));
+                return;
+            }
+        };
+        let request = self.form.begin_request();
+        let snapshot = self.form.snapshot();
 
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -354,13 +108,20 @@ impl Workspace {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.is_connecting = false;
+                if !this.form.accepts(request, &snapshot) {
+                    if this.form.request_id == request {
+                        this.form.is_connecting = false;
+                        cx.notify();
+                    }
+                    return;
+                }
+                this.form.is_connecting = false;
                 match result {
                     Ok(msg) => {
-                        this.test_result = Some(Ok(msg));
+                        this.form.test_result = Some(Ok(msg));
                     }
                     Err(err) => {
-                        this.test_result = Some(Err(err.clone()));
+                        this.form.test_result = Some(Err(err.clone()));
                     }
                 }
                 cx.notify();
@@ -370,15 +131,25 @@ impl Workspace {
     }
 
     pub fn connect_to_database(&mut self, cx: &mut Context<Self>) {
-        if self.is_connecting {
+        if self.form.is_connecting {
             return;
         }
 
-        self.is_connecting = true;
-        self.test_result = None;
+        self.form.is_connecting = true;
+        self.form.test_result = None;
         cx.notify();
 
-        let config = self.build_current_config();
+        let config = match self.form.build_config() {
+            Ok(config) => config,
+            Err(error) => {
+                self.form.is_connecting = false;
+                self.form.test_result = Some(Err(error));
+                return;
+            }
+        };
+        let request = self.form.begin_request();
+        let snapshot = self.form.snapshot();
+        let requested_id = self.form.editing_connection_id.clone();
 
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -417,10 +188,17 @@ impl Workspace {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.is_connecting = false;
+                if !this.form.accepts(request, &snapshot) {
+                    if this.form.request_id == request {
+                        this.form.is_connecting = false;
+                        cx.notify();
+                    }
+                    return;
+                }
+                this.form.is_connecting = false;
                 match result {
                     Ok((driver, metadata, config)) => {
-                        let conn_id = this.editing_connection_id.clone().unwrap_or_else(|| {
+                        let conn_id = requested_id.unwrap_or_else(|| {
                             format!(
                                 "conn_{}",
                                 std::time::SystemTime::now()
@@ -430,21 +208,22 @@ impl Workspace {
                             )
                         });
 
-                        // Keep the previously active connection open in the background
-                        if this.active_connection_id.as_deref() != Some(conn_id.as_str()) {
-                            this.park_active_connection();
-                        }
-                        // A reconnect replaces any parked session of the same connection
-                        this.live_connections.remove(&conn_id);
-
+                        this.connections.active_connection_id = Some(conn_id.clone());
+                        this.connections.sessions.insert(
+                            conn_id.clone(),
+                            ConnectionSession {
+                                kind: config.driver,
+                                driver: Some(driver),
+                                is_connected: true,
+                                ..ConnectionSession::default()
+                            },
+                        );
                         this.apply_schema_metadata(metadata);
-                        this.driver = Some(driver);
-                        this.is_connected = true;
-                        this.show_connection_modal = false;
-                        this.test_result = None;
+                        this.form.show_connection_modal = false;
+                        this.form.test_result = None;
 
-                        let conn_name = if !this.form_name.trim().is_empty() {
-                            this.form_name.trim().to_string()
+                        let conn_name = if !this.form.form_name.trim().is_empty() {
+                            this.form.form_name.trim().to_string()
                         } else {
                             match config.driver {
                                 DbDriverKind::Sqlite => std::path::Path::new(&config.database)
@@ -476,44 +255,56 @@ impl Workspace {
                             tls_ca_cert: config.tls_ca_cert.clone(),
                         };
 
-                        if let Some(pos) =
-                            this.saved_connections.iter().position(|c| c.id == conn_id)
+                        if let Some(pos) = this
+                            .connections
+                            .saved_connections
+                            .iter()
+                            .position(|c| c.id == conn_id)
                         {
-                            this.saved_connections[pos] = saved.clone();
+                            this.connections.saved_connections[pos] = saved.clone();
                         } else {
-                            this.saved_connections.push(saved.clone());
+                            this.connections.saved_connections.push(saved.clone());
                         }
-                        this.active_connection_id = Some(conn_id.clone());
-                        this.editing_connection_id = Some(conn_id);
+                        this.connections.active_connection_id = Some(conn_id.clone());
+                        this.form.editing_connection_id = Some(conn_id);
                         this.save_config();
 
-                        this.nav_connection_expanded = true;
-                        this.nav_databases_expanded = true;
-                        this.nav_database_expanded = true;
-                        this.nav_schemas_expanded = true;
-                        this.nav_table_expanded.clear();
-                        this.nav_subfolder_expanded.clear();
-                        this.selected_table_name = None;
+                        this.connections.navigator_mut().nav_connection_expanded = true;
+                        this.connections.navigator_mut().nav_databases_expanded = true;
+                        this.connections.navigator_mut().nav_database_expanded = true;
+                        this.connections.navigator_mut().nav_schemas_expanded = true;
+                        this.connections.navigator_mut().nav_table_expanded.clear();
+                        this.connections
+                            .navigator_mut()
+                            .nav_subfolder_expanded
+                            .clear();
+                        this.connections.navigator_mut().selected_table_name = None;
 
-                        for t in &this.tables {
-                            this.nav_schema_expanded.insert(t.schema.clone());
-                            this.nav_tables_expanded.insert(t.schema.clone());
+                        for t in this.connections.active().tables.clone() {
+                            this.connections
+                                .navigator_mut()
+                                .nav_schema_expanded
+                                .insert(t.schema.clone());
+                            this.connections
+                                .navigator_mut()
+                                .nav_tables_expanded
+                                .insert(t.schema.clone());
                         }
 
+                        let cache = this.connections.active().schema_cache.clone();
                         for tab in &mut this.tabs {
-                            tab.editor.schema_cache = Some(this.schema_cache.clone());
-                        }
-
-                        if !this.tabs.is_empty() {
-                            let tab = &mut this.tabs[this.active_tab];
-                            tab.grid = VirtualDataGrid::new(None, this.theme.clone());
+                            if tab.connection_id == this.connections.active_connection_id {
+                                tab.editor.schema_cache = Some(cache.clone());
+                            }
                         }
                     }
                     Err(e) => {
-                        this.test_result = Some(Err(e.clone()));
+                        this.form.test_result = Some(Err(e.clone()));
                         // Connected from the navigator: open the saved connection so the error is
                         // visible and a missing password can be filled in
-                        if !this.show_connection_modal && this.editing_connection_id.is_some() {
+                        if !this.form.show_connection_modal
+                            && this.form.editing_connection_id.is_some()
+                        {
                             this.show_connection_error_dialog();
                         }
                     }
@@ -526,153 +317,54 @@ impl Workspace {
 
     /// Shows the connection dialog with the already loaded form and the failure banner
     fn show_connection_error_dialog(&mut self) {
-        self.active_field = Some(if self.form_password.is_empty() {
+        self.form.active_field = Some(if self.form.form_password.is_empty() {
             FormField::Password
         } else {
             FormField::Database
         });
-        self.field_cursor = usize::MAX;
-        self.field_anchor = None;
+        self.form.field_cursor = usize::MAX;
+        self.form.field_anchor = None;
         self.cursor_visible = true;
-        self.show_password = false;
-        self.form_history.clear();
-        self.show_connection_modal = true;
+        self.form.show_password = false;
+        self.form.form_history.clear();
+        self.form.show_connection_modal = true;
     }
 
     /// True when the connection is open, whether active or parked in the background
     pub fn is_connection_live(&self, conn_id: &str) -> bool {
-        (self.is_connected && self.active_connection_id.as_deref() == Some(conn_id))
-            || self.live_connections.contains_key(conn_id)
+        self.connections
+            .sessions
+            .get(conn_id)
+            .is_some_and(|s| s.is_connected)
     }
 
-    /// Moves the active open connection into `live_connections`, leaving the
-    /// workspace disconnected but the connection itself open
-    fn park_active_connection(&mut self) {
-        if !self.is_connected {
-            return;
-        }
-        let (Some(id), Some(driver)) = (self.active_connection_id.clone(), self.driver.take())
-        else {
-            return;
-        };
-        let live = LiveConnection {
-            driver,
-            tables: std::mem::take(&mut self.tables),
-            table_columns: std::mem::take(&mut self.table_columns),
-            table_constraints: std::mem::take(&mut self.table_constraints),
-            table_indexes: std::mem::take(&mut self.table_indexes),
-            nav_databases_expanded: self.nav_databases_expanded,
-            nav_database_expanded: self.nav_database_expanded,
-            nav_schemas_expanded: self.nav_schemas_expanded,
-            nav_schema_expanded: std::mem::take(&mut self.nav_schema_expanded),
-            nav_tables_expanded: std::mem::take(&mut self.nav_tables_expanded),
-            nav_table_expanded: std::mem::take(&mut self.nav_table_expanded),
-            nav_subfolder_expanded: std::mem::take(&mut self.nav_subfolder_expanded),
-            selected_table_name: self.selected_table_name.take(),
-        };
-        self.live_connections.insert(id, live);
-        let _ = self.schema_cache.clear();
-        self.is_connected = false;
-    }
-
-    /// Makes a parked connection the active one without reconnecting.
-    /// Returns false when the connection is not parked.
     fn activate_live_connection(&mut self, conn_id: &str) -> bool {
-        if !self.live_connections.contains_key(conn_id) {
+        if !self.is_connection_live(conn_id) {
             return false;
         }
-        self.park_active_connection();
-        let Some(live) = self.live_connections.remove(conn_id) else {
-            return false;
-        };
-
-        let _ = self.schema_cache.clear();
-        for t in &live.tables {
-            let _ = self
-                .schema_cache
-                .add_table(&t.schema, &t.name, &t.table_type);
-        }
-        for ((schema, table), cols) in &live.table_columns {
-            for c in cols {
-                let _ = self.schema_cache.add_column(
-                    schema,
-                    table,
-                    &c.name,
-                    c.data_type.display_name(),
-                    c.is_primary_key,
-                );
-            }
-        }
-
-        self.driver = Some(live.driver);
-        self.tables = live.tables;
-        self.table_columns = live.table_columns;
-        self.table_constraints = live.table_constraints;
-        self.table_indexes = live.table_indexes;
-        self.nav_connection_expanded = true;
-        self.nav_databases_expanded = live.nav_databases_expanded;
-        self.nav_database_expanded = live.nav_database_expanded;
-        self.nav_schemas_expanded = live.nav_schemas_expanded;
-        self.nav_schema_expanded = live.nav_schema_expanded;
-        self.nav_tables_expanded = live.nav_tables_expanded;
-        self.nav_table_expanded = live.nav_table_expanded;
-        self.nav_subfolder_expanded = live.nav_subfolder_expanded;
-        self.selected_table_name = live.selected_table_name;
-        self.is_connected = true;
-        self.active_connection_id = Some(conn_id.to_string());
-        self.load_connection_form(conn_id);
+        self.connections.active_connection_id = Some(conn_id.to_owned());
         self.save_config();
-
-        // Results in the active tab came from the previous connection
-        if !self.tabs.is_empty() {
-            let tab = &mut self.tabs[self.active_tab];
-            tab.grid = VirtualDataGrid::new(None, self.theme.clone());
-            tab.execution_time_ms = None;
-            tab.fetch.reset_result();
-        }
-        for tab in &mut self.tabs {
-            tab.editor.schema_cache = Some(self.schema_cache.clone());
-        }
-
         true
     }
 
-    /// Closes one connection: the active one, or a parked one in the background
     pub fn disconnect_by_id(&mut self, conn_id: &str) {
-        if self.live_connections.remove(conn_id).is_none()
-            && self.active_connection_id.as_deref() == Some(conn_id)
-            && self.is_connected
-        {
-            self.disconnect();
+        if let Some(session) = self.connections.sessions.get_mut(conn_id) {
+            session.driver = None;
+            session.is_connected = false;
         }
     }
 
     pub fn disconnect(&mut self) {
-        self.driver = None;
-        self.tables.clear();
-        let _ = self.schema_cache.clear();
-        self.is_connected = false;
-        self.selected_table_name = None;
-        self.table_columns.clear();
-        self.table_constraints.clear();
-        self.table_indexes.clear();
-        self.nav_table_expanded.clear();
-        self.nav_subfolder_expanded.clear();
-        self.nav_connection_expanded = false;
-        if !self.tabs.is_empty() {
-            let tab = &mut self.tabs[self.active_tab];
-            tab.grid = VirtualDataGrid::new(None, self.theme.clone());
-            tab.execution_time_ms = None;
-            tab.fetch.reset_result();
+        if let Some(id) = self.connections.active_connection_id.clone() {
+            self.disconnect_by_id(&id);
         }
     }
 
-    /// Reloads the navigator metadata of the open connection without reconnecting
     pub fn refresh_connection(&mut self, cx: &mut Context<Self>) {
-        if self.is_connecting {
+        if self.form.is_connecting {
             return;
         }
-        let Some(driver) = self.driver.clone() else {
+        let Some(driver) = self.connections.active().driver.clone() else {
             return;
         };
         cx.notify();
@@ -698,6 +390,8 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 // Ignore a result that arrives after a disconnect or a switch to another connection
                 if !this
+                    .connections
+                    .active()
                     .driver
                     .as_ref()
                     .is_some_and(|d| Arc::ptr_eq(d, &driver))
@@ -715,17 +409,19 @@ impl Workspace {
 
     /// Replaces the cached tables, columns, constraints and indexes of the open connection
     fn apply_schema_metadata(&mut self, metadata: SchemaMetadata) {
-        let _ = self.schema_cache.clear();
+        let _ = self.connections.active().schema_cache.clear();
         for t in &metadata.tables {
-            let _ = self
-                .schema_cache
-                .add_table(&t.schema, &t.name, &t.table_type);
+            let _ =
+                self.connections
+                    .active()
+                    .schema_cache
+                    .add_table(&t.schema, &t.name, &t.table_type);
         }
 
         let mut col_map = HashMap::new();
         for (schema, table, cols) in metadata.columns {
             for c in &cols {
-                let _ = self.schema_cache.add_column(
+                let _ = self.connections.active().schema_cache.add_column(
                     &schema,
                     &table,
                     &c.name,
@@ -735,7 +431,7 @@ impl Workspace {
             }
             col_map.insert((schema, table), cols);
         }
-        self.table_columns = col_map;
+        self.connections.active_mut().table_columns = col_map;
 
         let mut constr_map = HashMap::new();
         for (schema, table, cname, ctype) in metadata.constraints {
@@ -744,7 +440,7 @@ impl Workspace {
                 .or_insert_with(Vec::new)
                 .push((cname, ctype));
         }
-        self.table_constraints = constr_map;
+        self.connections.active_mut().table_constraints = constr_map;
 
         let mut idx_map = HashMap::new();
         for (schema, table, iname) in metadata.indexes {
@@ -753,74 +449,86 @@ impl Workspace {
                 .or_insert_with(Vec::new)
                 .push(iname);
         }
-        self.table_indexes = idx_map;
+        self.connections.active_mut().table_indexes = idx_map;
 
-        self.tables = metadata.tables;
+        self.connections.active_mut().tables = metadata.tables;
     }
 
     pub fn open_new_connection_dialog(&mut self) {
-        self.editing_connection_id = None;
-        self.form_name = "".to_string();
-        self.selected_driver_kind = DbDriverKind::Postgres;
-        self.form_host = "localhost".to_string();
-        self.form_port = "5432".to_string();
-        self.form_database = "".to_string();
-        self.form_user = "postgres".to_string();
-        self.form_password = "".to_string();
-        self.form_use_unix_socket = false;
-        self.form_tls_enabled = false;
-        self.form_tls_ca_cert.clear();
-        self.active_field = Some(FormField::Name);
-        self.field_cursor = usize::MAX;
-        self.field_anchor = None;
+        self.form.invalidate();
+        self.form.editing_connection_id = None;
+        self.form.form_name = "".to_string();
+        self.form.selected_driver_kind = DbDriverKind::Postgres;
+        self.form.form_host = "localhost".to_string();
+        self.form.form_port = "5432".to_string();
+        self.form.form_database = "".to_string();
+        self.form.form_user = "postgres".to_string();
+        self.form.form_password = "".to_string();
+        self.form.form_use_unix_socket = false;
+        self.form.form_tls_enabled = false;
+        self.form.form_tls_ca_cert.clear();
+        self.form.active_field = Some(FormField::Name);
+        self.form.field_cursor = usize::MAX;
+        self.form.field_anchor = None;
         self.cursor_visible = true;
-        self.show_password = false;
-        self.test_result = None;
-        self.form_history.clear();
-        self.show_connection_modal = true;
+        self.form.show_password = false;
+        self.form.test_result = None;
+        self.form.form_history.clear();
+        self.form.show_connection_modal = true;
     }
 
     pub fn edit_saved_connection(&mut self, conn_id: Option<&str>) {
+        self.form.invalidate();
         let target_conn = if let Some(id) = conn_id {
-            self.saved_connections.iter().find(|c| c.id == id).cloned()
-        } else if let Some(ref id) = self.active_connection_id {
-            self.saved_connections.iter().find(|c| &c.id == id).cloned()
+            self.connections
+                .saved_connections
+                .iter()
+                .find(|c| c.id == id)
+                .cloned()
+        } else if let Some(ref id) = self.connections.active_connection_id {
+            self.connections
+                .saved_connections
+                .iter()
+                .find(|c| &c.id == id)
+                .cloned()
         } else {
-            self.saved_connections.first().cloned()
+            self.connections.saved_connections.first().cloned()
         };
 
         if let Some(saved) = target_conn {
-            self.selected_driver_kind =
+            self.form.selected_driver_kind =
                 DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
-            self.form_name = saved.name.clone();
-            self.form_host = saved.host.clone();
-            self.form_port = saved.port.to_string();
-            self.form_database = saved.database.clone();
-            self.form_user = saved.user.clone();
-            self.form_password = saved.password.clone().unwrap_or_default();
-            self.form_use_unix_socket = saved.use_unix_socket;
-            self.form_tls_enabled = saved.tls_enabled;
-            self.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
-            self.editing_connection_id = Some(saved.id.clone());
-            self.test_result = None;
-            self.active_field = Some(FormField::Database);
-            self.field_cursor = usize::MAX;
-            self.field_anchor = None;
+            self.form.form_name = saved.name.clone();
+            self.form.form_host = saved.host.clone();
+            self.form.form_port = saved.port.to_string();
+            self.form.form_database = saved.database.clone();
+            self.form.form_user = saved.user.clone();
+            self.form.form_password = saved.password.clone().unwrap_or_default();
+            self.form.form_use_unix_socket = saved.use_unix_socket;
+            self.form.form_tls_enabled = saved.tls_enabled;
+            self.form.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
+            self.form.editing_connection_id = Some(saved.id.clone());
+            self.form.test_result = None;
+            self.form.active_field = Some(FormField::Database);
+            self.form.field_cursor = usize::MAX;
+            self.form.field_anchor = None;
             self.cursor_visible = true;
-            self.show_password = false;
-            self.form_history.clear();
-            self.show_connection_modal = true;
+            self.form.show_password = false;
+            self.form.form_history.clear();
+            self.form.show_connection_modal = true;
         } else {
             self.open_new_connection_dialog();
         }
     }
 
     pub fn connect_saved_by_id(&mut self, conn_id: &str, cx: &mut Context<Self>) {
-        if self.is_connecting {
+        if self.form.is_connecting {
             return;
         }
-        if self.is_connected && self.active_connection_id.as_deref() == Some(conn_id) {
-            self.nav_connection_expanded = true;
+        if self.connections.active().is_connected
+            && self.connections.active_connection_id.as_deref() == Some(conn_id)
+        {
+            self.connections.navigator_mut().nav_connection_expanded = true;
             return;
         }
         if self.activate_live_connection(conn_id) {
@@ -829,15 +537,15 @@ impl Workspace {
         if !self.load_connection_form(conn_id) {
             return;
         }
-        self.park_active_connection();
-        self.active_connection_id = Some(conn_id.to_string());
-        self.nav_connection_expanded = true;
+        self.connections.active_connection_id = Some(conn_id.to_string());
+        self.connections.navigator_mut().nav_connection_expanded = true;
         self.connect_to_database(cx);
     }
 
     /// Fills the connection form from a saved connection; false when it does not exist
     fn load_connection_form(&mut self, conn_id: &str) -> bool {
         let Some(saved) = self
+            .connections
             .saved_connections
             .iter()
             .find(|c| c.id == conn_id)
@@ -846,35 +554,41 @@ impl Workspace {
             return false;
         };
 
-        self.selected_driver_kind =
+        self.form.selected_driver_kind =
             DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
-        self.form_name = saved.name.clone();
-        self.form_host = saved.host.clone();
-        self.form_port = saved.port.to_string();
-        self.form_database = saved.database.clone();
-        self.form_user = saved.user.clone();
-        self.form_password = saved.password.clone().unwrap_or_default();
-        self.form_use_unix_socket = saved.use_unix_socket;
-        self.form_tls_enabled = saved.tls_enabled;
-        self.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
-        self.editing_connection_id = Some(saved.id.clone());
+        self.form.form_name = saved.name.clone();
+        self.form.form_host = saved.host.clone();
+        self.form.form_port = saved.port.to_string();
+        self.form.form_database = saved.database.clone();
+        self.form.form_user = saved.user.clone();
+        self.form.form_password = saved.password.clone().unwrap_or_default();
+        self.form.form_use_unix_socket = saved.use_unix_socket;
+        self.form.form_tls_enabled = saved.tls_enabled;
+        self.form.form_tls_ca_cert = saved.tls_ca_cert.clone().unwrap_or_default();
+        self.form.editing_connection_id = Some(saved.id.clone());
         true
     }
 
     pub fn delete_saved_connection(&mut self, conn_id: &str) {
-        self.saved_connections.retain(|c| c.id != conn_id);
-        self.live_connections.remove(conn_id);
-        if self.active_connection_id.as_deref() == Some(conn_id) {
-            if self.is_connected {
+        self.connections
+            .saved_connections
+            .retain(|c| c.id != conn_id);
+        self.connections.sessions.remove(conn_id);
+        if self.connections.active_connection_id.as_deref() == Some(conn_id) {
+            if self.connections.active().is_connected {
                 self.disconnect();
             }
-            self.active_connection_id = self.saved_connections.first().map(|c| c.id.clone());
+            self.connections.active_connection_id = self
+                .connections
+                .saved_connections
+                .first()
+                .map(|c| c.id.clone());
         }
         self.save_config();
     }
 
     pub fn save_connection_form(&mut self) {
-        let conn_id = self.editing_connection_id.clone().unwrap_or_else(|| {
+        let conn_id = self.form.editing_connection_id.clone().unwrap_or_else(|| {
             format!(
                 "conn_{}",
                 std::time::SystemTime::now()
@@ -884,10 +598,17 @@ impl Workspace {
             )
         });
 
-        let config = self.build_current_config();
+        let config = match self.form.build_config() {
+            Ok(config) => config,
+            Err(error) => {
+                self.form.is_connecting = false;
+                self.form.test_result = Some(Err(error));
+                return;
+            }
+        };
 
-        let conn_name = if !self.form_name.trim().is_empty() {
-            self.form_name.trim().to_string()
+        let conn_name = if !self.form.form_name.trim().is_empty() {
+            self.form.form_name.trim().to_string()
         } else {
             match config.driver {
                 DbDriverKind::Sqlite => std::path::Path::new(&config.database)
@@ -919,401 +640,88 @@ impl Workspace {
             tls_ca_cert: config.tls_ca_cert.clone(),
         };
 
-        if let Some(pos) = self.saved_connections.iter().position(|c| c.id == conn_id) {
-            self.saved_connections[pos] = saved;
+        if let Some(pos) = self
+            .connections
+            .saved_connections
+            .iter()
+            .position(|c| c.id == conn_id)
+        {
+            self.connections.saved_connections[pos] = saved;
         } else {
-            self.saved_connections.push(saved);
+            self.connections.saved_connections.push(saved);
         }
-        self.active_connection_id = Some(conn_id.clone());
+
         self.save_config();
-        self.show_connection_modal = false;
+        self.form.show_connection_modal = false;
     }
 
     pub fn select_preset_postgres(&mut self) {
-        self.selected_driver_kind = DbDriverKind::Postgres;
-        self.form_host = "localhost".to_string();
-        self.form_port = "5432".to_string();
-        self.form_database = "postgres".to_string();
-        self.form_user = "postgres".to_string();
-        self.form_password = "".to_string();
-        self.form_use_unix_socket = true;
-        self.form_tls_enabled = false;
-        self.form_tls_ca_cert.clear();
-        self.active_field = Some(FormField::Host);
-        self.field_cursor = usize::MAX;
-        self.test_result = None;
+        self.form.selected_driver_kind = DbDriverKind::Postgres;
+        self.form.form_host = "localhost".to_string();
+        self.form.form_port = "5432".to_string();
+        self.form.form_database = "postgres".to_string();
+        self.form.form_user = "postgres".to_string();
+        self.form.form_password = "".to_string();
+        self.form.form_use_unix_socket = true;
+        self.form.form_tls_enabled = false;
+        self.form.form_tls_ca_cert.clear();
+        self.form.active_field = Some(FormField::Host);
+        self.form.field_cursor = usize::MAX;
+        self.form.test_result = None;
     }
 
     pub fn select_preset_mysql(&mut self) {
-        self.selected_driver_kind = DbDriverKind::MySql;
-        self.form_host = "localhost".to_string();
-        self.form_port = "3306".to_string();
-        self.form_database = "mysql".to_string();
-        self.form_user = "root".to_string();
-        self.form_password = "".to_string();
-        self.form_use_unix_socket = true;
-        self.form_tls_enabled = false;
-        self.form_tls_ca_cert.clear();
-        self.active_field = Some(FormField::Host);
-        self.field_cursor = usize::MAX;
-        self.test_result = None;
+        self.form.selected_driver_kind = DbDriverKind::MySql;
+        self.form.form_host = "localhost".to_string();
+        self.form.form_port = "3306".to_string();
+        self.form.form_database = "mysql".to_string();
+        self.form.form_user = "root".to_string();
+        self.form.form_password = "".to_string();
+        self.form.form_use_unix_socket = true;
+        self.form.form_tls_enabled = false;
+        self.form.form_tls_ca_cert.clear();
+        self.form.active_field = Some(FormField::Host);
+        self.form.field_cursor = usize::MAX;
+        self.form.test_result = None;
     }
 
     pub fn select_preset_mariadb(&mut self) {
         self.select_preset_mysql();
-        self.selected_driver_kind = DbDriverKind::MariaDb;
+        self.form.selected_driver_kind = DbDriverKind::MariaDb;
     }
 
     pub fn select_preset_odbc(&mut self, kind: DbDriverKind) {
         self.open_new_connection_dialog();
-        self.selected_driver_kind = kind;
-        self.form_port = kind.default_port().to_string();
-        self.form_user = match kind {
+        self.form.selected_driver_kind = kind;
+        self.form.form_port = kind.default_port().to_string();
+        self.form.form_user = match kind {
             DbDriverKind::SqlServer => "sa",
             DbDriverKind::Db2 => "db2inst1",
             _ => "",
         }
         .to_string();
-        self.form_database = match kind {
+        self.form.form_database = match kind {
             DbDriverKind::SqlServer => "master",
             DbDriverKind::Oracle => "FREEPDB1",
             _ => "",
         }
         .to_string();
-        self.form_tls_enabled = kind == DbDriverKind::SqlServer;
-        self.active_field = Some(FormField::Host);
+        self.form.form_tls_enabled = kind == DbDriverKind::SqlServer;
+        self.form.active_field = Some(FormField::Host);
     }
 
     pub fn select_preset_sqlite(&mut self) {
-        self.selected_driver_kind = DbDriverKind::Sqlite;
-        self.form_host = "localhost".to_string();
-        self.form_port = "0".to_string();
-        self.form_database = "fastdb.sqlite".to_string();
-        self.form_user = "".to_string();
-        self.form_password = "".to_string();
-        self.form_use_unix_socket = false;
-        self.form_tls_enabled = false;
-        self.form_tls_ca_cert.clear();
-        self.active_field = Some(FormField::Database);
-        self.field_cursor = usize::MAX;
-        self.test_result = None;
-    }
-}
-
-#[cfg(test)]
-mod tls_tests {
-    use super::Workspace;
-
-    #[test]
-    fn enterprise_provider_settings_survive_save_and_reload() {
-        for (provider, port) in [("SqlServer", 1433), ("Oracle", 1521), ("Db2", 50000)] {
-            let input = format!(
-                r#"{{"connections":[{{"id":"test","driver":"{provider}","database":"app","tls_enabled":true}}]}}"#
-            );
-            let (connections, _) = Workspace::load_saved_connections_from_str(&input);
-            assert_eq!(connections[0].port, port);
-            let saved = Workspace::serialize_connections_config(&connections, Some("test"));
-            let (loaded, _) = Workspace::load_saved_connections_from_str(&saved);
-            assert_eq!(loaded, connections);
-            assert!(loaded[0].tls_enabled);
-        }
-    }
-
-    #[test]
-    fn mariadb_provider_identity_survives_save_and_reload() {
-        let input = r#"{"connections":[{"id":"maria","driver":"MariaDb","host":"localhost","port":3306,"database":"app"}]}"#;
-        let (connections, _) = Workspace::load_saved_connections_from_str(input);
-        let saved = Workspace::serialize_connections_config(&connections, Some("maria"));
-        let (loaded, active) = Workspace::load_saved_connections_from_str(&saved);
-        assert_eq!(loaded[0].driver, "MariaDb");
-        assert_eq!(loaded[0].port, 3306);
-        assert_eq!(active.as_deref(), Some("maria"));
-    }
-
-    #[test]
-    fn saved_tls_settings_round_trip_and_legacy_defaults_to_disabled() {
-        let legacy = r#"{"connections":[{"id":"pg","database":"postgres"}]}"#;
-        let (mut connections, _) = Workspace::load_saved_connections_from_str(legacy);
-        assert!(!connections[0].tls_enabled);
-        assert_eq!(connections[0].tls_ca_cert, None);
-        connections[0].tls_enabled = true;
-        connections[0].tls_ca_cert = Some("/path with spaces/root.pem".into());
-        let saved = Workspace::serialize_connections_config(&connections, Some("pg"));
-        let (loaded, active) = Workspace::load_saved_connections_from_str(&saved);
-        assert_eq!(loaded, connections);
-        assert_eq!(active.as_deref(), Some("pg"));
-    }
-}
-
-#[cfg(test)]
-mod relocated_tests {
-    #[test]
-    fn test_load_legacy_single_connection() {
-        use crate::workspace::Workspace;
-
-        let legacy_json = r#"{
-            "has_saved_connection": true,
-            "driver": "Postgres",
-            "host": "ubiid.ubitec.local",
-            "port": "8091",
-            "database": "ubiid",
-            "user": "ubiid",
-            "password": "db@ubiid",
-            "use_unix_socket": false
-        }"#;
-
-        let (connections, active_id) = Workspace::load_saved_connections_from_str(legacy_json);
-        assert_eq!(connections.len(), 1);
-        let first = &connections[0];
-        assert_eq!(first.id, "conn_1");
-        assert_eq!(first.name, "ubiid-local");
-        assert_eq!(first.driver, "Postgres");
-        assert_eq!(first.host, "ubiid.ubitec.local");
-        assert_eq!(first.port, 8091);
-        assert_eq!(first.database, "ubiid");
-        assert_eq!(first.user, "ubiid");
-        assert_eq!(first.password, Some("db@ubiid".to_string()));
-        assert_eq!(active_id, Some("conn_1".to_string()));
-    }
-
-    #[test]
-    fn test_load_and_serialize_multiple_connections() {
-        use crate::workspace::{SavedConnection, Workspace};
-
-        let conns = vec![
-            SavedConnection {
-                id: "conn_pg".to_string(),
-                name: "Production PG".to_string(),
-                driver: "Postgres".to_string(),
-                host: "postgres.internal".to_string(),
-                port: 5432,
-                database: "prod_db".to_string(),
-                user: "postgres".to_string(),
-                password: Some("secret".to_string()),
-                use_unix_socket: false,
-                tls_enabled: false,
-                tls_ca_cert: None,
-            },
-            SavedConnection {
-                id: "conn_mysql".to_string(),
-                name: "Analytics MySQL".to_string(),
-                driver: "MySql".to_string(),
-                host: "mysql.internal".to_string(),
-                port: 3306,
-                database: "analytics".to_string(),
-                user: "root".to_string(),
-                password: None,
-                use_unix_socket: false,
-                tls_enabled: false,
-                tls_ca_cert: None,
-            },
-            SavedConnection {
-                id: "conn_sqlite".to_string(),
-                name: "Local Cache".to_string(),
-                driver: "Sqlite".to_string(),
-                host: "localhost".to_string(),
-                port: 0,
-                database: "/path/to/cache.db".to_string(),
-                user: "".to_string(),
-                password: None,
-                use_unix_socket: false,
-                tls_enabled: false,
-                tls_ca_cert: None,
-            },
-        ];
-
-        let serialized = Workspace::serialize_connections_config(&conns, Some("conn_mysql"));
-        let (deserialized, active_id) = Workspace::load_saved_connections_from_str(&serialized);
-
-        assert_eq!(deserialized.len(), 3);
-        assert_eq!(active_id, Some("conn_mysql".to_string()));
-        assert_eq!(deserialized[0].name, "Production PG");
-        assert_eq!(deserialized[1].name, "Analytics MySQL");
-        assert_eq!(deserialized[2].name, "Local Cache");
-        assert_eq!(deserialized[2].database, "/path/to/cache.db");
-    }
-
-    #[test]
-    fn test_adding_new_connection_does_not_override_existing() {
-        use crate::workspace::SavedConnection;
-
-        let mut conns = vec![SavedConnection {
-            id: "conn_existing".to_string(),
-            name: "Existing DB".to_string(),
-            driver: "Postgres".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            database: "existing".to_string(),
-            user: "postgres".to_string(),
-            password: None,
-            use_unix_socket: false,
-            tls_enabled: false,
-            tls_ca_cert: None,
-        }];
-
-        let new_conn = SavedConnection {
-            id: "conn_new".to_string(),
-            name: "New DB".to_string(),
-            driver: "MySql".to_string(),
-            host: "localhost".to_string(),
-            port: 3306,
-            database: "new_db".to_string(),
-            user: "root".to_string(),
-            password: None,
-            use_unix_socket: false,
-            tls_enabled: false,
-            tls_ca_cert: None,
-        };
-
-        if let Some(pos) = conns.iter().position(|c| c.id == new_conn.id) {
-            conns[pos] = new_conn;
-        } else {
-            conns.push(new_conn);
-        }
-
-        assert_eq!(conns.len(), 2);
-        assert_eq!(conns[0].name, "Existing DB");
-        assert_eq!(conns[1].name, "New DB");
-    }
-
-    #[test]
-    fn test_editing_connection_updates_in_place() {
-        use crate::workspace::SavedConnection;
-
-        let mut conns = [
-            SavedConnection {
-                id: "conn_1".to_string(),
-                name: "Database 1".to_string(),
-                driver: "Postgres".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                database: "db1".to_string(),
-                user: "postgres".to_string(),
-                password: None,
-                use_unix_socket: false,
-                tls_enabled: false,
-                tls_ca_cert: None,
-            },
-            SavedConnection {
-                id: "conn_2".to_string(),
-                name: "Database 2".to_string(),
-                driver: "Postgres".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                database: "db2".to_string(),
-                user: "postgres".to_string(),
-                password: None,
-                use_unix_socket: false,
-                tls_enabled: false,
-                tls_ca_cert: None,
-            },
-        ];
-
-        let updated = SavedConnection {
-            id: "conn_1".to_string(),
-            name: "Database 1 (Renamed)".to_string(),
-            driver: "Postgres".to_string(),
-            host: "db.remote.com".to_string(),
-            port: 5433,
-            database: "db1_prod".to_string(),
-            user: "admin".to_string(),
-            password: Some("new_pass".to_string()),
-            use_unix_socket: false,
-            tls_enabled: false,
-            tls_ca_cert: None,
-        };
-
-        if let Some(pos) = conns.iter().position(|c| c.id == updated.id) {
-            conns[pos] = updated;
-        }
-
-        assert_eq!(conns.len(), 2);
-        assert_eq!(conns[0].name, "Database 1 (Renamed)");
-        assert_eq!(conns[0].host, "db.remote.com");
-        assert_eq!(conns[0].port, 5433);
-        assert_eq!(conns[1].name, "Database 2");
-        assert_eq!(conns[1].host, "localhost");
-    }
-
-    #[test]
-    fn test_deleting_connection_removes_from_list() {
-        use crate::workspace::SavedConnection;
-
-        let mut conns = vec![
-            SavedConnection {
-                id: "conn_1".to_string(),
-                name: "Database 1".to_string(),
-                driver: "Postgres".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                database: "db1".to_string(),
-                user: "postgres".to_string(),
-                password: None,
-                use_unix_socket: false,
-                tls_enabled: false,
-                tls_ca_cert: None,
-            },
-            SavedConnection {
-                id: "conn_2".to_string(),
-                name: "Database 2".to_string(),
-                driver: "Postgres".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                database: "db2".to_string(),
-                user: "postgres".to_string(),
-                password: None,
-                use_unix_socket: false,
-                tls_enabled: false,
-                tls_ca_cert: None,
-            },
-        ];
-
-        conns.retain(|c| c.id != "conn_1");
-
-        assert_eq!(conns.len(), 1);
-        assert_eq!(conns[0].id, "conn_2");
-        assert_eq!(conns[0].name, "Database 2");
-    }
-
-    fn saved_pg_connection(id: &str, password: Option<&str>) -> crate::workspace::SavedConnection {
-        crate::workspace::SavedConnection {
-            id: id.to_string(),
-            name: "Production PG".to_string(),
-            driver: "Postgres".to_string(),
-            host: "postgres.internal".to_string(),
-            port: 5432,
-            database: "prod_db".to_string(),
-            user: "postgres".to_string(),
-            password: password.map(|p| p.to_string()),
-            use_unix_socket: false,
-            tls_enabled: false,
-            tls_ca_cert: None,
-        }
-    }
-
-    #[test]
-    fn test_password_roundtrips_through_config() {
-        use crate::workspace::Workspace;
-
-        let conns = vec![saved_pg_connection("conn_pg", Some("s3cret-pw"))];
-        let serialized = Workspace::serialize_connections_config(&conns, Some("conn_pg"));
-
-        let (loaded, _) = Workspace::load_saved_connections_from_str(&serialized);
-        assert_eq!(loaded[0].password.as_deref(), Some("s3cret-pw"));
-    }
-
-    #[test]
-    fn test_empty_password_is_not_written_to_config() {
-        use crate::workspace::Workspace;
-
-        let conns = vec![
-            saved_pg_connection("conn_a", None),
-            saved_pg_connection("conn_b", Some("")),
-        ];
-        let serialized = Workspace::serialize_connections_config(&conns, None);
-
-        let (loaded, _) = Workspace::load_saved_connections_from_str(&serialized);
-        assert_eq!(loaded[0].password, None);
-        assert_eq!(loaded[1].password, None);
+        self.form.selected_driver_kind = DbDriverKind::Sqlite;
+        self.form.form_host = "localhost".to_string();
+        self.form.form_port = "0".to_string();
+        self.form.form_database = "fastdb.sqlite".to_string();
+        self.form.form_user = "".to_string();
+        self.form.form_password = "".to_string();
+        self.form.form_use_unix_socket = false;
+        self.form.form_tls_enabled = false;
+        self.form.form_tls_ca_cert.clear();
+        self.form.active_field = Some(FormField::Database);
+        self.form.field_cursor = usize::MAX;
+        self.form.test_result = None;
     }
 }

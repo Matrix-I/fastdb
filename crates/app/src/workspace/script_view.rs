@@ -21,7 +21,12 @@ impl Workspace {
         let connection_name = self.tabs[tab_idx]
             .connection_id
             .as_deref()
-            .and_then(|id| self.saved_connections.iter().find(|c| c.id == id))
+            .and_then(|id| {
+                self.connections
+                    .saved_connections
+                    .iter()
+                    .find(|c| c.id == id)
+            })
             .map(|c| c.name.clone())
             .unwrap_or_default();
 

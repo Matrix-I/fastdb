@@ -37,6 +37,8 @@ impl Workspace {
 
         // Columns metadata
         let mut columns_vec: Vec<ColumnMeta> = self
+            .connections
+            .active()
             .table_columns
             .get(&(s_name.to_string(), t_name.to_string()))
             .cloned()
@@ -62,6 +64,8 @@ impl Workspace {
         }
 
         let constraints_vec = self
+            .connections
+            .active()
             .table_constraints
             .get(&(s_name.to_string(), t_name.to_string()))
             .cloned()
@@ -74,6 +78,8 @@ impl Workspace {
             });
 
         let indexes_vec = self
+            .connections
+            .active()
             .table_indexes
             .get(&(s_name.to_string(), t_name.to_string()))
             .cloned()

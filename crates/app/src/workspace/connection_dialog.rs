@@ -3,12 +3,12 @@ use gpui::prelude::FluentBuilder;
 
 impl Workspace {
     fn render_tls_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.selected_driver_kind == DbDriverKind::Sqlite {
+        if self.form.selected_driver_kind == DbDriverKind::Sqlite {
             return div().into_any_element();
         }
         let theme = &self.theme;
-        let accepts_ca = !self.selected_driver_kind.uses_odbc()
-            || self.selected_driver_kind == DbDriverKind::Db2;
+        let accepts_ca = !self.form.selected_driver_kind.uses_odbc()
+            || self.form.selected_driver_kind == DbDriverKind::Db2;
         div()
             .flex()
             .flex_col()
@@ -19,20 +19,22 @@ impl Workspace {
                     .cursor_pointer()
                     .text_size(px(12.0))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.form_tls_enabled = !this.form_tls_enabled;
-                        this.test_result = None;
-                        if !this.form_tls_enabled && this.active_field == Some(FormField::TlsCa) {
-                            this.active_field = Some(FormField::Password);
+                        this.form.form_tls_enabled = !this.form.form_tls_enabled;
+                        this.form.test_result = None;
+                        if !this.form.form_tls_enabled
+                            && this.form.active_field == Some(FormField::TlsCa)
+                        {
+                            this.form.active_field = Some(FormField::Password);
                         }
                         cx.notify();
                     }))
-                    .child(if self.form_tls_enabled {
+                    .child(if self.form.form_tls_enabled {
                         "☑ TLS — verify certificate and hostname (TCP)"
                     } else {
                         "☐ TLS — verify certificate and hostname (TCP)"
                     }),
             )
-            .when(self.form_tls_enabled && !accepts_ca, |tls| {
+            .when(self.form.form_tls_enabled && !accepts_ca, |tls| {
                 tls.child(
                     div()
                         .text_size(px(11.0))
@@ -40,7 +42,7 @@ impl Workspace {
                         .child("Uses the system/vendor certificate trust store."),
                 )
             })
-            .when(self.form_tls_enabled && accepts_ca, |tls| {
+            .when(self.form.form_tls_enabled && accepts_ca, |tls| {
                 tls.child(
                     div()
                         .flex()
@@ -60,7 +62,7 @@ impl Workspace {
                                 .rounded_md()
                                 .bg(theme.bg_app)
                                 .border_1()
-                                .border_color(if self.active_field == Some(FormField::TlsCa) {
+                                .border_color(if self.form.active_field == Some(FormField::TlsCa) {
                                     theme.border_focused
                                 } else {
                                     theme.border
@@ -68,17 +70,17 @@ impl Workspace {
                                 .text_size(px(12.0))
                                 .cursor_text()
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.active_field = Some(FormField::TlsCa);
-                                    this.field_cursor = usize::MAX;
-                                    this.field_anchor = None;
+                                    this.form.active_field = Some(FormField::TlsCa);
+                                    this.form.field_cursor = usize::MAX;
+                                    this.form.field_anchor = None;
                                     cx.notify();
                                 }))
                                 .child(render_field_content(
-                                    &self.form_tls_ca_cert,
+                                    &self.form.form_tls_ca_cert,
                                     "/path/to/ca.pem or ca.der",
-                                    self.active_field == Some(FormField::TlsCa),
-                                    self.field_anchor,
-                                    self.field_cursor,
+                                    self.form.active_field == Some(FormField::TlsCa),
+                                    self.form.field_anchor,
+                                    self.form.field_cursor,
                                     self.cursor_visible,
                                     theme,
                                     &self.field_caret_pick(FormField::TlsCa, cx),
@@ -101,7 +103,7 @@ impl Workspace {
             ("SQL Server", "icons/database.svg", DbDriverKind::SqlServer),
             ("SQLite", "icons/sqlite.png", DbDriverKind::Sqlite),
         ] {
-            let selected = kind == self.selected_driver_kind;
+            let selected = kind == self.form.selected_driver_kind;
             let tile = div()
                 .id(label)
                 .flex()
@@ -158,14 +160,14 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
-        let is_sqlite = self.selected_driver_kind == DbDriverKind::Sqlite;
+        let is_sqlite = self.form.selected_driver_kind == DbDriverKind::Sqlite;
 
-        let is_name_active = self.active_field == Some(FormField::Name);
-        let is_host_active = self.active_field == Some(FormField::Host);
-        let is_port_active = self.active_field == Some(FormField::Port);
-        let is_db_active = self.active_field == Some(FormField::Database);
-        let is_user_active = self.active_field == Some(FormField::User);
-        let is_pass_active = self.active_field == Some(FormField::Password);
+        let is_name_active = self.form.active_field == Some(FormField::Name);
+        let is_host_active = self.form.active_field == Some(FormField::Host);
+        let is_port_active = self.form.active_field == Some(FormField::Port);
+        let is_db_active = self.form.active_field == Some(FormField::Database);
+        let is_user_active = self.form.active_field == Some(FormField::User);
+        let is_pass_active = self.form.active_field == Some(FormField::Password);
 
         div()
             .absolute()
@@ -208,7 +210,7 @@ impl Workspace {
                                             .text_size(px(16.0))
                                             .font_weight(FontWeight::BOLD)
                                             .child(img("icons/connect.svg").w(px(18.0)).h(px(18.0)))
-                                            .child(if self.editing_connection_id.is_some() {
+                                            .child(if self.form.editing_connection_id.is_some() {
                                                 "Edit Database Connection"
                                             } else {
                                                 "New Database Connection"
@@ -222,16 +224,16 @@ impl Workspace {
                                     .text_color(theme.text_muted)
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.show_connection_modal = false;
+                                        this.form.invalidate(); this.form.show_connection_modal = false;
                                         cx.notify();
                                     }))
                                     .child("✕")
                             )
                     )
                     .child(self.render_provider_picker(cx))
-                    .when(self.selected_driver_kind.uses_odbc(), |panel| panel.child(
+                    .when(self.form.selected_driver_kind.uses_odbc(), |panel| panel.child(
                         div().text_size(px(11.0)).text_color(theme.text_secondary)
-                            .child(if self.selected_driver_kind == DbDriverKind::Oracle {
+                            .child(if self.form.selected_driver_kind == DbDriverKind::Oracle {
                                 "Requires Oracle ODBC client. Database is the Oracle service name."
                             } else { "Requires the vendor ODBC driver installed on this computer." })
                     ))
@@ -259,19 +261,19 @@ impl Workspace {
                                             .text_size(px(13.0))
                                             .cursor_text()
                                             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                this.active_field = Some(FormField::Name);
-                                                this.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                this.field_cursor = usize::MAX;
+                                                this.form.active_field = Some(FormField::Name);
+                                                this.form.field_anchor = (event.click_count() >= 2).then_some(0);
+                                                this.form.field_cursor = usize::MAX;
                                                 this.cursor_visible = true;
                                                 window.focus(&this.focus_handle);
                                                 cx.notify();
                                             }))
                                             .child(render_field_content(
-                                                &self.form_name,
+                                                &self.form.form_name,
                                                 "(optional - defaults to database name)",
                                                 is_name_active,
-                                                self.field_anchor,
-                                                self.field_cursor,
+                                                self.form.field_anchor,
+                                                self.form.field_cursor,
                                                 self.cursor_visible,
                                                 theme,
                                                 &self.field_caret_pick(FormField::Name, cx),
@@ -301,19 +303,19 @@ impl Workspace {
                                                     .text_size(px(13.0))
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.active_field = Some(FormField::Host);
-                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.field_cursor = usize::MAX;
+                                                        this.form.active_field = Some(FormField::Host);
+                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
+                                                        this.form.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
                                                     .child(render_field_content(
-                                                        &self.form_host,
+                                                        &self.form.form_host,
                                                         "localhost",
                                                         is_host_active,
-                                                        self.field_anchor,
-                                                        self.field_cursor,
+                                                        self.form.field_anchor,
+                                                        self.form.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::Host, cx),
@@ -338,19 +340,19 @@ impl Workspace {
                                                     .text_size(px(13.0))
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.active_field = Some(FormField::Port);
-                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.field_cursor = usize::MAX;
+                                                        this.form.active_field = Some(FormField::Port);
+                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
+                                                        this.form.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
                                                     .child(render_field_content(
-                                                        &self.form_port,
+                                                        &self.form.form_port,
                                                         "5432",
                                                         is_port_active,
-                                                        self.field_anchor,
-                                                        self.field_cursor,
+                                                        self.form.field_anchor,
+                                                        self.form.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::Port, cx),
@@ -372,7 +374,7 @@ impl Workspace {
                                             .flex_1()
                                             .gap_1()
                                             .child(div().text_size(px(11.0)).text_color(theme.text_muted).child(
-                                                if is_sqlite { "SQLite Database File / Path" } else if self.selected_driver_kind == DbDriverKind::Oracle { "Service Name" } else { "Database Name" }
+                                                if is_sqlite { "SQLite Database File / Path" } else if self.form.selected_driver_kind == DbDriverKind::Oracle { "Service Name" } else { "Database Name" }
                                             ))
                                             .child(
                                                 div()
@@ -385,19 +387,19 @@ impl Workspace {
                                                     .text_size(px(13.0))
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.active_field = Some(FormField::Database);
-                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.field_cursor = usize::MAX;
+                                                        this.form.active_field = Some(FormField::Database);
+                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
+                                                        this.form.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
                                                     .child(render_field_content(
-                                                        &self.form_database,
+                                                        &self.form.form_database,
                                                         if is_sqlite { "e.g. ./test.db or :memory:" } else { "database name" },
                                                         is_db_active,
-                                                        self.field_anchor,
-                                                        self.field_cursor,
+                                                        self.form.field_anchor,
+                                                        self.form.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::Database, cx),
@@ -422,19 +424,19 @@ impl Workspace {
                                                     .text_size(px(13.0))
                                                     .cursor_text()
                                                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.active_field = Some(FormField::User);
-                                                        this.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.field_cursor = usize::MAX;
+                                                        this.form.active_field = Some(FormField::User);
+                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
+                                                        this.form.field_cursor = usize::MAX;
                                                         this.cursor_visible = true;
                                                         window.focus(&this.focus_handle);
                                                         cx.notify();
                                                     }))
                                                     .child(render_field_content(
-                                                        &self.form_user,
+                                                        &self.form.form_user,
                                                         "username",
                                                         is_user_active,
-                                                        self.field_anchor,
-                                                        self.field_cursor,
+                                                        self.form.field_anchor,
+                                                        self.form.field_cursor,
                                                         self.cursor_visible,
                                                         theme,
                                                         &self.field_caret_pick(FormField::User, cx),
@@ -463,17 +465,17 @@ impl Workspace {
                                                     .text_color(theme.text_accent)
                                                     .cursor_pointer()
                                                     .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.show_password = !this.show_password;
+                                                        this.form.show_password = !this.form.show_password;
                                                         cx.notify();
                                                     }))
-                                                    .child(if self.show_password { "🙈 Hide" } else { "👁 Show" })
+                                                    .child(if self.form.show_password { "🙈 Hide" } else { "👁 Show" })
                                             )
                                     )
                                     .child({
-                                        let display_pass = if self.show_password {
-                                            self.form_password.clone()
+                                        let display_pass = if self.form.show_password {
+                                            self.form.form_password.clone()
                                         } else {
-                                            "•".repeat(self.form_password.chars().count())
+                                            "•".repeat(self.form.form_password.chars().count())
                                         };
                                         div()
                                             .id("input-field-pass")
@@ -485,9 +487,9 @@ impl Workspace {
                                             .text_size(px(13.0))
                                             .cursor_text()
                                             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                this.active_field = Some(FormField::Password);
-                                                this.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                this.field_cursor = usize::MAX;
+                                                this.form.active_field = Some(FormField::Password);
+                                                this.form.field_anchor = (event.click_count() >= 2).then_some(0);
+                                                this.form.field_cursor = usize::MAX;
                                                 this.cursor_visible = true;
                                                 window.focus(&this.focus_handle);
                                                 cx.notify();
@@ -496,8 +498,8 @@ impl Workspace {
                                                 &display_pass,
                                                 "(optional password)",
                                                 is_pass_active,
-                                                self.field_anchor,
-                                                self.field_cursor,
+                                                self.form.field_anchor,
+                                                self.form.field_cursor,
                                                 self.cursor_visible,
                                                 theme,
                                                 &self.field_caret_pick(FormField::Password, cx),
@@ -510,7 +512,7 @@ impl Workspace {
                     .child(self.render_tls_settings(cx))
                     // Test Result Notification Banner
                     .child({
-                        match &self.test_result {
+                        match &self.form.test_result {
                             Some(Ok(msg)) => div()
                                 .p_2()
                                 .rounded_md()
@@ -545,13 +547,13 @@ impl Workspace {
                                     .px_3()
                                     .py_1p5()
                                     .rounded_md()
-                                    .bg(if self.is_connecting { theme.bg_app } else { theme.bg_surface_hover })
+                                    .bg(if self.form.is_connecting { theme.bg_app } else { theme.bg_surface_hover })
                                     .border_1()
                                     .border_color(theme.border)
                                     .text_size(px(12.0))
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        if !this.is_connecting {
+                                        if !this.form.is_connecting {
                                             this.test_connection(cx);
                                         }
                                     }))
@@ -561,13 +563,13 @@ impl Workspace {
                                             .items_center()
                                             .gap_1p5()
                                             .child(
-                                                if self.is_connecting {
+                                                if self.form.is_connecting {
                                                     div().child("⏳")
                                                 } else {
                                                     div().child(img("icons/sql_validate.svg").w(px(14.0)).h(px(14.0)))
                                                 }
                                             )
-                                            .child(if self.is_connecting { "Testing..." } else { "Test Connection" })
+                                            .child(if self.form.is_connecting { "Testing..." } else { "Test Connection" })
                                     )
                             )
                             .child(
@@ -589,7 +591,7 @@ impl Workspace {
                                             .text_size(px(12.0))
                                             .cursor_pointer()
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.show_connection_modal = false;
+                                                this.form.invalidate(); this.form.show_connection_modal = false;
                                                 cx.notify();
                                             }))
                                             .child("Cancel")
@@ -621,13 +623,13 @@ impl Workspace {
                                             .px_4()
                                             .py_1p5()
                                             .rounded_md()
-                                            .bg(if self.is_connecting { theme.bg_surface_hover } else { theme.text_accent })
-                                            .text_color(if self.is_connecting { theme.text_muted } else { theme.bg_app })
+                                            .bg(if self.form.is_connecting { theme.bg_surface_hover } else { theme.text_accent })
+                                            .text_color(if self.form.is_connecting { theme.text_muted } else { theme.bg_app })
                                             .font_weight(FontWeight::BOLD)
                                             .text_size(px(12.0))
                                             .cursor_pointer()
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                if !this.is_connecting {
+                                                if !this.form.is_connecting {
                                                     this.connect_to_database(cx);
                                                 }
                                             }))
@@ -637,13 +639,13 @@ impl Workspace {
                                                     .items_center()
                                                     .gap_1p5()
                                                     .child(
-                                                        if self.is_connecting {
+                                                        if self.form.is_connecting {
                                                             div().child("⏳")
                                                         } else {
                                                             div().child(img("icons/connect.svg").w(px(14.0)).h(px(14.0)))
                                                         }
                                                     )
-                                                    .child(if self.is_connecting { "Connecting..." } else { "Connect Database" })
+                                                    .child(if self.form.is_connecting { "Connecting..." } else { "Connect Database" })
                                             )
                                     )
                             )

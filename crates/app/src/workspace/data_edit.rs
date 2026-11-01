@@ -15,7 +15,9 @@ impl Workspace {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return false;
         };
-        tab.table_name.is_some() && tab.grid.pager.is_some() && self.driver.is_some()
+        tab.table_name.is_some()
+            && tab.grid.pager.is_some()
+            && self.tab_session(self.active_tab).driver.is_some()
     }
 
     /// Whether the active tab has staged edits waiting for Save or Cancel
@@ -244,7 +246,7 @@ impl Workspace {
     /// then reloads the rows (Save button / Cmd+S)
     pub(super) fn save_pending_edits(&mut self, cx: &mut Context<Self>) {
         self.commit_cell_edit();
-        let Some(driver) = self.driver.clone() else {
+        let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
             return;
         };
         let Some(tab) = self.tabs.get(self.active_tab) else {
@@ -265,11 +267,11 @@ impl Workspace {
             return;
         };
 
-        let dialect = match self.selected_driver_kind {
+        let dialect = match self.tab_provider(self.active_tab) {
             DbDriverKind::MySql | DbDriverKind::MariaDb => SqlDialect::MySql,
             _ => SqlDialect::Ansi,
         };
-        let target = match self.selected_driver_kind {
+        let target = match self.tab_provider(self.active_tab) {
             DbDriverKind::Sqlite => dialect.quote_ident(&table),
             _ => format!(
                 "{}.{}",
@@ -279,6 +281,7 @@ impl Workspace {
         };
         // Rows are found by their primary key when the result has every key column
         let pk_names: Vec<&str> = self
+            .tab_session(self.active_tab)
             .table_columns
             .get(&(schema.clone(), table.clone()))
             .map(|cols| {

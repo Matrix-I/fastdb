@@ -12,6 +12,8 @@ impl Workspace {
         let t_name = table_name_opt.as_deref().unwrap_or("Table");
         let s_name = schema_name_opt.as_deref().unwrap_or("public");
         let columns_opt = self
+            .connections
+            .active()
             .table_columns
             .get(&(s_name.to_string(), t_name.to_string()));
 

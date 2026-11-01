@@ -97,7 +97,7 @@ impl Workspace {
                 "nav-menu-sql-editor",
                 "icons/sql_script.svg",
                 "SQL Editor",
-                is_connected && !self.is_connecting,
+                is_connected && !self.form.is_connecting,
                 NavMenuAction::OpenSqlEditor,
                 cx,
             ))
@@ -115,7 +115,7 @@ impl Workspace {
                 "nav-menu-connect",
                 "icons/connect.svg",
                 "Connect",
-                !is_connected && !self.is_connecting,
+                !is_connected && !self.form.is_connecting,
                 NavMenuAction::Connect,
                 cx,
             ))
@@ -141,7 +141,7 @@ impl Workspace {
                 "nav-menu-refresh",
                 "icons/refresh.svg",
                 "Refresh",
-                is_connected && !self.is_connecting,
+                is_connected && !self.form.is_connecting,
                 NavMenuAction::Refresh,
                 cx,
             ));

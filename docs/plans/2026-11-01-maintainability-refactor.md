@@ -46,7 +46,7 @@ Implementation note: the requested one-commit-per-phase structure combines basel
 - [x] Review existing Clippy warnings; fix them in focused changes and document any narrowly scoped allowance. Avoid mass automated fixes mixed into structural moves.
 - [x] Add `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` to the macOS CI job once the workspace is clean. Install the required toolchain components explicitly.
 - [x] Move connection tests to connection persistence, stream/fetch tests to query/result state, and DDL tests to the SQL/DDL owner. Leave asset-loading tests in `assets.rs`.
-- [ ] Add regression tests for form/session isolation and tab connection ownership alongside the fixes in Phase 2; use fake drivers where server behavior is irrelevant.
+- [x] Add regression tests for form/session isolation and tab connection ownership alongside the fixes in Phase 2; use fake drivers where server behavior is irrelevant.
 
 Acceptance: formatting, strict Clippy and workspace tests pass. Existing test assertions survive relocation. CI fails on formatting drift or newly introduced warnings.
 
@@ -54,13 +54,13 @@ Acceptance: formatting, strict Clippy and workspace tests pass. Existing test as
 
 Suggested modules under `crates/app/src/`: `connections/{config,form,session,manager}.rs`; retain view code under `workspace/` until Phase 6. These names are guidance, not a requirement to create every file immediately.
 
-- [ ] Extract saved-connection serialization, legacy migration and atomic config writing from `impl Workspace` into a repository with an injectable config path. Preserve the current file format and test with temporary directories.
-- [ ] Extract `ConnectionFormState`, including preset selection and form-to-config validation. Capture form identity and a request ID before asynchronous test/connect operations; reject stale responses after the form is edited, closed or replaced.
-- [ ] Introduce `ConnectionSession` and a session registry. Remove the duplicate active metadata fields and field-by-field `park_active_connection`/`activate_live_connection` transfers.
-- [ ] Give each session its own schema cache. Bind editor completion to the tab's session; switching the navigator must not clear or rebuild unrelated editors' caches.
-- [ ] Store navigator expansion and selection per connection, independently of connection persistence and driver lifetime.
-- [ ] Bind table tabs as well as script tabs to stable connection IDs. Resolve query dialect, metadata and write targets through the owning session; never through the connection form.
-- [ ] Preserve tab results and pending edits when switching connections. If a session is disconnected, retain tab contents and require reconnection to that tab's connection before execution or Save.
+- [x] Extract saved-connection serialization, legacy migration and atomic config writing from `impl Workspace` into a repository with an injectable config path. Preserve the current file format and test with temporary directories.
+- [x] Extract `ConnectionFormState`, including preset selection and form-to-config validation. Capture form identity and a request ID before asynchronous test/connect operations; reject stale responses after the form is edited, closed or replaced.
+- [x] Introduce `ConnectionSession` and a session registry. Remove the duplicate active metadata fields and field-by-field `park_active_connection`/`activate_live_connection` transfers.
+- [x] Give each session its own schema cache. Bind editor completion to the tab's session; switching the navigator must not clear or rebuild unrelated editors' caches.
+- [x] Store navigator expansion and selection per connection, independently of connection persistence and driver lifetime.
+- [x] Bind table tabs as well as script tabs to stable connection IDs. Resolve query dialect, metadata and write targets through the owning session; never through the connection form.
+- [x] Preserve tab results and pending edits when switching connections. If a session is disconnected, retain tab contents and require reconnection to that tab's connection before execution or Save.
 
 Regression cases: edit/cancel a different provider preset while a session stays connected; switch between two connections with identical schema/table names; switch back to a tab with staged edits; receive an old connection-test response after reopening the form; disconnect/reconnect without changing a tab's owner.
 

@@ -80,7 +80,7 @@ impl Workspace {
                     .overflow_y_scroll()
                     .gap_0p5();
 
-                if self.saved_connections.is_empty() && !self.is_connected {
+                if self.connections.saved_connections.is_empty() && !self.connections.active().is_connected {
                     nav_tree = nav_tree.child(
                         div()
                             .p_4()
@@ -114,13 +114,13 @@ impl Workspace {
                             )
                     );
                 } else {
-                    for conn in &self.saved_connections {
+                    for conn in &self.connections.saved_connections {
                         let conn_id = conn.id.clone();
-                        let is_this_active = self.active_connection_id.as_deref() == Some(&conn_id);
+                        let is_this_active = self.connections.active_connection_id.as_deref() == Some(&conn_id);
                         let is_this_connected = self.is_connection_live(&conn_id);
-                        let is_this_connecting = self.is_connecting && is_this_active;
+                        let is_this_connecting = self.form.is_connecting && is_this_active;
                         // Only the active connection's tree is loaded into the navigator
-                        let is_conn_exp = self.nav_connection_expanded && self.is_connected && is_this_active;
+                        let is_conn_exp = self.connections.navigator().nav_connection_expanded && self.connections.active().is_connected && is_this_active;
 
                         let drv_name = conn.driver.clone();
                         let conn_name = conn.name.clone();
@@ -206,7 +206,7 @@ impl Workspace {
 
                         if is_conn_exp {
                         // Level 1: "Databases" Folder
-                        let is_dbs_exp = self.nav_databases_expanded;
+                        let is_dbs_exp = self.connections.navigator().nav_databases_expanded;
                         nav_tree = nav_tree.child(
                             div()
                                 .id("nav-databases-folder")
@@ -230,7 +230,7 @@ impl Workspace {
                                             theme.text_muted,
                                             theme.text_primary,
                                             cx,
-                                            |this, _| this.nav_databases_expanded = !this.nav_databases_expanded,
+                                            |this, _| this.connections.navigator_mut().nav_databases_expanded = !this.connections.navigator_mut().nav_databases_expanded,
                                         ))
                                         .child(img("icons/folder_database.svg").w(px(16.0)).h(px(16.0)))
                                         .child("Databases")
@@ -239,7 +239,7 @@ impl Workspace {
 
                         if is_dbs_exp {
                             // Level 2: Target Database
-                            let is_db_exp = self.nav_database_expanded;
+                            let is_db_exp = self.connections.navigator().nav_database_expanded;
                             nav_tree = nav_tree.child(
                                 div()
                                     .id("nav-database-node")
@@ -263,21 +263,21 @@ impl Workspace {
                                                 theme.text_muted,
                                                 theme.text_primary,
                                                 cx,
-                                                |this, _| this.nav_database_expanded = !this.nav_database_expanded,
+                                                |this, _| this.connections.navigator_mut().nav_database_expanded = !this.connections.navigator_mut().nav_database_expanded,
                                             ))
                                             .child(img("icons/database.svg").w(px(16.0)).h(px(16.0)))
                                             .child(
                                                 div()
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .text_color(theme.text_accent)
-                                                    .child(self.form_database.clone())
+                                                    .child(self.form.form_database.clone())
                                             )
                                     )
                             );
 
                             if is_db_exp {
                                 // Level 3: "Schemas" Folder
-                                let is_schemas_exp = self.nav_schemas_expanded;
+                                let is_schemas_exp = self.connections.navigator().nav_schemas_expanded;
                                 nav_tree = nav_tree.child(
                                     div()
                                         .id("nav-schemas-folder")
@@ -301,7 +301,7 @@ impl Workspace {
                                                     theme.text_muted,
                                                     theme.text_primary,
                                                     cx,
-                                                    |this, _| this.nav_schemas_expanded = !this.nav_schemas_expanded,
+                                                    |this, _| this.connections.navigator_mut().nav_schemas_expanded = !this.connections.navigator_mut().nav_schemas_expanded,
                                                 ))
                                                 .child(img("icons/folder_schema.svg").w(px(16.0)).h(px(16.0)))
                                                 .child("Schemas")
@@ -311,7 +311,7 @@ impl Workspace {
                                 if is_schemas_exp {
                                     // Group tables by schema
                                     let mut schema_map: BTreeMap<String, Vec<&TableSummary>> = BTreeMap::new();
-                                    for t in &self.tables {
+                                    for t in &self.connections.active().tables {
                                         schema_map.entry(t.schema.clone()).or_default().push(t);
                                     }
 
@@ -327,7 +327,7 @@ impl Workspace {
                                     }
 
                                     for (schema_name, s_tables) in schema_map {
-                                        let is_schema_exp = self.nav_schema_expanded.contains(&schema_name);
+                                        let is_schema_exp = self.connections.navigator().nav_schema_expanded.contains(&schema_name);
                                         let s_name_clone = schema_name.clone();
                                         let schema_id = format!("nav-schema-{}", schema_name);
 
@@ -355,7 +355,7 @@ impl Workspace {
                                                             theme.text_muted,
                                                             theme.text_primary,
                                                             cx,
-                                                            move |this, _| toggle_key(&mut this.nav_schema_expanded, &s_name_clone),
+                                                            move |this, _| toggle_key(&mut this.connections.navigator_mut().nav_schema_expanded, &s_name_clone),
                                                         ))
                                                         .child(img("icons/schema.svg").w(px(16.0)).h(px(16.0)))
                                                         .child(
@@ -368,7 +368,7 @@ impl Workspace {
 
                                         if is_schema_exp {
                                             // Level 5: "Tables" Folder under this Schema
-                                            let is_tables_exp = self.nav_tables_expanded.contains(&schema_name);
+                                            let is_tables_exp = self.connections.navigator().nav_tables_expanded.contains(&schema_name);
                                             let s_name_for_tables = schema_name.clone();
                                             let tables_folder_id = format!("nav-tables-folder-{}", schema_name);
 
@@ -395,7 +395,7 @@ impl Workspace {
                                                                 theme.text_muted,
                                                                 theme.text_primary,
                                                                 cx,
-                                                                move |this, _| toggle_key(&mut this.nav_tables_expanded, &s_name_for_tables),
+                                                                move |this, _| toggle_key(&mut this.connections.navigator_mut().nav_tables_expanded, &s_name_for_tables),
                                                             ))
                                                             .child(img("icons/folder_table.svg").w(px(16.0)).h(px(16.0)))
                                                             .child("Tables")
@@ -408,8 +408,8 @@ impl Workspace {
                                                     let table_schema = t.schema.clone();
                                                     let table_name = t.name.clone();
                                                     let table_key = format!("{}.{}", table_schema, table_name);
-                                                    let is_table_exp = self.nav_table_expanded.contains(&table_key);
-                                                    let is_selected = self.selected_table_name.as_deref() == Some(&table_name);
+                                                    let is_table_exp = self.connections.navigator().nav_table_expanded.contains(&table_key);
+                                                    let is_selected = self.connections.navigator().selected_table_name.as_deref() == Some(&table_name);
                                                     let item_id = format!("nav-table-{}-{}", table_schema, table_name);
 
                                                     let t_schema_for_click = table_schema.clone();
@@ -431,7 +431,7 @@ impl Workspace {
                                                             if event.click_count() >= 2 {
                                                                 this.query_table(&t_schema_for_click, &t_name_for_click, cx);
                                                             } else {
-                                                                this.selected_table_name = Some(t_name_for_click.clone());
+                                                                this.connections.navigator_mut().selected_table_name = Some(t_name_for_click.clone());
                                                                 cx.notify();
                                                             }
                                                         }));
@@ -458,11 +458,11 @@ impl Workspace {
                                                                         theme.text_primary,
                                                                         cx,
                                                                         move |this, _| {
-                                                                            if this.nav_table_expanded.contains(&t_key_for_chev) {
-                                                                                this.nav_table_expanded.remove(&t_key_for_chev);
+                                                                            if this.connections.navigator_mut().nav_table_expanded.contains(&t_key_for_chev) {
+                                                                                this.connections.navigator_mut().nav_table_expanded.remove(&t_key_for_chev);
                                                                             } else {
-                                                                                this.nav_table_expanded.insert(t_key_for_chev.clone());
-                                                                                this.nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_chev));
+                                                                                this.connections.navigator_mut().nav_table_expanded.insert(t_key_for_chev.clone());
+                                                                                this.connections.navigator_mut().nav_subfolder_expanded.insert(format!("{}.columns", t_key_for_chev));
                                                                             }
                                                                         },
                                                                     ))
@@ -502,9 +502,9 @@ impl Workspace {
                                                     if is_table_exp {
                                                         // 1. Columns
                                                         let col_key = format!("{}.columns", table_key);
-                                                        let is_col_exp = self.nav_subfolder_expanded.contains(&col_key);
+                                                        let is_col_exp = self.connections.navigator().nav_subfolder_expanded.contains(&col_key);
                                                         let col_key_toggle = col_key.clone();
-                                                        let cols_for_table = self.table_columns.get(&(table_schema.clone(), table_name.clone()));
+                                                        let cols_for_table = self.connections.active().table_columns.get(&(table_schema.clone(), table_name.clone()));
 
                                                         nav_tree = nav_tree.child(
                                                             div()
@@ -530,7 +530,7 @@ impl Workspace {
                                                                             theme.text_muted,
                                                                             theme.text_primary,
                                                                             cx,
-                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &col_key_toggle),
+                                                                            move |this, _| toggle_key(&mut this.connections.navigator_mut().nav_subfolder_expanded, &col_key_toggle),
                                                                         ))
                                                                         .child(img("icons/columns.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
@@ -626,9 +626,9 @@ impl Workspace {
 
                                                         // 2. Constraints
                                                         let constr_key = format!("{}.constraints", table_key);
-                                                        let is_constr_exp = self.nav_subfolder_expanded.contains(&constr_key);
+                                                        let is_constr_exp = self.connections.navigator().nav_subfolder_expanded.contains(&constr_key);
                                                         let constr_key_toggle = constr_key.clone();
-                                                        let constraints_for_table = self.table_constraints.get(&(table_schema.clone(), table_name.clone()));
+                                                        let constraints_for_table = self.connections.active().table_constraints.get(&(table_schema.clone(), table_name.clone()));
 
                                                         nav_tree = nav_tree.child(
                                                             div()
@@ -654,7 +654,7 @@ impl Workspace {
                                                                             theme.text_muted,
                                                                             theme.text_primary,
                                                                             cx,
-                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &constr_key_toggle),
+                                                                            move |this, _| toggle_key(&mut this.connections.navigator_mut().nav_subfolder_expanded, &constr_key_toggle),
                                                                         ))
                                                                         .child(img("icons/folder_constraint.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
@@ -700,7 +700,7 @@ impl Workspace {
 
                                                         // 3. Foreign Keys
                                                         let fk_key = format!("{}.foreign_keys", table_key);
-                                                        let is_fk_exp = self.nav_subfolder_expanded.contains(&fk_key);
+                                                        let is_fk_exp = self.connections.navigator().nav_subfolder_expanded.contains(&fk_key);
                                                         let fk_key_toggle = fk_key.clone();
                                                         let fks_for_table: Vec<(String, String)> = constraints_for_table
                                                             .map(|v| v.iter().filter(|(_, ctype)| ctype.to_uppercase().contains("FOREIGN")).cloned().collect())
@@ -730,7 +730,7 @@ impl Workspace {
                                                                             theme.text_muted,
                                                                             theme.text_primary,
                                                                             cx,
-                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &fk_key_toggle),
+                                                                            move |this, _| toggle_key(&mut this.connections.navigator_mut().nav_subfolder_expanded, &fk_key_toggle),
                                                                         ))
                                                                         .child(img("icons/folder.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
@@ -772,9 +772,9 @@ impl Workspace {
 
                                                         // 4. Indexes
                                                         let idx_key = format!("{}.indexes", table_key);
-                                                        let is_idx_exp = self.nav_subfolder_expanded.contains(&idx_key);
+                                                        let is_idx_exp = self.connections.navigator().nav_subfolder_expanded.contains(&idx_key);
                                                         let idx_key_toggle = idx_key.clone();
-                                                        let idxs_for_table = self.table_indexes.get(&(table_schema.clone(), table_name.clone()));
+                                                        let idxs_for_table = self.connections.active().table_indexes.get(&(table_schema.clone(), table_name.clone()));
 
                                                         nav_tree = nav_tree.child(
                                                             div()
@@ -800,7 +800,7 @@ impl Workspace {
                                                                             theme.text_muted,
                                                                             theme.text_primary,
                                                                             cx,
-                                                                            move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &idx_key_toggle),
+                                                                            move |this, _| toggle_key(&mut this.connections.navigator_mut().nav_subfolder_expanded, &idx_key_toggle),
                                                                         ))
                                                                         .child(img("icons/folder.svg").w(px(16.0)).h(px(16.0)))
                                                                         .child(
@@ -855,7 +855,7 @@ impl Workspace {
 
                                                         for (f_id, f_label, f_empty, is_partition) in other_folders {
                                                             let cat_key = format!("{}.{}", table_key, f_id);
-                                                            let is_cat_exp = self.nav_subfolder_expanded.contains(&cat_key);
+                                                            let is_cat_exp = self.connections.navigator().nav_subfolder_expanded.contains(&cat_key);
                                                             let cat_key_toggle = cat_key.clone();
 
                                                             nav_tree = nav_tree.child(
@@ -882,7 +882,7 @@ impl Workspace {
                                                                                 theme.text_muted,
                                                                                 theme.text_primary,
                                                                                 cx,
-                                                                                move |this, _| toggle_key(&mut this.nav_subfolder_expanded, &cat_key_toggle),
+                                                                                move |this, _| toggle_key(&mut this.connections.navigator_mut().nav_subfolder_expanded, &cat_key_toggle),
                                                                             ))
                                                                             .child(
                                                                                 if is_partition {
@@ -934,10 +934,11 @@ impl Workspace {
     /// Connection node action: expand/collapse the active connection, otherwise
     /// switch to it (reusing it when already open) or connect.
     fn toggle_or_connect(&mut self, conn_id: &str, cx: &mut Context<Self>) {
-        let is_active = self.active_connection_id.as_deref() == Some(conn_id);
-        if self.is_connected && is_active {
-            self.nav_connection_expanded = !self.nav_connection_expanded;
-        } else if !self.is_connecting {
+        let is_active = self.connections.active_connection_id.as_deref() == Some(conn_id);
+        if self.connections.active().is_connected && is_active {
+            self.connections.navigator_mut().nav_connection_expanded =
+                !self.connections.navigator().nav_connection_expanded;
+        } else if !self.form.is_connecting {
             self.connect_saved_by_id(conn_id, cx);
         }
     }

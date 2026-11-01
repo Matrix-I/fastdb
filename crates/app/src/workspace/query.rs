@@ -86,16 +86,6 @@ impl FetchState {
         self.size_text = self.size.to_string();
     }
 
-    /// Forgets everything about the displayed result, keeping the fetch size
-    pub fn reset_result(&mut self) {
-        *self = Self {
-            size: self.size,
-            size_text: std::mem::take(&mut self.size_text),
-            size_history: std::mem::take(&mut self.size_history),
-            ..Self::default()
-        };
-    }
-
     pub fn is_appending(&self) -> bool {
         self.append.is_some()
     }
@@ -396,7 +386,7 @@ impl Workspace {
         let table = match tab.table_name.as_deref() {
             Some(t) if !t.is_empty() => t,
             _ => {
-                return if self.selected_driver_kind.uses_odbc() {
+                return if self.tab_provider(tab_idx).uses_odbc() {
                     // Execute vendor SQL as written: CTEs, TOP and PL/SQL are not LIMIT dialects.
                     (tab.script_sql.clone().unwrap_or_default(), false)
                 } else {
@@ -405,14 +395,14 @@ impl Workspace {
             }
         };
 
-        let target = match self.selected_driver_kind {
+        let target = match self.tab_provider(tab_idx) {
             DbDriverKind::Postgres
             | DbDriverKind::SqlServer
             | DbDriverKind::Oracle
             | DbDriverKind::Db2 => format!(
                 "{}.{}",
-                quote_ident(self.selected_driver_kind, schema),
-                quote_ident(self.selected_driver_kind, table)
+                quote_ident(self.tab_provider(tab_idx), schema),
+                quote_ident(self.tab_provider(tab_idx), table)
             ),
             DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`.`{}`", schema, table),
             DbDriverKind::Sqlite => format!("\"{}\"", table),
@@ -431,7 +421,7 @@ impl Workspace {
             {
                 format!(
                     " ORDER BY {} {}",
-                    quote_ident(self.selected_driver_kind, &o.column),
+                    quote_ident(self.tab_provider(tab_idx), &o.column),
                     if o.descending { "DESC" } else { "ASC" }
                 )
             }
@@ -439,7 +429,7 @@ impl Workspace {
         };
 
         let limit_suffix = table_page_suffix(
-            self.selected_driver_kind,
+            self.tab_provider(tab_idx),
             tab.fetch.size,
             offset,
             !order_suffix.is_empty() || f_upper.contains("ORDER BY"),
@@ -480,10 +470,12 @@ impl Workspace {
     }
 
     pub fn query_table(&mut self, schema: &str, table: &str, cx: &mut Context<Self>) {
-        self.selected_table_name = Some(table.to_string());
+        self.connections.navigator_mut().selected_table_name = Some(table.to_string());
 
         let existing_tab_idx = self.tabs.iter().position(|t| {
-            t.table_name.as_deref() == Some(table) && t.schema_name.as_deref() == Some(schema)
+            t.connection_id == self.connections.active_connection_id
+                && t.table_name.as_deref() == Some(table)
+                && t.schema_name.as_deref() == Some(schema)
         });
 
         if let Some(idx) = existing_tab_idx {
@@ -495,8 +487,10 @@ impl Workspace {
                 schema,
                 table,
                 self.theme.clone(),
-                self.schema_cache.clone(),
+                self.tab_session(self.active_tab).schema_cache.clone(),
             ));
+            self.tabs.last_mut().unwrap().connection_id =
+                self.connections.active_connection_id.clone();
             self.active_tab = self.tabs.len() - 1;
         }
 
@@ -534,7 +528,7 @@ impl Workspace {
             return;
         };
         if self.is_running_query
-            || self.driver.is_none()
+            || self.tab_session(self.active_tab).driver.is_none()
             || !tab.fetch.has_more
             || tab.grid.pager.is_none()
         {
@@ -546,8 +540,8 @@ impl Workspace {
     }
 
     fn start_query(&mut self, sql: String, paged: bool, append: bool, cx: &mut Context<Self>) {
-        let Some(ref driver) = self.driver else {
-            self.show_connection_modal = true;
+        let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
+            self.form.show_connection_modal = true;
             cx.notify();
             return;
         };
@@ -574,7 +568,7 @@ impl Workspace {
         cx.notify();
 
         let (event_tx, event_rx) = flume::unbounded();
-        let driver = Arc::clone(driver);
+        let driver = Arc::clone(&driver);
         db_wire::get_runtime().spawn(async move {
             // Failures are reported through StreamEvent::Error
             let _ = driver.execute_streaming(&sql, event_tx).await;
@@ -635,7 +629,7 @@ impl Workspace {
     }
 
     pub fn cancel_running_query(&mut self, cx: &mut Context<Self>) {
-        let Some(ref driver) = self.driver else {
+        let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
             return;
         };
         if !self.is_running_query || self.cancel_requested {
@@ -645,7 +639,7 @@ impl Workspace {
         self.cancel_requested = true;
         cx.notify();
 
-        let driver = Arc::clone(driver);
+        let driver = Arc::clone(&driver);
         let generation = self.query_generation;
         cx.spawn(async move |this, cx| {
             let result =
@@ -669,9 +663,9 @@ impl Workspace {
     pub fn open_sql_script(&mut self, conn_id: Option<&str>, cx: &mut Context<Self>) {
         let Some(conn_id) = conn_id
             .map(str::to_string)
-            .or_else(|| self.active_connection_id.clone())
+            .or_else(|| self.connections.active_connection_id.clone())
         else {
-            self.show_connection_modal = true;
+            self.form.show_connection_modal = true;
             return;
         };
         let script = match self.script_store.most_recent(&conn_id) {
@@ -718,7 +712,7 @@ impl Workspace {
                 script,
                 &text,
                 self.theme.clone(),
-                self.schema_cache.clone(),
+                self.tab_session(self.active_tab).schema_cache.clone(),
             ));
             self.active_tab = self.tabs.len() - 1;
         }
@@ -736,7 +730,9 @@ impl Workspace {
         else {
             return;
         };
-        if self.active_connection_id.as_deref() != Some(conn_id.as_str()) || !self.is_connected {
+        if self.connections.active_connection_id.as_deref() != Some(conn_id.as_str())
+            || !self.connections.active().is_connected
+        {
             self.connect_saved_by_id(&conn_id, cx);
         }
     }

@@ -97,7 +97,8 @@ impl Workspace {
             tab.schema_name.clone().unwrap_or_default(),
             tab.table_name.clone().unwrap_or_default(),
         );
-        self.table_columns
+        self.tab_session(self.active_tab)
+            .table_columns
             .get(&key)
             .map(|cols| cols.iter().map(|c| (c.name.clone(), c.data_type)).collect())
             .unwrap_or_default()
@@ -166,7 +167,7 @@ impl Workspace {
         let Some((name, _)) = suggest.items.get(index) else {
             return;
         };
-        let quoted = quote_ident(self.selected_driver_kind, name);
+        let quoted = quote_ident(self.tab_provider(self.active_tab), name);
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };

@@ -30,9 +30,10 @@ impl Workspace {
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("w")
         {
-            if self.show_connection_modal {
-                self.show_connection_modal = false;
-                self.field_anchor = None;
+            if self.form.show_connection_modal {
+                self.form.invalidate();
+                self.form.show_connection_modal = false;
+                self.form.field_anchor = None;
             } else if !self.tabs.is_empty() {
                 self.close_tab(self.active_tab);
             }
@@ -65,7 +66,7 @@ impl Workspace {
         // Cmd+] (macOS) / Ctrl+] opens a new SQL script, as in DBeaver
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key == "]"
-            && !self.show_connection_modal
+            && !self.form.show_connection_modal
         {
             self.open_sql_script(None, cx);
             cx.notify();
@@ -88,10 +89,11 @@ impl Workspace {
             return;
         }
 
-        if self.show_connection_modal {
+        if self.form.show_connection_modal {
             if event.keystroke.key == "escape" {
-                self.show_connection_modal = false;
-                self.field_anchor = None;
+                self.form.invalidate();
+                self.form.show_connection_modal = false;
+                self.form.field_anchor = None;
                 cx.notify();
                 return;
             }
@@ -100,32 +102,33 @@ impl Workspace {
                 return;
             }
             if event.keystroke.key == "tab" {
-                self.field_anchor = None;
-                self.field_cursor = usize::MAX;
+                self.form.field_anchor = None;
+                self.form.field_cursor = usize::MAX;
                 self.cursor_visible = true;
-                self.active_field = match (self.selected_driver_kind, self.active_field) {
-                    (DbDriverKind::Sqlite, None) => Some(FormField::Name),
-                    (DbDriverKind::Sqlite, Some(FormField::Name)) => Some(FormField::Database),
-                    (DbDriverKind::Sqlite, Some(FormField::Database)) => Some(FormField::Name),
-                    (DbDriverKind::Sqlite, _) => Some(FormField::Database),
-                    (_, None) => Some(FormField::Name),
-                    (_, Some(FormField::Name)) => Some(FormField::Host),
-                    (_, Some(FormField::Host)) => Some(FormField::Port),
-                    (_, Some(FormField::Port)) => Some(FormField::Database),
-                    (_, Some(FormField::Database)) => Some(FormField::User),
-                    (_, Some(FormField::User)) => Some(FormField::Password),
-                    (_, Some(FormField::Password)) if self.form_tls_enabled => {
-                        Some(FormField::TlsCa)
-                    }
-                    (_, Some(FormField::Password | FormField::TlsCa)) => Some(FormField::Name),
-                };
+                self.form.active_field =
+                    match (self.form.selected_driver_kind, self.form.active_field) {
+                        (DbDriverKind::Sqlite, None) => Some(FormField::Name),
+                        (DbDriverKind::Sqlite, Some(FormField::Name)) => Some(FormField::Database),
+                        (DbDriverKind::Sqlite, Some(FormField::Database)) => Some(FormField::Name),
+                        (DbDriverKind::Sqlite, _) => Some(FormField::Database),
+                        (_, None) => Some(FormField::Name),
+                        (_, Some(FormField::Name)) => Some(FormField::Host),
+                        (_, Some(FormField::Host)) => Some(FormField::Port),
+                        (_, Some(FormField::Port)) => Some(FormField::Database),
+                        (_, Some(FormField::Database)) => Some(FormField::User),
+                        (_, Some(FormField::User)) => Some(FormField::Password),
+                        (_, Some(FormField::Password)) if self.form.form_tls_enabled => {
+                            Some(FormField::TlsCa)
+                        }
+                        (_, Some(FormField::Password | FormField::TlsCa)) => Some(FormField::Name),
+                    };
                 cx.notify();
                 return;
             }
-            if let Some(field) = self.active_field {
-                let mut caret = self.field_cursor;
-                let mut anchor = self.field_anchor;
-                let mut history = self.form_history.remove(&field).unwrap_or_default();
+            if let Some(field) = self.form.active_field {
+                let mut caret = self.form.field_cursor;
+                let mut anchor = self.form.field_anchor;
+                let mut history = self.form.form_history.remove(&field).unwrap_or_default();
                 let input = LineInput {
                     text: self.field_value_mut(field),
                     caret: &mut caret,
@@ -134,10 +137,10 @@ impl Workspace {
                     history: &mut history,
                 };
                 let consumed = handle_line_key(input, &event.keystroke, cx);
-                self.form_history.insert(field, history);
+                self.form.form_history.insert(field, history);
                 if consumed {
-                    self.field_cursor = caret;
-                    self.field_anchor = anchor;
+                    self.form.field_cursor = caret;
+                    self.form.field_anchor = anchor;
                     self.cursor_visible = true;
                     cx.notify();
                 }
@@ -217,7 +220,7 @@ impl Workspace {
             } else if tab.is_script() && tab.editor_focused {
                 let cmd = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
                 tab.editor.identifier_quote = if matches!(
-                    self.selected_driver_kind,
+                    self.form.selected_driver_kind,
                     DbDriverKind::MySql | DbDriverKind::MariaDb
                 ) {
                     '`'

@@ -1,7 +1,4 @@
-use db_wire::{
-    ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary,
-    create_driver,
-};
+use db_wire::{ColumnMeta, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary, create_driver};
 use gpui::*;
 use mem_engine::DataType;
 use sql_intel::SchemaCache;
@@ -13,8 +10,11 @@ use ui_grid::VirtualDataGrid;
 
 mod about_dialog;
 mod column_menu;
+mod connection_config;
 mod connection_dialog;
+mod connection_state;
 mod connections;
+use connection_state::{ConnectionFormState, ConnectionManager, ConnectionSession};
 mod data_edit;
 mod data_panel;
 mod ddl;
@@ -44,7 +44,7 @@ use crate::updater::{
     DEFAULT_REPO, ReleaseInfo, UpdateCheckResult, UpdateState, check_github_latest_release,
 };
 pub use column_menu::ColumnMenu;
-pub use connections::{LiveConnection, SavedConnection};
+pub use connection_config::SavedConnection;
 pub use ddl::generate_table_ddl;
 use ddl::render_dbeaver_col_badge;
 pub use filter_suggest::FilterSuggest;
@@ -109,13 +109,12 @@ pub enum FormField {
 }
 
 pub struct Workspace {
+    form: ConnectionFormState,
+    connections: ConnectionManager,
     pub theme: Theme,
     pub focus_handle: FocusHandle,
     pub active_tab: usize,
     pub tabs: Vec<TabState>,
-    pub driver: Option<Arc<dyn DatabaseDriver>>,
-    pub schema_cache: Arc<SchemaCache>,
-    pub tables: Vec<TableSummary>,
     pub is_running_query: bool,
     /// Incremented per query run so events from a superseded run are ignored
     pub query_generation: u64,
@@ -127,43 +126,9 @@ pub struct Workspace {
     pub script_chooser: Option<ScriptChooser>,
 
     // Real Database Connection Setup State
-    pub saved_connections: Vec<SavedConnection>,
-    pub active_connection_id: Option<String>,
     /// Open connections other than the active one, kept alive for instant switching
-    pub live_connections: HashMap<String, LiveConnection>,
-    pub editing_connection_id: Option<String>,
-    pub is_connected: bool,
-    pub is_connecting: bool,
-    pub show_connection_modal: bool,
-    pub selected_driver_kind: DbDriverKind,
-    pub form_name: String,
-    pub form_host: String,
-    pub form_port: String,
-    pub form_database: String,
-    pub form_user: String,
-    pub form_password: String,
-    pub form_use_unix_socket: bool,
-    pub form_tls_enabled: bool,
-    pub form_tls_ca_cert: String,
-    pub active_field: Option<FormField>,
     /// Undo history of each connection form field, reset whenever the form is opened
-    pub form_history: HashMap<FormField, LineHistory>,
-    pub show_password: bool,
-    pub test_result: Option<Result<String, String>>,
-
     // DBeaver-style Tree Navigator State
-    pub nav_connection_expanded: bool,
-    pub nav_databases_expanded: bool,
-    pub nav_database_expanded: bool,
-    pub nav_schemas_expanded: bool,
-    pub nav_schema_expanded: HashSet<String>,
-    pub nav_tables_expanded: HashSet<String>,
-    pub nav_table_expanded: HashSet<String>,
-    pub nav_subfolder_expanded: HashSet<String>,
-    pub selected_table_name: Option<String>,
-    pub table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
-    pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
-    pub table_indexes: HashMap<(String, String), Vec<String>>,
     pub resizing_column: Option<(usize, usize, f32, f32)>, // (tab_idx, col_idx, start_mouse_x, start_col_width)
     pub resizing_panel: Option<PanelDrag>,
     /// Live widths of the side panels, changed by dragging their splitters
@@ -174,11 +139,9 @@ pub struct Workspace {
     pub value_panel: ValuePanelState,
     pub cursor_visible: bool,
     /// Selection anchor of the active form field (see `selection_range`)
-    pub field_anchor: Option<usize>,
     /// Selection anchor of the filter bar
     pub filter_anchor: Option<usize>,
     /// Caret of the active form field, as a char index (clamped; `usize::MAX` = end)
-    pub field_cursor: usize,
     /// Caret of the filter bar, as a char index (clamped; `usize::MAX` = end)
     pub filter_cursor: usize,
     /// Column name suggestions under the filter bar, if open
@@ -213,47 +176,16 @@ impl Workspace {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let theme = Theme::dark();
         let focus_handle = cx.focus_handle();
-        let schema_cache = Arc::new(SchemaCache::new().expect("Failed to initialize SchemaCache"));
 
-        let (saved_connections, active_connection_id) = Self::load_saved_connections();
+        let (saved_connections, active_connection_id) =
+            connection_config::ConnectionRepository::new(
+                platform_hal::paths::config_dir().join("connections.json"),
+            )
+            .load_saved_connections();
         let initial_active_conn = if let Some(ref id) = active_connection_id {
             saved_connections.iter().find(|c| &c.id == id).cloned()
         } else {
             saved_connections.first().cloned()
-        };
-
-        let (
-            form_name,
-            form_driver,
-            form_host,
-            form_port,
-            form_database,
-            form_user,
-            form_password,
-            form_sock,
-        ) = if let Some(ref saved) = initial_active_conn {
-            let drv = DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
-            (
-                saved.name.clone(),
-                drv,
-                saved.host.clone(),
-                saved.port.to_string(),
-                saved.database.clone(),
-                saved.user.clone(),
-                saved.password.clone().unwrap_or_default(),
-                saved.use_unix_socket,
-            )
-        } else {
-            (
-                "".to_string(),
-                DbDriverKind::Postgres,
-                "localhost".to_string(),
-                "5432".to_string(),
-                "".to_string(),
-                "postgres".to_string(),
-                "".to_string(),
-                false,
-            )
         };
 
         let workspace = Self {
@@ -261,9 +193,6 @@ impl Workspace {
             focus_handle,
             active_tab: 0,
             tabs: Vec::new(),
-            driver: None,
-            schema_cache,
-            tables: Vec::new(),
             is_running_query: false,
             query_generation: 0,
             cancel_requested: false,
@@ -272,52 +201,6 @@ impl Workspace {
             script_chooser: None,
 
             // Connection Setup Form Defaults
-            saved_connections,
-            active_connection_id,
-            editing_connection_id: None,
-            is_connected: false,
-            is_connecting: false,
-            live_connections: HashMap::new(),
-            show_connection_modal: false,
-            selected_driver_kind: form_driver,
-            form_name,
-            form_host,
-            form_port,
-            form_database,
-            form_user,
-            form_password,
-            form_use_unix_socket: form_sock,
-            form_tls_enabled: initial_active_conn.as_ref().is_some_and(|c| c.tls_enabled),
-            form_tls_ca_cert: initial_active_conn
-                .as_ref()
-                .and_then(|c| c.tls_ca_cert.clone())
-                .unwrap_or_default(),
-            active_field: Some(FormField::Name),
-            form_history: HashMap::new(),
-            show_password: false,
-            test_result: None,
-
-            // DBeaver Navigation Tree Defaults
-            nav_connection_expanded: false,
-            nav_databases_expanded: true,
-            nav_database_expanded: true,
-            nav_schemas_expanded: true,
-            nav_schema_expanded: {
-                let mut s = HashSet::new();
-                s.insert("public".to_string());
-                s
-            },
-            nav_tables_expanded: {
-                let mut s = HashSet::new();
-                s.insert("public".to_string());
-                s
-            },
-            nav_table_expanded: HashSet::new(),
-            nav_subfolder_expanded: HashSet::new(),
-            selected_table_name: None,
-            table_columns: HashMap::new(),
-            table_constraints: HashMap::new(),
-            table_indexes: HashMap::new(),
             resizing_column: None,
             resizing_panel: None,
             navigator_width: NAVIGATOR_DEFAULT_WIDTH,
@@ -326,9 +209,7 @@ impl Workspace {
             show_right_panels: false,
             value_panel: ValuePanelState::default(),
             cursor_visible: true,
-            field_anchor: None,
             filter_anchor: None,
-            field_cursor: usize::MAX,
             filter_cursor: usize::MAX,
             filter_suggest: None,
             is_fetch_size_focused: false,
@@ -344,6 +225,8 @@ impl Workspace {
             update_dialog: None,
             show_about_dialog: false,
             pending_update: None,
+            form: ConnectionFormState::from_saved(initial_active_conn.as_ref()),
+            connections: ConnectionManager::new(saved_connections, active_connection_id),
         };
 
         // Automatic background update check on app startup (throttled to once a day)
@@ -392,7 +275,7 @@ impl Render for Workspace {
         let theme = &self.theme;
         let panes = self.panes.get_or_insert_with(|| Panes::new(cx)).clone();
 
-        if self.show_connection_modal {
+        if self.form.show_connection_modal {
             window.focus(&self.focus_handle);
         }
 
@@ -496,7 +379,7 @@ impl Render for Workspace {
         }
 
         // 4. Modal Dialog: Database Connection Setup
-        if self.show_connection_modal {
+        if self.form.show_connection_modal {
             root = root.child(self.render_connection_dialog(cx));
         }
         if self.script_chooser.is_some() {
@@ -594,5 +477,20 @@ impl Workspace {
             }
         })
         .detach();
+    }
+}
+
+impl Workspace {
+    fn tab_session(&self, index: usize) -> &ConnectionSession {
+        self.tabs
+            .get(index)
+            .and_then(|t| t.connection_id.as_ref())
+            .map_or_else(
+                || self.connections.active(),
+                |id| self.connections.session(id),
+            )
+    }
+    fn tab_provider(&self, index: usize) -> DbDriverKind {
+        self.tab_session(index).kind
     }
 }

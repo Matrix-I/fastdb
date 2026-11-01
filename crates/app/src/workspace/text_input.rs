@@ -399,13 +399,13 @@ pub(super) fn render_caret_text(
 impl Workspace {
     pub(super) fn field_value_mut(&mut self, field: FormField) -> &mut String {
         match field {
-            FormField::Name => &mut self.form_name,
-            FormField::Host => &mut self.form_host,
-            FormField::Port => &mut self.form_port,
-            FormField::Database => &mut self.form_database,
-            FormField::User => &mut self.form_user,
-            FormField::Password => &mut self.form_password,
-            FormField::TlsCa => &mut self.form_tls_ca_cert,
+            FormField::Name => &mut self.form.form_name,
+            FormField::Host => &mut self.form.form_host,
+            FormField::Port => &mut self.form.form_port,
+            FormField::Database => &mut self.form.form_database,
+            FormField::User => &mut self.form.form_user,
+            FormField::Password => &mut self.form.form_password,
+            FormField::TlsCa => &mut self.form.form_tls_ca_cert,
         }
     }
 
@@ -414,14 +414,14 @@ impl Workspace {
         let workspace = cx.entity().downgrade();
         Rc::new(move |index, kind, window, cx| {
             let _ = workspace.update(cx, |this, cx| {
-                let was_active = this.active_field == Some(field);
+                let was_active = this.form.active_field == Some(field);
                 if !was_active && kind == PickKind::Drag {
                     return;
                 }
-                this.active_field = Some(field);
+                this.form.active_field = Some(field);
                 apply_pick(
-                    &mut this.field_cursor,
-                    &mut this.field_anchor,
+                    &mut this.form.field_cursor,
+                    &mut this.form.field_anchor,
                     index,
                     kind,
                     was_active,

@@ -162,7 +162,8 @@ impl Workspace {
         let theme = &theme;
         let pick = self.chooser_caret_pick(cx);
         let connection_name = |id: &str| {
-            self.saved_connections
+            self.connections
+                .saved_connections
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.name.clone())
