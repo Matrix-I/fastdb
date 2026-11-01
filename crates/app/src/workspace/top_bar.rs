@@ -9,6 +9,18 @@ impl Workspace {
         let theme = self.theme.clone();
         let theme = &theme;
         let active_tab_idx = self.active_tab;
+        let selected = self
+            .tabs
+            .get(active_tab_idx)
+            .map(|tab| (tab.id, active_tab_idx, self.tabs.len()));
+        // Reveal after activation or closure, without undoing the user's manual scrolling
+        // on unrelated workspace updates. GPUI resolves the child after layout.
+        if selected != self.revealed_tab {
+            if selected.is_some() {
+                self.tab_scroll.scroll_to_item(active_tab_idx);
+            }
+            self.revealed_tab = selected;
+        }
         #[cfg(target_os = "macos")]
         let top_bar_left_pad = 80.0;
         #[cfg(not(target_os = "macos"))]
@@ -42,16 +54,18 @@ impl Workspace {
                             .child("⚡ FastDB"),
                     ),
             )
-            // Tabs Bar: only open tables, the first one flush with the navigator edge
+            // Open table and script tabs, the first one flush with the navigator edge
             .child({
                 let mut tabs_bar = div()
+                    .id("workspace-tabs")
                     .flex()
                     .flex_1()
                     .min_w_0()
                     .items_center()
                     .gap_1()
                     .pr_2()
-                    .overflow_hidden();
+                    .overflow_x_scroll()
+                    .track_scroll(&self.tab_scroll);
                 for (i, tab) in self.tabs.iter().enumerate() {
                     let is_active = i == active_tab_idx;
                     let bg = if is_active {
@@ -89,6 +103,7 @@ impl Workspace {
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.active_tab = i;
+                                this.tab_scroll.scroll_to_item(i);
                                 this.input.is_filter_focused = false;
                                 this.activate_script_connection(cx);
                                 cx.notify();

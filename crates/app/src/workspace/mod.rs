@@ -124,6 +124,8 @@ pub struct Workspace {
     pub focus_handle: FocusHandle,
     pub active_tab: usize,
     pub tabs: Vec<TabState>,
+    tab_scroll: ScrollHandle,
+    revealed_tab: Option<(u64, usize, usize)>,
     operations: Operations,
     pub next_tab_id: u64,
     /// Saved SQL scripts, one folder per connection
@@ -184,6 +186,8 @@ impl Workspace {
             focus_handle,
             active_tab: 0,
             tabs: Vec::new(),
+            tab_scroll: ScrollHandle::new(),
+            revealed_tab: None,
             operations: Operations::default(),
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),

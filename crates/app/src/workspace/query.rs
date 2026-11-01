@@ -1,31 +1,53 @@
 use super::tab_state::QueryStatus;
 use super::*;
+
+fn table_tab_index(
+    tabs: &[TabState],
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+) -> Option<usize> {
+    tabs.iter().position(|tab| {
+        tab.connection_id.as_deref() == Some(connection_id)
+            && tab.schema_name.as_deref() == Some(schema)
+            && tab.table_name.as_deref() == Some(table)
+    })
+}
+
 impl Workspace {
-    pub fn query_table(&mut self, schema: &str, table: &str, cx: &mut Context<Self>) {
-        self.connections.navigator_mut().selected_table_name = Some(table.to_string());
-
-        let existing_tab_idx = self.tabs.iter().position(|t| {
-            t.connection_id == self.connections.active_connection_id
-                && t.table_name.as_deref() == Some(table)
-                && t.schema_name.as_deref() == Some(schema)
-        });
-
-        if let Some(idx) = existing_tab_idx {
-            self.active_tab = idx;
-        } else {
-            let id = self.allocate_tab_id();
-            self.tabs.push(TabState::table(
-                id,
-                schema,
-                table,
-                self.theme.clone(),
-                self.connections.active().schema_cache.clone(),
-            ));
-            self.tabs.last_mut().unwrap().connection_id =
-                self.connections.active_connection_id.clone();
-            self.active_tab = self.tabs.len() - 1;
+    pub fn query_table(
+        &mut self,
+        connection_id: &str,
+        schema: &str,
+        table: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.connect_saved_by_id(connection_id, cx);
+        if self.connections.active_connection_id.as_deref() == Some(connection_id) {
+            self.connections.navigator_mut().selected_table_name = Some(table.to_string());
         }
 
+        if let Some(idx) = table_tab_index(&self.tabs, connection_id, schema, table) {
+            self.active_tab = idx;
+            self.tab_scroll.scroll_to_item(idx);
+            self.input.is_filter_focused = false;
+            cx.notify();
+            return;
+        }
+
+        let id = self.allocate_tab_id();
+        let mut tab = TabState::table(
+            id,
+            schema,
+            table,
+            self.theme.clone(),
+            self.connections.session(connection_id).schema_cache.clone(),
+        );
+        tab.connection_id = Some(connection_id.to_string());
+        self.tabs.push(tab);
+        self.active_tab = self.tabs.len() - 1;
+
+        self.tab_scroll.scroll_to_item(self.active_tab);
         self.input.is_filter_focused = false;
         self.run_active_query(cx);
     }
@@ -209,5 +231,38 @@ impl Workspace {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod table_tab_tests {
+    use super::table_tab_index;
+    use crate::workspace::TabState;
+    use sql_intel::SchemaCache;
+    use std::sync::Arc;
+    use ui_core::theme::Theme;
+
+    #[test]
+    fn reopening_uses_the_tables_owner_even_with_identical_titles() {
+        let cache = Arc::new(SchemaCache::new().unwrap());
+        let tabs: Vec<_> = [("a", "public"), ("b", "public"), ("a", "archive")]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (connection, schema))| {
+                let mut tab =
+                    TabState::table(i as u64, schema, "users", Theme::dark(), cache.clone());
+                tab.connection_id = Some(connection.into());
+                tab
+            })
+            .collect();
+
+        // Repeated opens target the same tab, regardless of which other tab is active.
+        for _ in 0..3 {
+            assert_eq!(table_tab_index(&tabs, "a", "public", "users"), Some(0));
+            assert_eq!(table_tab_index(&tabs, "b", "public", "users"), Some(1));
+            assert_eq!(table_tab_index(&tabs, "a", "archive", "users"), Some(2));
+        }
+        assert_eq!(table_tab_index(&tabs, "c", "public", "users"), None);
+        assert_eq!(table_tab_index(&tabs, "a", "public", "orders"), None);
     }
 }

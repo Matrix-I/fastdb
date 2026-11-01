@@ -22,6 +22,7 @@ impl Workspace {
 
         let t_schema_for_click = table_schema.clone();
         let t_name_for_click = table_name.clone();
+        let connection_id = self.connections.active_connection_id.clone();
 
         let mut row_div = div()
             .id(ElementId::Name(item_id.into()))
@@ -37,7 +38,9 @@ impl Workspace {
             // Single click selects; double click opens the table's data.
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if event.click_count() >= 2 {
-                    this.query_table(&t_schema_for_click, &t_name_for_click, cx);
+                    if let Some(connection_id) = &connection_id {
+                        this.query_table(connection_id, &t_schema_for_click, &t_name_for_click, cx);
+                    }
                 } else {
                     this.connections.navigator_mut().selected_table_name =
                         Some(t_name_for_click.clone());

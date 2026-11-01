@@ -46,6 +46,8 @@ What exists today that these targets build on: a paged result store with an LRU 
 - Schema metadata (tables, columns, primary keys, constraints, indexes) is loaded in bulk when you connect.
 
 ### Table tabs
+- The tab strip scrolls horizontally with a mouse wheel or trackpad and brings newly opened or selected tabs into view.
+- Reopening a table in the same connection and schema selects its existing tab and preserves its results and staged edits.
 - **Data**:
   - Results **stream into the grid**: the grid appears as soon as the columns are known and grows as row batches arrive.
   - While a query runs, the execute button becomes **Cancel**. Cancellation uses the PostgreSQL cancel token, `KILL QUERY` on MySQL, and `sqlite3_interrupt` on SQLite.
