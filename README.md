@@ -34,7 +34,8 @@ What exists today that these targets build on: a paged result store with an LRU 
 ## ✅ What works today
 
 ### Connections
-- **PostgreSQL** (`tokio-postgres`), **MySQL / MariaDB** (`mysql_async`) and **SQLite** (`rusqlite`, bundled).
+- **PostgreSQL** (`tokio-postgres`), **MySQL / MariaDB** (`mysql_async`) and **SQLite** (`rusqlite`, bundled). MariaDB has its own provider preset, saved identity and MySQL-compatible SQL handling.
+- The connection dialog also lists **Db2 for LUW**, **Oracle** and **SQL Server** as **Coming soon**; these providers cannot be selected until their drivers are implemented.
 - TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
 - Saved connections with create / edit / delete / test, plus quick presets per driver.
 - **TLS for PostgreSQL and MySQL**: enable TLS in the connection dialog to require encryption and verify the server certificate and hostname. Leave the root CA path empty for system trust, or supply a PEM/DER root CA certificate for a private CA. TLS uses TCP even when Unix socket discovery is enabled. Existing connections default to TLS disabled.
@@ -269,6 +270,9 @@ Packaging scripts live in [`ci/`](ci/):
 - [ ] Export to CSV / SQL from the UI
 - [ ] Real table statistics and metadata in Properties
 - [x] TLS for PostgreSQL and MySQL with certificate/hostname verification and optional root CA
+- [x] Provider picker with PostgreSQL, Db2 for LUW, MariaDB, MySQL, Oracle, SQL Server and SQLite
+- [x] MariaDB provider preset using the MySQL-compatible driver
+- [ ] Db2 for LUW, Oracle and SQL Server drivers (currently listed as Coming soon)
 - [ ] SSH bastion / jump host tunneling
 - [ ] Benchmarks for the goals above
 - [ ] Visual query plan (`EXPLAIN ANALYZE`) viewer

@@ -248,7 +248,7 @@ impl Workspace {
     pub fn build_current_config(&self) -> ConnectionConfig {
         let port: u16 = self.form_port.parse().unwrap_or(match self.selected_driver_kind {
             DbDriverKind::Postgres => 5432,
-            DbDriverKind::MySql => 3306,
+            DbDriverKind::MySql | DbDriverKind::MariaDb => 3306,
             DbDriverKind::Sqlite => 0,
         });
 
@@ -404,6 +404,7 @@ impl Workspace {
                             driver: match config.driver {
                                 DbDriverKind::Postgres => "Postgres".to_string(),
                                 DbDriverKind::MySql => "MySql".to_string(),
+                                DbDriverKind::MariaDb => "MariaDb".to_string(),
                                 DbDriverKind::Sqlite => "Sqlite".to_string(),
                             },
                             host: config.host.clone(),
@@ -691,6 +692,7 @@ impl Workspace {
         if let Some(saved) = target_conn {
             self.selected_driver_kind = match saved.driver.as_str() {
                 "MySql" => DbDriverKind::MySql,
+                "MariaDb" => DbDriverKind::MariaDb,
                 "Sqlite" => DbDriverKind::Sqlite,
                 _ => DbDriverKind::Postgres,
             };
@@ -745,6 +747,7 @@ impl Workspace {
 
         self.selected_driver_kind = match saved.driver.as_str() {
             "MySql" => DbDriverKind::MySql,
+            "MariaDb" => DbDriverKind::MariaDb,
             "Sqlite" => DbDriverKind::Sqlite,
             _ => DbDriverKind::Postgres,
         };
@@ -805,6 +808,7 @@ impl Workspace {
             driver: match config.driver {
                 DbDriverKind::Postgres => "Postgres".to_string(),
                 DbDriverKind::MySql => "MySql".to_string(),
+                DbDriverKind::MariaDb => "MariaDb".to_string(),
                 DbDriverKind::Sqlite => "Sqlite".to_string(),
             },
             host: config.host.clone(),
@@ -857,6 +861,11 @@ impl Workspace {
         self.test_result = None;
     }
 
+    pub fn select_preset_mariadb(&mut self) {
+        self.select_preset_mysql();
+        self.selected_driver_kind = DbDriverKind::MariaDb;
+    }
+
     pub fn select_preset_sqlite(&mut self) {
         self.selected_driver_kind = DbDriverKind::Sqlite;
         self.form_host = "localhost".to_string();
@@ -876,6 +885,17 @@ impl Workspace {
 #[cfg(test)]
 mod tls_tests {
     use super::Workspace;
+
+    #[test]
+    fn mariadb_provider_identity_survives_save_and_reload() {
+        let input = r#"{"connections":[{"id":"maria","driver":"MariaDb","host":"localhost","port":3306,"database":"app"}]}"#;
+        let (connections, _) = Workspace::load_saved_connections_from_str(input);
+        let saved = Workspace::serialize_connections_config(&connections, Some("maria"));
+        let (loaded, active) = Workspace::load_saved_connections_from_str(&saved);
+        assert_eq!(loaded[0].driver, "MariaDb");
+        assert_eq!(loaded[0].port, 3306);
+        assert_eq!(active.as_deref(), Some("maria"));
+    }
 
     #[test]
     fn saved_tls_settings_round_trip_and_legacy_defaults_to_disabled() {

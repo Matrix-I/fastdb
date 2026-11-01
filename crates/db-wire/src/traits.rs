@@ -8,6 +8,7 @@ pub use mem_engine::{ColumnMeta, DataType, QueryResultPager};
 pub enum DbDriverKind {
     Postgres,
     MySql,
+    MariaDb,
     Sqlite,
 }
 

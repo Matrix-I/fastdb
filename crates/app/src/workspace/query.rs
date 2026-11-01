@@ -145,7 +145,7 @@ pub fn script_fetch_query(tab: &TabState, offset: u64) -> (String, bool) {
 /// Column name quoted for the driver's SQL dialect
 pub(super) fn quote_ident(kind: DbDriverKind, name: &str) -> String {
     match kind {
-        DbDriverKind::MySql => format!("`{}`", name.replace('`', "``")),
+        DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`", name.replace('`', "``")),
         DbDriverKind::Postgres | DbDriverKind::Sqlite => format!("\"{}\"", name.replace('"', "\"\"")),
     }
 }
@@ -351,7 +351,7 @@ impl Workspace {
 
         let target = match self.selected_driver_kind {
             DbDriverKind::Postgres => format!("\"{}\".\"{}\"", schema, table),
-            DbDriverKind::MySql => format!("`{}`.`{}`", schema, table),
+            DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`.`{}`", schema, table),
             DbDriverKind::Sqlite => format!("\"{}\"", table),
         };
 
@@ -641,5 +641,16 @@ impl Workspace {
         if index < self.tabs.len() {
             self.close_tabs_where(index, |i| i != index);
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::quote_ident;
+    use db_wire::DbDriverKind;
+
+    #[test]
+    fn mariadb_uses_mysql_identifier_quoting() {
+        assert_eq!(quote_ident(DbDriverKind::MariaDb, "user`name"), "`user``name`");
     }
 }

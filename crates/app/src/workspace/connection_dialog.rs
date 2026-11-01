@@ -45,12 +45,52 @@ impl Workspace {
             .into_any_element()
     }
 
+    fn render_provider_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let mut providers = div().flex().flex_wrap().gap_2();
+        for (label, icon, kind) in [
+            ("PostgreSQL", "icons/postgresql.png", Some(DbDriverKind::Postgres)),
+            ("Db2 for LUW", "icons/database.svg", None),
+            ("MariaDB", "icons/database.svg", Some(DbDriverKind::MariaDb)),
+            ("MySQL", "icons/mysql.png", Some(DbDriverKind::MySql)),
+            ("Oracle", "icons/database.svg", None),
+            ("SQL Server", "icons/database.svg", None),
+            ("SQLite", "icons/sqlite.png", Some(DbDriverKind::Sqlite)),
+        ] {
+            let selected = kind == Some(self.selected_driver_kind);
+            let mut tile = div().id(label).flex().items_center().gap_2()
+                .w(px(150.0)).px_3().py_2().rounded_md().border_1()
+                .bg(if selected { theme.bg_surface_selected } else { theme.bg_app })
+                .border_color(if selected { theme.text_accent } else { theme.border })
+                .text_color(if kind.is_some() { theme.text_primary } else { theme.text_muted })
+                .child(img(icon).w(px(24.0)).h(px(24.0)))
+                .child(
+                    div().flex().flex_col().gap_0p5().text_size(px(12.0))
+                        .child(label)
+                        .when(kind.is_none(), |d| d.child(
+                            div().text_size(px(10.0)).text_color(theme.text_muted).child("Coming soon")
+                        ))
+                );
+            if let Some(kind) = kind {
+                tile = tile.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+                    match kind {
+                        DbDriverKind::Postgres => this.select_preset_postgres(),
+                        DbDriverKind::MySql => this.select_preset_mysql(),
+                        DbDriverKind::MariaDb => this.select_preset_mariadb(),
+                        DbDriverKind::Sqlite => this.select_preset_sqlite(),
+                    }
+                    cx.notify();
+                }));
+            }
+            providers = providers.child(tile);
+        }
+        providers.into_any_element()
+    }
+
     /// Modal dialog for creating, editing and testing a database connection
     pub(super) fn render_connection_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme.clone();
         let theme = &theme;
-        let is_pg = self.selected_driver_kind == DbDriverKind::Postgres;
-        let is_mysql = self.selected_driver_kind == DbDriverKind::MySql;
         let is_sqlite = self.selected_driver_kind == DbDriverKind::Sqlite;
 
         let is_name_active = self.active_field == Some(FormField::Name);
@@ -69,7 +109,7 @@ impl Workspace {
             .justify_center()
             .child(
                 div()
-                    .w(px(540.0))
+                    .w(px(680.0))
                     .bg(theme.bg_surface)
                     .border_1()
                     .border_color(theme.border_focused)
@@ -121,94 +161,7 @@ impl Workspace {
                                     .child("✕")
                             )
                     )
-                    // Driver Selection Tabs
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id("btn-select-driver-pg")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .bg(if is_pg { theme.bg_surface_selected } else { theme.bg_app })
-                                    .border_1()
-                                    .border_color(if is_pg { theme.text_accent } else { theme.border })
-                                    .text_size(px(12.0))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.select_preset_postgres();
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1p5()
-                                            .child(img("icons/postgresql.png").w(px(16.0)).h(px(16.0)))
-                                            .child("PostgreSQL")
-                                    )
-                            )
-                            .child(
-                                div()
-                                    .id("btn-select-driver-mysql")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .bg(if is_mysql { theme.bg_surface_selected } else { theme.bg_app })
-                                    .border_1()
-                                    .border_color(if is_mysql { theme.text_accent } else { theme.border })
-                                    .text_size(px(12.0))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.select_preset_mysql();
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1p5()
-                                            .child(img("icons/mysql.png").w(px(16.0)).h(px(16.0)))
-                                            .child("MySQL")
-                                    )
-                            )
-                            .child(
-                                div()
-                                    .id("btn-select-driver-sqlite")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .bg(if is_sqlite { theme.bg_surface_selected } else { theme.bg_app })
-                                    .border_1()
-                                    .border_color(if is_sqlite { theme.text_accent } else { theme.border })
-                                    .text_size(px(12.0))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.select_preset_sqlite();
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1p5()
-                                            .child(img("icons/sqlite.png").w(px(16.0)).h(px(16.0)))
-                                            .child("SQLite")
-                                    )
-                            )
-                    )
+                    .child(self.render_provider_picker(cx))
                     // Form Input Fields
                     .child(
                         div()

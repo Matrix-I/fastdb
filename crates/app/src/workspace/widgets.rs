@@ -35,6 +35,7 @@ pub(super) fn render_field_content(
 pub(super) fn dbeaver_driver_icon(driver: &str, is_connected: bool) -> Div {
     let icon_path = match driver {
         "MySql" | "mysql" => "icons/mysql.png",
+        "MariaDb" | "mariadb" => "icons/database.svg",
         "Sqlite" | "sqlite" => "icons/sqlite.png",
         _ => "icons/postgresql.png",
     };

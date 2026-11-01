@@ -196,7 +196,7 @@ impl Workspace {
         };
 
         let dialect = match self.selected_driver_kind {
-            DbDriverKind::MySql => SqlDialect::MySql,
+            DbDriverKind::MySql | DbDriverKind::MariaDb => SqlDialect::MySql,
             _ => SqlDialect::Ansi,
         };
         let target = match self.selected_driver_kind {

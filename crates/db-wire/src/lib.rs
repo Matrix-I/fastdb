@@ -52,7 +52,7 @@ where
 pub fn create_driver(config: ConnectionConfig) -> Result<Arc<dyn DatabaseDriver>> {
     match config.driver {
         DbDriverKind::Postgres => Ok(Arc::new(PostgresDriver::new(config))),
-        DbDriverKind::MySql => Ok(Arc::new(MySqlDriver::new(config))),
+        DbDriverKind::MySql | DbDriverKind::MariaDb => Ok(Arc::new(MySqlDriver::new(config))),
         DbDriverKind::Sqlite => Ok(Arc::new(SqliteDriver::new(config)?)),
     }
 }

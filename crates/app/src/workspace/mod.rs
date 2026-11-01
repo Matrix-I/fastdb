@@ -219,6 +219,7 @@ impl Workspace {
             if let Some(ref saved) = initial_active_conn {
                 let drv = match saved.driver.as_str() {
                     "MySql" => DbDriverKind::MySql,
+                    "MariaDb" => DbDriverKind::MariaDb,
                     "Sqlite" => DbDriverKind::Sqlite,
                     _ => DbDriverKind::Postgres,
                 };
