@@ -30,57 +30,32 @@ impl Workspace {
             .child(
                 div()
                     .id("about-card")
-                    .w(px(400.0))
+                    .w(px(460.0))
                     .p_6()
+                    .py_8()
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap_3()
-                    .bg(theme.bg_surface)
+                    .gap_4()
+                    .bg(rgb(0x242424))
                     .text_color(theme.text_primary)
                     .border_1()
                     .border_color(theme.border)
                     .rounded_lg()
                     .shadow_lg()
                     .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(img(icon.clone()).size(px(80.0)))
+                    .child(img(icon.clone()).size(px(104.0)))
                     .child(
                         div()
-                            .text_size(px(24.0))
+                            .mt_2()
+                            .text_size(px(28.0))
                             .font_weight(FontWeight::BOLD)
                             .child("FastDB"),
                     )
-                    .child(
-                        div()
-                            .text_size(px(13.0))
-                            .text_color(theme.text_secondary)
-                            .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
-                    )
-                    .child(
-                        div()
-                            .text_center()
-                            .text_size(px(13.0))
-                            .child("A native database client built with Rust and GPUI."),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme.text_muted)
-                            .child(format!("Licensed under {}", env!("CARGO_PKG_LICENSE"))),
-                    )
-                    .child(
-                        div()
-                            .id("about-github")
-                            .text_size(px(13.0))
-                            .text_color(theme.text_accent)
-                            .cursor_pointer()
-                            .hover(|s| s.underline())
-                            .on_click(|_, _, cx| {
-                                cx.stop_propagation();
-                                cx.open_url("https://github.com/Matrix-I/fastdb");
-                            })
-                            .child("GitHub"),
-                    )
+                    .child(div().text_size(px(20.0)).child(format!(
+                        "Version {version} ({version})",
+                        version = env!("CARGO_PKG_VERSION")
+                    )))
                     .child(
                         div()
                             .id("about-close")

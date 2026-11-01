@@ -78,6 +78,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 - Spill files go to `/var/tmp/fastdb` on Linux, to avoid a RAM-backed `/tmp`, and to `$TMPDIR/fastdb` on macOS.
 
 ### Software updates
+- **About FastDB**: Open the application menu's About dialog to view the app icon, name and version; close it with **Close**, `Esc` or `Cmd/Ctrl + W`.
 - **In-app update checks**: Queries GitHub Releases for new FastDB versions and compares semantic versioning.
 - **Automatic startup check**: Throttled background check runs silently once every 24 hours on app launch.
 - **Manual check via menu**: Check anytime via the application menu `FastDB -> Check for Updates...`.

@@ -12,17 +12,23 @@ use ui_core::actions::{About, CheckForUpdates, Quit};
 use workspace::Workspace;
 
 fn about(_: &About, cx: &mut App) {
-    for handle in cx.windows() {
-        if let Some(handle) = handle.downcast::<Workspace>() {
-            let _ = handle.update(cx, |workspace, window, cx| {
-                window.activate_window();
-                window.focus(&workspace.focus_handle);
-                workspace.show_about_dialog = true;
-                cx.notify();
-            });
-            break;
+    // Menu actions run while the active window is borrowed for dispatch.
+    // Defer the update until that borrow has been released.
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                if let Err(error) = handle.update(cx, |workspace, window, cx| {
+                    window.activate_window();
+                    window.focus(&workspace.focus_handle);
+                    workspace.show_about_dialog = true;
+                    cx.notify();
+                }) {
+                    tracing::warn!("Failed to open About dialog: {error}");
+                }
+                break;
+            }
         }
-    }
+    });
 }
 
 fn quit(_: &Quit, cx: &mut App) {
