@@ -60,6 +60,10 @@ EOF
 # Copy the app icon (UI icons are embedded in the binary)
 cp "$WORKSPACE_ROOT/resources/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/$APP_NAME.icns"
 
+# Sign the bundle with ad-hoc signature
+echo "Ad-hoc signing .app bundle..."
+codesign --force --deep --sign - "$APP_BUNDLE"
+
 # Create .dmg if hdiutil is available
 if command -v hdiutil &> /dev/null; then
     DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION-arm64.dmg"

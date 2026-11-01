@@ -45,6 +45,21 @@ pub fn cache_dir() -> PathBuf {
     }
 }
 
+/// Returns the directory used for downloaded update archives and installers
+pub fn updates_dir() -> PathBuf {
+    cache_dir().join("updates")
+}
+
+/// Returns the user's Downloads directory (fallback to $HOME/Downloads)
+pub fn downloads_dir() -> PathBuf {
+    if let Some(dirs) = directories::UserDirs::new() {
+        if let Some(download) = dirs.download_dir() {
+            return download.to_path_buf();
+        }
+    }
+    dirs_fallback_home().join("Downloads")
+}
+
 /// Returns the spill-to-disk directory.
 ///
 /// CRITICAL:
@@ -133,5 +148,14 @@ mod tests {
         let spill_file = temp_dir.path().join("test.spill");
         fs::write(&spill_file, b"test").unwrap();
         assert!(spill_file.exists());
+    }
+
+    #[test]
+    fn test_updates_and_downloads_dir() {
+        let u_dir = updates_dir();
+        assert!(u_dir.ends_with("updates"));
+
+        let d_dir = downloads_dir();
+        assert!(!d_dir.as_os_str().is_empty());
     }
 }

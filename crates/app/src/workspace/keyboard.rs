@@ -29,6 +29,23 @@ impl Workspace {
             return;
         }
 
+        if self.update_dialog.is_some() {
+            if event.keystroke.key == "escape" {
+                let is_downloading = match self.update_dialog.as_ref().map(|d| &d.status) {
+                    Some(UpdateDialogStatus::UpdateAvailable {
+                        download: DownloadUiState::Downloading { .. },
+                        ..
+                    }) => true,
+                    _ => false,
+                };
+                if !is_downloading {
+                    self.close_update_dialog();
+                    cx.notify();
+                }
+            }
+            return;
+        }
+
         if self.script_chooser.is_some() {
             self.handle_script_chooser_key(&event.keystroke, cx);
             return;

@@ -72,6 +72,13 @@ What exists today that these targets build on: a paged result store with an LRU 
 - The page currently being filled is shared copy-on-write, so reading it does not copy 64 KB per cell.
 - Spill files go to `/var/tmp/fastdb` on Linux, to avoid a RAM-backed `/tmp`, and to `$TMPDIR/fastdb` on macOS.
 
+### Software updates
+- **In-app update checks**: Queries GitHub Releases for new FastDB versions and compares semantic versioning.
+- **Automatic startup check**: Throttled background check runs silently once every 24 hours on app launch.
+- **Manual check via menu**: Check anytime via the application menu `FastDB -> Check for Updates...`.
+- **In-app download & progress**: View markdown release notes directly in a native modal, download update packages with real-time progress bars, and launch the installer (.dmg on macOS, packages on Linux).
+- **Top bar indicator badge**: When a new release is available, a subtle notification pill appears in the window top bar for 1-click access.
+
 ### Keyboard shortcuts
 
 | macOS | Linux | Action |

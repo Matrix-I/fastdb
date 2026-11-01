@@ -1,3 +1,4 @@
+use gpui::prelude::FluentBuilder;
 use super::*;
 
 pub(super) const TOP_BAR_HEIGHT: f32 = 38.0;
@@ -122,6 +123,36 @@ impl Workspace {
                         }))
                         .child(img("icons/sql_script.svg").w(px(12.0)).h(px(12.0)))
                         .child("+ SQL")
+                )
+            })
+            // Update notification badge shown when a new release is available
+            .when_some(self.pending_update.clone(), |el, info| {
+                let info_for_click = info.clone();
+                let tag = info.tag_name.clone();
+                el.child(
+                    div()
+                        .id("btn-topbar-update-badge")
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap_1p5()
+                        .mr_3()
+                        .px_2p5()
+                        .py_1()
+                        .rounded_md()
+                        .bg(rgb(0x1f6feb))
+                        .text_color(rgb(0xffffff))
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::BOLD)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(0x388bfd)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.update_dialog =
+                                Some(UpdateDialog::update_available(info_for_click.clone(), true));
+                            cx.notify();
+                        }))
+                        .child(div().child("⚡"))
+                        .child(format!("Update ({})", tag)),
                 )
             })
     }

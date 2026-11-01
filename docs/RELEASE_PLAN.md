@@ -93,4 +93,5 @@ Intel Macs are out of scope for v0.1.0; a universal binary (`lipo` over `x86_64-
 
 - Developer ID signing and notarization (`notarytool`), which also fixes the keychain re-prompt and removes the `xattr` step. Requires an Apple Developer account.
 - Build macOS in `release.yml` once signing secrets exist.
-- Homebrew cask and an in-app update check.
+- [x] In-app auto-update checker and installer downloader (GitHub Releases API).
+- Homebrew cask.

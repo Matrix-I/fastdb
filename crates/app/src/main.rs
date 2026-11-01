@@ -6,13 +6,27 @@ use tracing::info;
 
 mod workspace;
 mod assets;
+pub mod updater;
 use workspace::Workspace;
 use assets::FastDbAssetSource;
-use ui_core::actions::Quit;
+use ui_core::actions::{CheckForUpdates, Quit};
 
 fn quit(_: &Quit, cx: &mut App) {
     info!("Closing FastDB via Quit action");
     cx.quit();
+}
+
+fn check_for_updates(_: &CheckForUpdates, cx: &mut App) {
+    info!("Triggering Check for Updates from App menu");
+    for handle in cx.windows() {
+        if let Some(handle) = handle.downcast::<Workspace>() {
+            let _ = handle.update(cx, |workspace, window, cx| {
+                window.activate_window();
+                window.focus(&workspace.focus_handle);
+                workspace.trigger_update_check(true, cx);
+            });
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -35,6 +49,7 @@ fn main() -> Result<()> {
     app.run(|cx: &mut App| {
         cx.activate(true);
         cx.on_action(quit);
+        cx.on_action(check_for_updates);
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("ctrl-q", Quit, None),
@@ -42,6 +57,8 @@ fn main() -> Result<()> {
         cx.set_menus(vec![Menu {
             name: "FastDB".into(),
             items: vec![
+                MenuItem::action("Check for Updates...", CheckForUpdates),
+                MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
                 MenuItem::action("Quit FastDB", Quit),

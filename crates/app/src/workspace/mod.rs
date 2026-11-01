@@ -31,6 +31,7 @@ mod tab_context_menu;
 mod table_view;
 mod text_input;
 mod top_bar;
+mod update_dialog;
 mod value_format;
 mod value_panel;
 mod widgets;
@@ -43,6 +44,11 @@ pub use script_store::{filter_scripts, ScriptFile, ScriptStore};
 pub use connections::{LiveConnection, SavedConnection};
 pub use nav_context_menu::NavContextMenu;
 pub use tab_context_menu::TabContextMenu;
+pub use update_dialog::{DownloadUiState, UpdateDialog, UpdateDialogStatus};
+use crate::updater::{
+    check_github_latest_release, ReleaseInfo, UpdateCheckResult, UpdateState, DEFAULT_REPO,
+};
+use ui_core::actions::CheckForUpdates;
 pub use ddl::generate_table_ddl;
 pub use query::{group_thousands, TabState};
 #[cfg(test)]
@@ -183,6 +189,14 @@ pub struct Workspace {
     pub column_menu: Option<ColumnMenu>,
     /// Cached views of the window regions, created on the first render
     pub panes: Option<Panes>,
+    /// HTTP client for checking updates and downloading assets
+    pub http_client: reqwest::Client,
+    /// Preferences and cached timestamp for update checks
+    pub update_state: UpdateState,
+    /// Active Software Update modal dialog, if open
+    pub update_dialog: Option<UpdateDialog>,
+    /// Discovered update info waiting to be applied/viewed
+    pub pending_update: Option<ReleaseInfo>,
 }
 
 impl Workspace {
@@ -306,7 +320,29 @@ impl Workspace {
             tab_context_menu: None,
             column_menu: None,
             panes: None,
+            http_client: reqwest::Client::new(),
+            update_state: UpdateState::load(),
+            update_dialog: None,
+            pending_update: None,
         };
+
+        // Automatic background update check on app startup (throttled to once a day)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if workspace.update_state.is_time_for_auto_check(now) {
+            cx.spawn(async move |this, cx| {
+                // Wait 3 seconds so main window is displayed first
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(3))
+                    .await;
+                let _ = this.update(cx, |workspace, cx| {
+                    workspace.trigger_update_check(false, cx);
+                });
+            })
+            .detach();
+        }
 
         cx.spawn(async move |this, cx| {
             loop {
@@ -335,12 +371,16 @@ impl Render for Workspace {
         }
 
         let mut root = div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             .bg(theme.bg_app)
             .text_color(theme.text_primary)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| {
+                this.trigger_update_check(true, cx);
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 this.handle_key_down(event, cx);
             }));
@@ -422,7 +462,97 @@ impl Render for Workspace {
         if self.script_chooser.is_some() {
             root = root.child(self.render_script_chooser(cx));
         }
+        if self.update_dialog.is_some() {
+            root = root.child(self.render_update_dialog(cx));
+        }
 
         root
+    }
+}
+
+impl Workspace {
+    /// Triggers checking GitHub for a new release
+    pub fn trigger_update_check(&mut self, is_manual: bool, cx: &mut Context<Self>) {
+        self.update_state.record_check_now();
+        if is_manual {
+            self.update_dialog = Some(UpdateDialog::checking(true));
+            cx.notify();
+        }
+
+        let http_client = self.http_client.clone();
+        let state = self.update_state.clone();
+        let repo = DEFAULT_REPO.to_string();
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        let (tx, rx) = flume::bounded::<UpdateCheckResult>(1);
+
+        let executor = cx.background_executor().clone();
+        cx.background_executor()
+            .spawn(async move {
+                let start = std::time::Instant::now();
+                let res = match check_github_latest_release(
+                    &http_client,
+                    &repo,
+                    &current_version,
+                    &state,
+                    is_manual,
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(e) => UpdateCheckResult::Error(e.to_string()),
+                };
+
+                // Keep dialog in loading state for at least 800ms so the user sees the check in progress
+                if is_manual {
+                    let elapsed = start.elapsed();
+                    let min_dur = std::time::Duration::from_millis(800);
+                    if elapsed < min_dur {
+                        executor.timer(min_dur - elapsed).await;
+                    }
+                }
+
+                let _ = tx.send(res);
+            })
+            .detach();
+
+        cx.spawn(async move |this, cx| {
+            if let Ok(res) = rx.recv_async().await {
+                let _ = this.update(cx, |workspace, cx| {
+                    match res {
+                        UpdateCheckResult::UpdateAvailable(info) => {
+                            workspace.pending_update = Some(*info.clone());
+                            workspace.update_dialog =
+                                Some(UpdateDialog::update_available(*info, is_manual));
+                            cx.notify();
+                        }
+                        UpdateCheckResult::UpToDate { current_version } => {
+                            if is_manual {
+                                workspace.update_dialog =
+                                    Some(UpdateDialog::up_to_date(current_version, true));
+                                cx.notify();
+                            }
+                        }
+                        UpdateCheckResult::Skipped(info) => {
+                            if is_manual {
+                                workspace.pending_update = Some(*info.clone());
+                                workspace.update_dialog =
+                                    Some(UpdateDialog::update_available(*info, true));
+                                cx.notify();
+                            }
+                        }
+                        UpdateCheckResult::Error(err) => {
+                            if is_manual {
+                                workspace.update_dialog =
+                                    Some(UpdateDialog::error(err, true));
+                                cx.notify();
+                            } else {
+                                tracing::warn!("Auto update background check failed: {}", err);
+                            }
+                        }
+                    }
+                });
+            }
+        })
+        .detach();
     }
 }

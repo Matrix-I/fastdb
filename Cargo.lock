@@ -2114,18 +2114,23 @@ dependencies = [
  "chrono",
  "db-wire",
  "flume",
+ "futures",
  "gpui",
  "mem-engine",
  "platform-hal",
  "rust-embed",
+ "semver",
+ "serde",
  "serde_json",
  "sql-intel",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "ui-core",
  "ui-editor",
  "ui-grid",
+ "zed-reqwest",
 ]
 
 [[package]]

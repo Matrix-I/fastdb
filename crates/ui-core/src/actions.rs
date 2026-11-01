@@ -18,5 +18,6 @@ actions!(
         ToggleSidebar,
         ExportCsv,
         ExportSql,
+        CheckForUpdates,
     ]
 );
