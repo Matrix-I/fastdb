@@ -165,9 +165,11 @@ Final automated validation:
 - `cargo build -p fastdb-app --offline`: passed.
 - The app was launched with the isolated SQLite profile below and remained running without a startup failure. This verifies startup only, not interactive rendering or workflow correctness.
 - External database and TLS tests returned early because their environment variables were unset. The local Docker client points to a missing Podman socket, so live PostgreSQL/MySQL/ODBC/TLS validation was not available.
-- Computer Use returned `Computer Use permissions are not granted`. Interactive UI verification remains pending with the user; no claim of a completed UI smoke test is made.
+- Computer Use returned `Computer Use permissions are not granted`. The user subsequently confirmed "UI ổn" on 2026-11-01. UI acceptance is recorded from that user confirmation, not from agent-operated UI testing.
 
-### User UI verification pending
+### User UI acceptance confirmed
+
+The user accepted the UI on 2026-11-01. The scenarios below remain the regression checklist; individual scenario results were not reported separately.
 
 Disposable fixtures are in `/tmp/fastdb-refactor-smoke`: two SQLite databases with an `items` table, 300 rows each, and one script per connection. Launch the current source from the repository root:
 
@@ -175,11 +177,11 @@ Disposable fixtures are in `/tmp/fastdb-refactor-smoke`: two SQLite databases wi
 FASTDB_CONFIG_DIR=/tmp/fastdb-refactor-smoke/profile cargo run -p fastdb-app
 ```
 
-- [ ] Switch between Smoke A and Smoke B and their table/script tabs. Results, completion and unsaved edits must stay with the correct connection, including the same table name on both connections.
-- [ ] Edit a connection provider preset, then Cancel. Existing tabs must still execute with their session's provider and connection.
-- [ ] Run a long query, switch tab/connection and Cancel. The original query must be cancelled; close its tab during execution and verify the app remains responsive.
-- [ ] Exercise cell edit, undo/redo, Save and a failed Save. Failure must preserve edits and report the error in the originating tab.
-- [ ] Edit a script, then immediately Run, close its tab or Quit. Reopening must show the newest saved text; a save error must keep the tab/app open.
-- [ ] Check grid scrolling, fetch-next, column resize/auto-fit and clipboard copy; inspect Properties unavailable values and DDL preview; open/dismiss Check for Updates and inspect its checking/error/available states when reachable.
+- Switch between Smoke A and Smoke B and their table/script tabs. Results, completion and unsaved edits must stay with the correct connection, including the same table name on both connections.
+- Edit a connection provider preset, then Cancel. Existing tabs must still execute with their session's provider and connection.
+- Run a long query, switch tab/connection and Cancel. The original query must be cancelled; close its tab during execution and verify the app remains responsive.
+- Exercise cell edit, undo/redo, Save and a failed Save. Failure must preserve edits and report the error in the originating tab.
+- Edit a script, then immediately Run, close its tab or Quit. Reopening must show the newest saved text; a save error must keep the tab/app open.
+- Check grid scrolling, fetch-next, column resize/auto-fit and clipboard copy; inspect Properties unavailable values and DDL preview; open/dismiss Check for Updates and inspect its checking/error/available states when reachable.
 
-No release, merge or push was performed. Interactive validation and configured live-provider validation are the remaining acceptance checks.
+No release, merge or push was performed. UI acceptance is complete based on the user confirmation. Configured live-provider/TLS validation remains outstanding as documented above.
