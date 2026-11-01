@@ -109,9 +109,9 @@ impl Workspace {
                 let p = if let Some(n) = item["port"].as_u64() {
                     n as u16
                 } else if let Some(s) = item["port"].as_str() {
-                    s.parse::<u16>().unwrap_or(5432)
+                    s.parse::<u16>().unwrap_or_else(|_| DbDriverKind::from_name(&drv_str).unwrap_or(DbDriverKind::Postgres).default_port())
                 } else {
-                    5432
+                    DbDriverKind::from_name(&drv_str).unwrap_or(DbDriverKind::Postgres).default_port()
                 };
                 let u = item["user"].as_str().unwrap_or("postgres").to_string();
                 let pw = item["password"].as_str().map(|s| s.to_string());
@@ -143,9 +143,9 @@ impl Workspace {
                 let p = if let Some(n) = v["port"].as_u64() {
                     n as u16
                 } else if let Some(s) = v["port"].as_str() {
-                    s.parse::<u16>().unwrap_or(5432)
+                    s.parse::<u16>().unwrap_or_else(|_| DbDriverKind::from_name(&drv_str).unwrap_or(DbDriverKind::Postgres).default_port())
                 } else {
-                    5432
+                    DbDriverKind::from_name(&drv_str).unwrap_or(DbDriverKind::Postgres).default_port()
                 };
                 let u = v["user"].as_str().unwrap_or("postgres").to_string();
                 let pw = v["password"].as_str().map(|s| s.to_string());
@@ -246,11 +246,7 @@ impl Workspace {
     }
 
     pub fn build_current_config(&self) -> ConnectionConfig {
-        let port: u16 = self.form_port.parse().unwrap_or(match self.selected_driver_kind {
-            DbDriverKind::Postgres => 5432,
-            DbDriverKind::MySql | DbDriverKind::MariaDb => 3306,
-            DbDriverKind::Sqlite => 0,
-        });
+        let port: u16 = self.form_port.parse().unwrap_or(self.selected_driver_kind.default_port());
 
         ConnectionConfig {
             driver: self.selected_driver_kind,
@@ -401,12 +397,7 @@ impl Workspace {
                         let saved = SavedConnection {
                             id: conn_id.clone(),
                             name: conn_name.clone(),
-                            driver: match config.driver {
-                                DbDriverKind::Postgres => "Postgres".to_string(),
-                                DbDriverKind::MySql => "MySql".to_string(),
-                                DbDriverKind::MariaDb => "MariaDb".to_string(),
-                                DbDriverKind::Sqlite => "Sqlite".to_string(),
-                            },
+                            driver: config.driver.name().to_string(),
                             host: config.host.clone(),
                             port: config.port,
                             database: config.database.clone(),
@@ -690,12 +681,7 @@ impl Workspace {
         };
 
         if let Some(saved) = target_conn {
-            self.selected_driver_kind = match saved.driver.as_str() {
-                "MySql" => DbDriverKind::MySql,
-                "MariaDb" => DbDriverKind::MariaDb,
-                "Sqlite" => DbDriverKind::Sqlite,
-                _ => DbDriverKind::Postgres,
-            };
+            self.selected_driver_kind = DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
             self.form_name = saved.name.clone();
             self.form_host = saved.host.clone();
             self.form_port = saved.port.to_string();
@@ -745,12 +731,7 @@ impl Workspace {
             return false;
         };
 
-        self.selected_driver_kind = match saved.driver.as_str() {
-            "MySql" => DbDriverKind::MySql,
-            "MariaDb" => DbDriverKind::MariaDb,
-            "Sqlite" => DbDriverKind::Sqlite,
-            _ => DbDriverKind::Postgres,
-        };
+        self.selected_driver_kind = DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
         self.form_name = saved.name.clone();
         self.form_host = saved.host.clone();
         self.form_port = saved.port.to_string();
@@ -805,12 +786,7 @@ impl Workspace {
         let saved = SavedConnection {
             id: conn_id.clone(),
             name: conn_name,
-            driver: match config.driver {
-                DbDriverKind::Postgres => "Postgres".to_string(),
-                DbDriverKind::MySql => "MySql".to_string(),
-                DbDriverKind::MariaDb => "MariaDb".to_string(),
-                DbDriverKind::Sqlite => "Sqlite".to_string(),
-            },
+            driver: config.driver.name().to_string(),
             host: config.host.clone(),
             port: config.port,
             database: config.database.clone(),
@@ -866,6 +842,20 @@ impl Workspace {
         self.selected_driver_kind = DbDriverKind::MariaDb;
     }
 
+    pub fn select_preset_odbc(&mut self, kind: DbDriverKind) {
+        self.open_new_connection_dialog();
+        self.selected_driver_kind = kind;
+        self.form_port = kind.default_port().to_string();
+        self.form_user = match kind {
+            DbDriverKind::SqlServer => "sa", DbDriverKind::Db2 => "db2inst1", _ => "",
+        }.to_string();
+        self.form_database = match kind {
+            DbDriverKind::SqlServer => "master", DbDriverKind::Oracle => "FREEPDB1", _ => "",
+        }.to_string();
+        self.form_tls_enabled = kind == DbDriverKind::SqlServer;
+        self.active_field = Some(FormField::Host);
+    }
+
     pub fn select_preset_sqlite(&mut self) {
         self.selected_driver_kind = DbDriverKind::Sqlite;
         self.form_host = "localhost".to_string();
@@ -885,6 +875,19 @@ impl Workspace {
 #[cfg(test)]
 mod tls_tests {
     use super::Workspace;
+
+    #[test]
+    fn enterprise_provider_settings_survive_save_and_reload() {
+        for (provider, port) in [("SqlServer", 1433), ("Oracle", 1521), ("Db2", 50000)] {
+            let input = format!(r#"{{"connections":[{{"id":"test","driver":"{provider}","database":"app","tls_enabled":true}}]}}"#);
+            let (connections, _) = Workspace::load_saved_connections_from_str(&input);
+            assert_eq!(connections[0].port, port);
+            let saved = Workspace::serialize_connections_config(&connections, Some("test"));
+            let (loaded, _) = Workspace::load_saved_connections_from_str(&saved);
+            assert_eq!(loaded, connections);
+            assert!(loaded[0].tls_enabled);
+        }
+    }
 
     #[test]
     fn mariadb_provider_identity_survives_save_and_reload() {

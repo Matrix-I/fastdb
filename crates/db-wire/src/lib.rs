@@ -8,6 +8,7 @@ pub mod export;
 pub mod postgres;
 pub mod mysql;
 pub mod sqlite;
+pub mod odbc;
 
 pub use traits::*;
 pub use ssh_tunnel::*;
@@ -53,6 +54,7 @@ pub fn create_driver(config: ConnectionConfig) -> Result<Arc<dyn DatabaseDriver>
     match config.driver {
         DbDriverKind::Postgres => Ok(Arc::new(PostgresDriver::new(config))),
         DbDriverKind::MySql | DbDriverKind::MariaDb => Ok(Arc::new(MySqlDriver::new(config))),
+        DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => Ok(Arc::new(odbc::OdbcDriver::new(config))),
         DbDriverKind::Sqlite => Ok(Arc::new(SqliteDriver::new(config)?)),
     }
 }

@@ -1,6 +1,6 @@
 # FastDB ⚡
 
-> **A native, pure-Rust database client — aiming to replace JVM/JDBC tools like DBeaver**
+> **A native Rust database client — aiming to replace JVM/JDBC tools like DBeaver**
 > *No JVM · No JDBC · GPU-rendered UI (GPUI) · Bounded memory for huge result sets*
 
 [![CI](https://github.com/Matrix-I/fastdb/actions/workflows/ci.yml/badge.svg)](https://github.com/Matrix-I/fastdb/actions/workflows/ci.yml)
@@ -8,7 +8,7 @@
 [![UI](https://img.shields.io/badge/UI-GPUI-blue.svg)](https://github.com/zed-industries/zed)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey.svg)](ci/)
 
-FastDB is a database client built from scratch in Rust. It talks to databases through native async drivers, renders its UI on the GPU with [GPUI](https://github.com/zed-industries/zed) (Metal on macOS, Vulkan on Linux), and keeps query results in a paged, disk-spilling memory engine so a million-row result does not need a million-row heap.
+FastDB is a database client built from scratch in Rust. It talks to databases through native async drivers and vendor ODBC clients, renders its UI on the GPU with [GPUI](https://github.com/zed-industries/zed) (Metal on macOS, Vulkan on Linux), and keeps query results in a paged, disk-spilling memory engine so a million-row result does not need a million-row heap.
 
 > **Status: early prototype.** Browsing tables, streaming their data and running free-form SQL from script tabs works against PostgreSQL, MySQL and SQLite. Several other features listed under [Not built yet](#-not-built-yet) exist only as tested library code or not at all. The performance numbers below are **targets, not measurements**.
 
@@ -35,7 +35,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 ### Connections
 - **PostgreSQL** (`tokio-postgres`), **MySQL / MariaDB** (`mysql_async`) and **SQLite** (`rusqlite`, bundled). MariaDB has its own provider preset, saved identity and MySQL-compatible SQL handling.
-- The connection dialog also lists **Db2 for LUW**, **Oracle** and **SQL Server** as **Coming soon**; these providers cannot be selected until their drivers are implemented.
+- **Db2 for LUW**, **Oracle** and **SQL Server** support connections, SQL execution and streamed results through installed vendor ODBC drivers. The driver manager is bundled. See [provider setup and live tests](docs/PROVIDERS.md).
 - TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
 - Saved connections with create / edit / delete / test, plus quick presets per driver.
 - **TLS for PostgreSQL and MySQL**: enable TLS in the connection dialog to require encryption and verify the server certificate and hostname. Leave the root CA path empty for system trust, or supply a PEM/DER root CA certificate for a private CA. TLS uses TCP even when Unix socket discovery is enabled. Existing connections default to TLS disabled.
@@ -238,6 +238,17 @@ With Docker and OpenSSL available, run `./ci/test-tls.sh`. It creates disposable
 
 ## 📦 Packaging
 
+For local macOS builds, use the root script (same workflow as Litty):
+
+```bash
+./bundle_macos.sh               # Build for this Mac and install if ~/Applications exists
+./bundle_macos.sh --no-install  # Package only
+```
+
+Outputs go to `dist/`: `FastDB.app`, `FastDB.dmg` (with an Applications shortcut),
+`FastDB-macos.zip`, and `fastdb-macos`, plus architecture-suffixed binary/ZIP copies.
+The app is signed ad-hoc for local use; distribution signing and notarization are separate steps.
+
 Packaging scripts live in [`ci/`](ci/):
 
 ```bash
@@ -272,7 +283,9 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] TLS for PostgreSQL and MySQL with certificate/hostname verification and optional root CA
 - [x] Provider picker with PostgreSQL, Db2 for LUW, MariaDB, MySQL, Oracle, SQL Server and SQLite
 - [x] MariaDB provider preset using the MySQL-compatible driver
-- [ ] Db2 for LUW, Oracle and SQL Server drivers (currently listed as Coming soon)
+- [x] Db2 for LUW, Oracle and SQL Server connections and SQL execution through vendor ODBC drivers
+- [x] Local container validation of Oracle and SQL Server connections, SQL and row-edit transactions
+- [ ] Live Db2 validation and broader ODBC platform/TLS coverage (deferred; PostgreSQL is the priority)
 - [ ] SSH bastion / jump host tunneling
 - [ ] Benchmarks for the goals above
 - [ ] Visual query plan (`EXPLAIN ANALYZE`) viewer

@@ -7,6 +7,7 @@ impl Workspace {
             return div().into_any_element();
         }
         let theme = &self.theme;
+        let accepts_ca = !self.selected_driver_kind.uses_odbc() || self.selected_driver_kind == DbDriverKind::Db2;
         div().flex().flex_col().gap_2()
             .child(
                 div().id("toggle-tls").cursor_pointer().text_size(px(12.0))
@@ -20,7 +21,10 @@ impl Workspace {
                     }))
                     .child(if self.form_tls_enabled { "☑ TLS — verify certificate and hostname (TCP)" } else { "☐ TLS — verify certificate and hostname (TCP)" })
             )
-            .when(self.form_tls_enabled, |tls| tls.child(
+            .when(self.form_tls_enabled && !accepts_ca, |tls| tls.child(
+                div().text_size(px(11.0)).text_color(theme.text_secondary).child("Uses the system/vendor certificate trust store.")
+            ))
+            .when(self.form_tls_enabled && accepts_ca, |tls| tls.child(
                 div().flex().flex_col().gap_1()
                     .child(div().text_size(px(11.0)).text_color(theme.text_secondary).child("Root CA certificate (optional; system trust when empty)"))
                     .child(
@@ -49,39 +53,35 @@ impl Workspace {
         let theme = &self.theme;
         let mut providers = div().flex().flex_wrap().gap_2();
         for (label, icon, kind) in [
-            ("PostgreSQL", "icons/postgresql.png", Some(DbDriverKind::Postgres)),
-            ("Db2 for LUW", "icons/database.svg", None),
-            ("MariaDB", "icons/database.svg", Some(DbDriverKind::MariaDb)),
-            ("MySQL", "icons/mysql.png", Some(DbDriverKind::MySql)),
-            ("Oracle", "icons/database.svg", None),
-            ("SQL Server", "icons/database.svg", None),
-            ("SQLite", "icons/sqlite.png", Some(DbDriverKind::Sqlite)),
+            ("PostgreSQL", "icons/postgresql.png", DbDriverKind::Postgres),
+            ("Db2 for LUW", "icons/database.svg", DbDriverKind::Db2),
+            ("MariaDB", "icons/database.svg", DbDriverKind::MariaDb),
+            ("MySQL", "icons/mysql.png", DbDriverKind::MySql),
+            ("Oracle", "icons/database.svg", DbDriverKind::Oracle),
+            ("SQL Server", "icons/database.svg", DbDriverKind::SqlServer),
+            ("SQLite", "icons/sqlite.png", DbDriverKind::Sqlite),
         ] {
-            let selected = kind == Some(self.selected_driver_kind);
-            let mut tile = div().id(label).flex().items_center().gap_2()
+            let selected = kind == self.selected_driver_kind;
+            let tile = div().id(label).flex().items_center().gap_2()
                 .w(px(150.0)).px_3().py_2().rounded_md().border_1()
                 .bg(if selected { theme.bg_surface_selected } else { theme.bg_app })
                 .border_color(if selected { theme.text_accent } else { theme.border })
-                .text_color(if kind.is_some() { theme.text_primary } else { theme.text_muted })
+                .text_color(theme.text_primary)
                 .child(img(icon).w(px(24.0)).h(px(24.0)))
                 .child(
                     div().flex().flex_col().gap_0p5().text_size(px(12.0))
                         .child(label)
-                        .when(kind.is_none(), |d| d.child(
-                            div().text_size(px(10.0)).text_color(theme.text_muted).child("Coming soon")
-                        ))
                 );
-            if let Some(kind) = kind {
-                tile = tile.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+            let tile = tile.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
                     match kind {
                         DbDriverKind::Postgres => this.select_preset_postgres(),
                         DbDriverKind::MySql => this.select_preset_mysql(),
                         DbDriverKind::MariaDb => this.select_preset_mariadb(),
                         DbDriverKind::Sqlite => this.select_preset_sqlite(),
+                        DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => this.select_preset_odbc(kind),
                     }
                     cx.notify();
                 }));
-            }
             providers = providers.child(tile);
         }
         providers.into_any_element()
@@ -162,6 +162,12 @@ impl Workspace {
                             )
                     )
                     .child(self.render_provider_picker(cx))
+                    .when(self.selected_driver_kind.uses_odbc(), |panel| panel.child(
+                        div().text_size(px(11.0)).text_color(theme.text_secondary)
+                            .child(if self.selected_driver_kind == DbDriverKind::Oracle {
+                                "Requires Oracle ODBC client. Database is the Oracle service name."
+                            } else { "Requires the vendor ODBC driver installed on this computer." })
+                    ))
                     // Form Input Fields
                     .child(
                         div()
@@ -299,7 +305,7 @@ impl Workspace {
                                             .flex_1()
                                             .gap_1()
                                             .child(div().text_size(px(11.0)).text_color(theme.text_muted).child(
-                                                if is_sqlite { "SQLite Database File / Path" } else { "Database Name" }
+                                                if is_sqlite { "SQLite Database File / Path" } else if self.selected_driver_kind == DbDriverKind::Oracle { "Service Name" } else { "Database Name" }
                                             ))
                                             .child(
                                                 div()

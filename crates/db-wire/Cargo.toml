@@ -26,3 +26,5 @@ platform-hal.workspace = true
 uuid.workspace = true
 chrono = "0.4"
 serde_json = "1.0"
+
+odbc-api = { version = "29", default-features = false, features = ["odbc_version_3_80", "vendored-unix-odbc", "wide"] }

@@ -146,7 +146,17 @@ pub fn script_fetch_query(tab: &TabState, offset: u64) -> (String, bool) {
 pub(super) fn quote_ident(kind: DbDriverKind, name: &str) -> String {
     match kind {
         DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`", name.replace('`', "``")),
-        DbDriverKind::Postgres | DbDriverKind::Sqlite => format!("\"{}\"", name.replace('"', "\"\"")),
+        DbDriverKind::Postgres | DbDriverKind::Sqlite | DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => format!("\"{}\"", name.replace('"', "\"\"")),
+    }
+}
+
+/// Vendor-specific pagination for table browsing. Free-form ODBC SQL runs unchanged.
+fn table_page_suffix(kind: DbDriverKind, size: usize, offset: u64, ordered: bool) -> String {
+    match kind {
+        DbDriverKind::SqlServer => format!("{} OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY", if ordered { "" } else { " ORDER BY (SELECT NULL)" }),
+        DbDriverKind::Oracle | DbDriverKind::Db2 => format!(" OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY"),
+        _ if offset > 0 => format!(" LIMIT {size} OFFSET {offset}"),
+        _ => format!(" LIMIT {size}"),
     }
 }
 
@@ -346,25 +356,24 @@ impl Workspace {
         let schema = tab.schema_name.as_deref().unwrap_or("public");
         let table = match tab.table_name.as_deref() {
             Some(t) if !t.is_empty() => t,
-            _ => return script_fetch_query(tab, offset),
+            _ => return if self.selected_driver_kind.uses_odbc() {
+                // Execute vendor SQL as written: CTEs, TOP and PL/SQL are not LIMIT dialects.
+                (tab.script_sql.clone().unwrap_or_default(), false)
+            } else { script_fetch_query(tab, offset) },
         };
 
         let target = match self.selected_driver_kind {
-            DbDriverKind::Postgres => format!("\"{}\".\"{}\"", schema, table),
+            DbDriverKind::Postgres | DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => format!("{}.{}", quote_ident(self.selected_driver_kind, schema), quote_ident(self.selected_driver_kind, table)),
             DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`.`{}`", schema, table),
             DbDriverKind::Sqlite => format!("\"{}\"", table),
         };
 
         let filter = tab.filter_sql.trim();
         let f_upper = filter.to_uppercase();
-        let mut limit_suffix = format!(" LIMIT {}", tab.fetch.size);
-        if offset > 0 {
-            limit_suffix.push_str(&format!(" OFFSET {}", offset));
-        }
         // A filter that orders or limits its rows itself already ends the statement,
         // so the header ordering cannot be appended after it
         let order_suffix = match &tab.grid.ordering {
-            Some(o) if !f_upper.contains("ORDER BY") && !f_upper.contains("LIMIT") => format!(
+            Some(o) if !f_upper.contains("ORDER BY") && !["LIMIT", "OFFSET", "FETCH"].iter().any(|w| f_upper.split_whitespace().any(|p| p == *w)) => format!(
                 " ORDER BY {} {}",
                 quote_ident(self.selected_driver_kind, &o.column),
                 if o.descending { "DESC" } else { "ASC" }
@@ -372,11 +381,13 @@ impl Workspace {
             _ => String::new(),
         };
 
+        let limit_suffix = table_page_suffix(self.selected_driver_kind, tab.fetch.size, offset, !order_suffix.is_empty() || f_upper.contains("ORDER BY"));
+
         if filter.is_empty() {
             (format!("SELECT * FROM {}{}{};", target, order_suffix, limit_suffix), true)
         } else {
             // A filter with its own LIMIT decides the row count, so it is not fetched in chunks
-            let paged = !f_upper.contains("LIMIT");
+            let paged = !["LIMIT", "OFFSET", "FETCH"].iter().any(|word| f_upper.split_whitespace().any(|part| part == *word));
             let limit_suffix = if paged { limit_suffix.as_str() } else { "" };
 
             let sql = if f_upper.starts_with("WHERE")
@@ -384,6 +395,8 @@ impl Workspace {
                 || f_upper.starts_with("GROUP BY")
                 || f_upper.starts_with("HAVING")
                 || f_upper.starts_with("LIMIT")
+                || f_upper.starts_with("OFFSET")
+                || f_upper.starts_with("FETCH")
             {
                 format!("SELECT * FROM {} {}{}{};", target, filter, order_suffix, limit_suffix)
             } else {
@@ -646,8 +659,18 @@ impl Workspace {
 
 #[cfg(test)]
 mod provider_tests {
-    use super::quote_ident;
+    use super::{quote_ident, table_page_suffix};
     use db_wire::DbDriverKind;
+
+    #[test]
+    fn enterprise_table_paging_uses_vendor_syntax() {
+        assert_eq!(table_page_suffix(DbDriverKind::SqlServer, 50, 100, false), " ORDER BY (SELECT NULL) OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY");
+        assert_eq!(table_page_suffix(DbDriverKind::SqlServer, 50, 0, true), " OFFSET 0 ROWS FETCH NEXT 50 ROWS ONLY");
+        for kind in [DbDriverKind::Oracle, DbDriverKind::Db2] {
+            assert_eq!(table_page_suffix(kind, 50, 100, false), " OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY");
+            assert_eq!(quote_ident(kind, "a\"b"), "\"a\"\"b\"");
+        }
+    }
 
     #[test]
     fn mariadb_uses_mysql_identifier_quoting() {

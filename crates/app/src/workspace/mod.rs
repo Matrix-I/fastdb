@@ -219,12 +219,7 @@ impl Workspace {
 
         let (form_name, form_driver, form_host, form_port, form_database, form_user, form_password, form_sock) =
             if let Some(ref saved) = initial_active_conn {
-                let drv = match saved.driver.as_str() {
-                    "MySql" => DbDriverKind::MySql,
-                    "MariaDb" => DbDriverKind::MariaDb,
-                    "Sqlite" => DbDriverKind::Sqlite,
-                    _ => DbDriverKind::Postgres,
-                };
+                let drv = DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
                 (
                     saved.name.clone(),
                     drv,

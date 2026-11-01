@@ -9,7 +9,30 @@ pub enum DbDriverKind {
     Postgres,
     MySql,
     MariaDb,
+    SqlServer,
+    Oracle,
+    Db2,
     Sqlite,
+}
+
+impl DbDriverKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Postgres => "Postgres", Self::MySql => "MySql", Self::MariaDb => "MariaDb",
+            Self::Sqlite => "Sqlite", Self::SqlServer => "SqlServer", Self::Oracle => "Oracle", Self::Db2 => "Db2",
+        }
+    }
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Postgres, Self::MySql, Self::MariaDb, Self::Sqlite, Self::SqlServer, Self::Oracle, Self::Db2]
+            .into_iter().find(|kind| kind.name().eq_ignore_ascii_case(name))
+    }
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Postgres => 5432, Self::MySql | Self::MariaDb => 3306, Self::Sqlite => 0,
+            Self::SqlServer => 1433, Self::Oracle => 1521, Self::Db2 => 50000,
+        }
+    }
+    pub fn uses_odbc(self) -> bool { matches!(self, Self::SqlServer | Self::Oracle | Self::Db2) }
 }
 
 #[derive(Debug, Clone)]
