@@ -12,6 +12,7 @@ pub struct RopeyBuffer {
     revision: u64,
     rope: Rope,
     cursor_offset: usize,
+    selection_anchor: Option<usize>,
     undo_stack: Vec<TextEdit>,
     redo_stack: Vec<TextEdit>,
     /// Kind of the last edit while the next one of the same kind joins its undo step
@@ -30,6 +31,7 @@ impl RopeyBuffer {
             revision: 0,
             rope: Rope::from_str(initial_text),
             cursor_offset: initial_text.len(),
+            selection_anchor: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             open_run: None,
@@ -57,8 +59,47 @@ impl RopeyBuffer {
     }
 
     pub fn set_cursor_offset(&mut self, offset: usize) {
-        self.cursor_offset = offset.min(self.len());
+        self.cursor_offset = self
+            .rope
+            .char_to_byte(self.rope.byte_to_char(offset.min(self.len())));
+        self.selection_anchor = None;
         self.open_run = None;
+    }
+
+    pub fn selection(&self) -> Option<std::ops::Range<usize>> {
+        let anchor = self.selection_anchor?;
+        (anchor != self.cursor_offset)
+            .then_some(anchor.min(self.cursor_offset)..anchor.max(self.cursor_offset))
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        let range = self.selection()?;
+        Some(self.rope.byte_slice(range).to_string())
+    }
+
+    pub fn select_all(&mut self) {
+        self.selection_anchor = Some(0);
+        self.cursor_offset = self.len();
+        self.open_run = None;
+    }
+
+    pub fn move_selection(&mut self, extend: bool, movement: impl FnOnce(&mut Self)) {
+        let anchor = self.selection_anchor.unwrap_or(self.cursor_offset);
+        movement(self);
+        self.selection_anchor = extend.then_some(anchor);
+    }
+
+    pub fn delete_selection(&mut self) -> bool {
+        if let Some(range) = self.selection() {
+            self.replace_range(range.start, range.end, "");
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn line_start_offset(&self, line: usize) -> usize {
+        self.rope.line_to_byte(line.min(self.line_count() - 1))
     }
 
     /// Char index of the caret
@@ -169,8 +210,13 @@ impl RopeyBuffer {
 
     /// Replaces the bytes `start..end` with `text` as one undo step and puts the caret after it
     pub fn replace_range(&mut self, start: usize, end: usize, text: &str) {
-        let end = end.min(self.len());
-        let start = start.min(end);
+        let end = self
+            .rope
+            .char_to_byte(self.rope.byte_to_char(end.min(self.len())));
+        let start = self
+            .rope
+            .char_to_byte(self.rope.byte_to_char(start.min(end)));
+        self.selection_anchor = None;
         let char_start = self.rope.byte_to_char(start);
         let char_end = self.rope.byte_to_char(end);
         let old_text = self.rope.slice(char_start..char_end).to_string();
@@ -239,6 +285,10 @@ impl RopeyBuffer {
     }
 
     pub fn insert_str(&mut self, s: &str) {
+        if let Some(range) = self.selection() {
+            self.replace_range(range.start, range.end, s);
+            return;
+        }
         let offset = self.cursor_offset;
         let char_idx = self.rope.byte_to_char(offset);
         self.rope.insert(char_idx, s);
@@ -264,6 +314,9 @@ impl RopeyBuffer {
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor_offset == 0 {
             return;
         }
@@ -288,6 +341,9 @@ impl RopeyBuffer {
     }
 
     pub fn delete_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor_offset >= self.len() {
             return;
         }
@@ -312,6 +368,7 @@ impl RopeyBuffer {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.selection_anchor = None;
         let Some(edit) = self.undo_stack.pop() else {
             return false;
         };
@@ -332,6 +389,7 @@ impl RopeyBuffer {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.selection_anchor = None;
         let Some(edit) = self.redo_stack.pop() else {
             return false;
         };

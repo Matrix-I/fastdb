@@ -8,6 +8,7 @@ pub(super) struct SaveQueue {
 }
 struct WriteRequest {
     path: Option<PathBuf>,
+    target: Option<PathBuf>,
     text: String,
     reply: flume::Sender<Result<(), String>>,
 }
@@ -33,6 +34,21 @@ pub(super) fn atomic_write(path: &Path, text: &str) -> Result<(), String> {
     };
     write().map_err(|error| format!("Cannot save {}: {error}", path.display()))
 }
+fn move_file(path: &Path, target: &Path) -> Result<(), String> {
+    let move_it = || -> std::io::Result<()> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // hard_link fails if the destination exists, unlike rename on Unix.
+        std::fs::hard_link(path, target)?;
+        if let Err(error) = std::fs::remove_file(path) {
+            let _ = std::fs::remove_file(target);
+            return Err(error);
+        }
+        Ok(())
+    };
+    move_it().map_err(|error| format!("Cannot move script: {error}"))
+}
 impl Default for SaveQueue {
     fn default() -> Self {
         Self::with_writer(Arc::new(atomic_write))
@@ -45,10 +61,13 @@ impl SaveQueue {
             .name("fastdb-file-writer".into())
             .spawn(move || {
                 while let Ok(request) = receiver.recv() {
-                    let result = request
-                        .path
-                        .as_ref()
-                        .map_or(Ok(()), |path| writer(path, &request.text));
+                    let result = match (request.path.as_ref(), request.target.as_ref()) {
+                        (Some(path), Some(target)) => {
+                            writer(path, &request.text).and_then(|()| move_file(path, target))
+                        }
+                        (Some(path), None) => writer(path, &request.text),
+                        _ => Ok(()),
+                    };
                     if let Err(error) = &result {
                         tracing::error!("{error}");
                     }
@@ -58,10 +77,26 @@ impl SaveQueue {
             .expect("start file writer");
         Self { sender }
     }
+    pub fn move_script(
+        &self,
+        path: PathBuf,
+        target: PathBuf,
+        text: String,
+    ) -> flume::Receiver<Result<(), String>> {
+        let (reply, receiver) = flume::bounded(1);
+        let _ = self.sender.send(WriteRequest {
+            path: Some(path),
+            target: Some(target),
+            text,
+            reply,
+        });
+        receiver
+    }
     pub fn flush(&self) -> flume::Receiver<Result<(), String>> {
         let (reply, receiver) = flume::bounded(1);
         let _ = self.sender.send(WriteRequest {
             path: None,
+            target: None,
             text: String::new(),
             reply,
         });
@@ -71,6 +106,7 @@ impl SaveQueue {
         let (reply, receiver) = flume::bounded(1);
         let _ = self.sender.send(WriteRequest {
             path: Some(path),
+            target: None,
             text,
             reply,
         });
@@ -82,6 +118,7 @@ impl SaveQueue {
 pub(super) enum AfterSave {
     None,
     Run(u64),
+    RunScript(u64),
     Close(Vec<u64>),
     Quit,
     Restart,
@@ -94,14 +131,16 @@ impl Workspace {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(500))
                 .await;
-            let _ =
-                this.update(cx, |this, cx| {
-                    if this.tabs.iter().any(|t| {
-                        t.id == id && t.editor.buffer.revision() == revision && t.is_dirty()
-                    }) {
-                        this.save_then(vec![id], AfterSave::None, cx);
-                    }
-                });
+            let _ = this.update(cx, |this, cx| {
+                if this.tabs.iter().any(|t| {
+                    t.id == id
+                        && !t.file_busy
+                        && t.editor.buffer.revision() == revision
+                        && t.is_dirty()
+                }) {
+                    this.save_then(vec![id], AfterSave::None, cx);
+                }
+            });
         })
         .detach();
     }
@@ -109,7 +148,7 @@ impl Workspace {
         let requests: Vec<_> = self
             .tabs
             .iter()
-            .filter(|t| ids.contains(&t.id) && t.is_dirty())
+            .filter(|t| ids.contains(&t.id) && !t.file_busy && t.is_dirty())
             .filter_map(|tab| {
                 let path = tab.script_path.clone()?;
                 let text = tab.editor.buffer.text();
@@ -167,6 +206,7 @@ impl Workspace {
         match action {
             AfterSave::None => {}
             AfterSave::Run(id) => self.run_saved_query(id, cx),
+            AfterSave::RunScript(id) => self.run_saved_script(id, cx),
             AfterSave::Close(ids) => self.close_saved_tabs(&ids, cx),
             AfterSave::Quit | AfterSave::Restart => {
                 let restart = matches!(action, AfterSave::Restart);

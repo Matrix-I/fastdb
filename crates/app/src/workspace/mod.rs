@@ -30,7 +30,9 @@ mod panes;
 mod properties;
 mod properties_panel;
 mod query;
+mod query_history;
 mod script_tabs;
+mod script_tools;
 mod tab_state;
 use operations::{OperationKind, Operations};
 mod script_chooser;
@@ -131,6 +133,8 @@ pub struct Workspace {
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
     save_queue: SaveQueue,
+    query_history: query_history::QueryHistory,
+    script_action: Option<script_tools::ScriptAction>,
     script_request_id: u64,
     pub(super) allow_quit: bool,
     /// "Choose SQL script" dialog, if open
@@ -191,6 +195,9 @@ impl Workspace {
             operations: Operations::default(),
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),
+            query_history: query_history::QueryHistory::new(
+                platform_hal::paths::config_dir().join("query-history"),
+            ),
             save_queue,
             updates,
             _update_changed: update_changed,
@@ -198,6 +205,7 @@ impl Workspace {
             script_request_id: 0,
             allow_quit: false,
             script_chooser: None,
+            script_action: None,
 
             value_panel: ValuePanelState::default(),
             panes: None,
@@ -399,6 +407,9 @@ impl Render for Workspace {
         }
         if self.script_chooser.is_some() {
             root = root.child(self.render_script_chooser(cx));
+        }
+        if self.script_action.is_some() {
+            root = root.child(self.render_script_action(cx));
         }
         if self.updates.read(cx).is_open() {
             root = root.child(self.updates.clone());

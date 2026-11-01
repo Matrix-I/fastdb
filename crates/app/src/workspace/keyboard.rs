@@ -38,6 +38,11 @@ impl Workspace {
             return;
         }
 
+        if self.script_action.is_some() {
+            self.handle_script_action_key(&event.keystroke, cx);
+            return;
+        }
+
         // Intercept Cmd+W (macOS) / Ctrl+W (Linux/Windows) to close active tab
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("w")
@@ -161,8 +166,25 @@ impl Workspace {
         } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && (event.keystroke.key == "enter" || event.keystroke.key == "return")
         {
-            self.run_active_query(cx);
+            if event.keystroke.modifiers.shift {
+                self.run_script(cx);
+            } else {
+                self.run_active_query(cx);
+            }
+        } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && event.keystroke.modifiers.shift
+            && event.keystroke.key.eq_ignore_ascii_case("f")
+        {
+            self.format_script(cx);
         } else if !self.tabs.is_empty() {
+            let quote = if matches!(
+                self.tab_provider(self.active_tab),
+                DbDriverKind::MySql | DbDriverKind::MariaDb
+            ) {
+                '`'
+            } else {
+                '"'
+            };
             let tab = &mut self.tabs[self.active_tab];
             if self.input.is_fetch_size_focused {
                 if event.keystroke.key == "escape" {
@@ -220,21 +242,30 @@ impl Workspace {
                     }
                 }
             } else if tab.is_script() && tab.editor_focused {
+                if tab.file_busy {
+                    return;
+                }
+                tab.editor.identifier_quote = quote;
                 let cmd = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
-                tab.editor.identifier_quote = if matches!(
-                    self.form.selected_driver_kind,
-                    DbDriverKind::MySql | DbDriverKind::MariaDb
-                ) {
-                    '`'
-                } else {
-                    '"'
-                };
                 if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
                     if undo_key == UndoKey::Redo {
                         tab.editor.redo()
                     } else {
                         tab.editor.undo()
                     };
+                } else if cmd && event.keystroke.key.eq_ignore_ascii_case("a") {
+                    tab.editor.buffer.select_all();
+                    tab.editor.caret_moved = true;
+                    tab.editor.hide_completions();
+                } else if cmd && matches!(event.keystroke.key.as_str(), "c" | "x") {
+                    if let Some(text) = tab.editor.buffer.selected_text() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        if event.keystroke.key == "x" {
+                            tab.editor.buffer.delete_selection();
+                            tab.editor.hide_completions();
+                            tab.editor.caret_moved = true;
+                        }
+                    }
                 } else if cmd && event.keystroke.key.eq_ignore_ascii_case("v") {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                         tab.editor.insert_text(&text);

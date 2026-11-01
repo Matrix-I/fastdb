@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use super::script_tools::tool;
 use ui_editor::EditorPick;
 
 use super::*;
@@ -31,6 +32,8 @@ impl Workspace {
             .unwrap_or_default();
 
         let toolbar = div()
+            .id("script-toolbar")
+            .overflow_x_scroll()
             .flex()
             .flex_none()
             .items_center()
@@ -84,16 +87,21 @@ impl Workspace {
                     .child(if is_running_query {
                         "Cancel"
                     } else {
-                        "Execute (⌘↵)"
+                        "Execute"
                     }),
             )
+            .child(tool("Run script").on_click(cx.listener(|this, _, _, cx| this.run_script(cx))))
+            .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
+            .child(tool("History").on_click(cx.listener(|this, _, _, cx| this.toggle_history(cx))))
             .child(
-                div()
-                    .flex_1()
-                    .text_size(px(11.0))
-                    .text_color(theme.text_muted)
-                    .child("Runs the statement under the caret"),
+                tool("Rename")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_script_action(false, cx))),
             )
+            .child(
+                tool("Delete")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_script_action(true, cx))),
+            )
+            .child(div().flex_1())
             .child(
                 div()
                     .flex()
@@ -132,6 +140,9 @@ impl Workspace {
         let last_error = tab.last_error.clone();
         let no_result_set = tab.grid.pager.as_ref().is_some_and(|p| p.num_cols() == 0);
         let elapsed = tab.fetch.last.as_ref().map(|s| s.elapsed);
+        let result_count = tab.result_count();
+        let selected_result = tab.active_result;
+        let history = tab.show_history.then(|| tab.query_history.clone());
 
         let mut column = div()
             .flex()
@@ -140,6 +151,73 @@ impl Workspace {
             .overflow_hidden()
             .child(toolbar)
             .child(editor);
+        if let Some(history) = history {
+            let mut list = div()
+                .id("query-history")
+                .max_h(px(140.0))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .bg(theme.bg_surface);
+            if history.is_empty() {
+                list = list.child(
+                    div()
+                        .p_2()
+                        .text_size(px(12.0))
+                        .child("No query history for this connection."),
+                );
+            }
+            for (index, sql) in history.iter().enumerate() {
+                let preview: String = sql.chars().take(180).collect();
+                list = list.child(
+                    div()
+                        .id(("history", index))
+                        .px_2()
+                        .py_1()
+                        .cursor_pointer()
+                        .text_size(px(11.0))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .hover(|s| s.bg(theme.bg_surface_hover))
+                        .child(preview)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.recall_history(index, cx)),
+                        ),
+                );
+            }
+            column = column.child(list);
+        }
+        if result_count > 0 {
+            let mut strip = div()
+                .id("script-results")
+                .flex()
+                .flex_none()
+                .overflow_x_scroll()
+                .bg(theme.bg_surface);
+            for index in 0..result_count {
+                strip = strip.child(
+                    div()
+                        .id(("result", index))
+                        .px_2()
+                        .py_1()
+                        .cursor_pointer()
+                        .text_size(px(11.0))
+                        .bg(if index == selected_result {
+                            theme.bg_surface_selected
+                        } else {
+                            theme.bg_surface
+                        })
+                        .child(format!("Result {}", index + 1))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.operations.is_running() {
+                                this.tabs[tab_idx].select_result(index);
+                                cx.notify();
+                            }
+                        })),
+                );
+            }
+            column = column.child(strip);
+        }
         if let Some(message) = last_error {
             column = column.child(self.render_error_banner(&message));
         }
@@ -198,12 +276,15 @@ impl Workspace {
     /// Click handler for the characters of a script tab's editor
     fn script_editor_pick(&self, tab_idx: usize, cx: &mut Context<Self>) -> EditorPick {
         let workspace = cx.entity().downgrade();
-        Rc::new(move |line, col, window, cx| {
+        Rc::new(move |line, col, extend, window, cx| {
             let _ = workspace.update(cx, |this, cx| {
                 this.focus_script_editor(true);
                 if let Some(tab) = this.tabs.get_mut(tab_idx) {
-                    tab.editor.buffer.set_cursor_line_col(line, col);
+                    tab.editor
+                        .buffer
+                        .move_selection(extend, |buffer| buffer.set_cursor_line_col(line, col));
                     tab.editor.hide_completions();
+                    tab.editor.caret_moved = true;
                 }
                 window.focus(&this.focus_handle);
                 cx.notify();

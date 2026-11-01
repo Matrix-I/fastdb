@@ -59,14 +59,23 @@ impl Workspace {
     }
 
     pub fn run_active_query(&mut self, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get(self.active_tab) {
+        if self.operations.is_running() {
+            return;
+        }
+        if let Some(tab) = self.tabs.get(self.active_tab).filter(|t| !t.file_busy) {
             self.save_then(vec![tab.id], AfterSave::Run(tab.id), cx);
         }
     }
     pub(super) fn run_saved_query(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.operations.is_running() {
+            return;
+        }
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
             return;
         };
+        if self.tabs[index].file_busy {
+            return;
+        }
         if self.tabs.is_empty() {
             return;
         }
@@ -74,12 +83,58 @@ impl Workspace {
             tab.fetch.commit_size_text();
             if tab.is_script() {
                 let statement = tab.editor.active_statement();
-                tab.script_sql = (!statement.is_empty()).then_some(statement);
+                tab.pending_statements.clear();
+                if statement.trim().is_empty() {
+                    return;
+                }
+                tab.new_script_result(statement);
             }
         }
         self.input.is_fetch_size_focused = false;
         let (sql, paged) = self.build_fetch_query(index, 0);
         self.start_query(index, sql, paged, false, cx);
+    }
+
+    pub(super) fn run_script(&mut self, cx: &mut Context<Self>) {
+        if self.operations.is_running() {
+            return;
+        }
+        if let Some(tab) = self
+            .tabs
+            .get(self.active_tab)
+            .filter(|t| t.is_script() && !t.file_busy)
+        {
+            self.save_then(vec![tab.id], AfterSave::RunScript(tab.id), cx);
+        }
+    }
+
+    pub(super) fn run_saved_script(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.operations.is_running() {
+            return;
+        }
+        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        match sql_intel::split_script(&tab.editor.buffer.text()) {
+            Ok(statements) => {
+                tab.pending_statements = statements.into();
+                self.start_next_statement(index, cx);
+            }
+            Err(error) => {
+                tab.last_error = Some(error);
+                cx.notify();
+            }
+        }
+    }
+
+    fn start_next_statement(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(sql) = self.tabs[index].pending_statements.pop_front() {
+            self.tabs[index].new_script_result(sql.clone());
+            // Execute each statement once, exactly as written. Stream all rows into the
+            // paged store rather than OFFSET-replaying statements within a script.
+            self.start_query(index, sql, false, false, cx);
+        }
     }
 
     /// Reads the next chunk of the active tab's result and appends it to the grid.
@@ -128,6 +183,15 @@ impl Workspace {
         }
 
         let tab = &mut self.tabs[index];
+        if tab.is_script()
+            && !append
+            && let Some(connection) = tab.connection_id.as_ref()
+        {
+            self.query_history.record(
+                connection.clone(),
+                tab.script_sql.clone().unwrap_or(sql.clone()),
+            );
+        }
         tab.begin_fetch(paged, append);
         let tab_id = tab.id;
         let connection_id = tab
@@ -154,6 +218,12 @@ impl Workspace {
                 let keep_listening = this
                     .update(cx, |this, cx| {
                         let keep = this.apply_query_event(generation, tab_id, event);
+                        if !keep
+                            && !this.operations.is_running()
+                            && let Some(index) = this.tabs.iter().position(|t| t.id == tab_id)
+                        {
+                            this.start_next_statement(index, cx);
+                        }
                         // Nobody will see the rest of an orphaned run, so stop it on the server
                         if keep && !this.tabs.iter().any(|t| t.id == tab_id) {
                             this.cancel_running_query(cx);
@@ -171,6 +241,7 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 if this.operations.finish(generation) {
                     if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        tab.pending_statements.clear();
                         tab.apply_stream_event(StreamEvent::Error(
                             "Query stream closed before completion".into(),
                         ));
@@ -205,9 +276,22 @@ impl Workspace {
         {
             return false;
         }
+        let cancelled = self
+            .operations
+            .active()
+            .is_some_and(|op| op.cancel_requested);
         match tab.apply_stream_event(event) {
             QueryStatus::Running { .. } => true,
-            QueryStatus::Done { .. } | QueryStatus::Failed(_) => {
+            QueryStatus::Failed(_) => {
+                tab.pending_statements.clear();
+                self.operations.finish(generation);
+                false
+            }
+            QueryStatus::Done { .. } => {
+                if cancelled {
+                    tab.pending_statements.clear();
+                }
+
                 self.operations.finish(generation);
                 false
             }
@@ -215,6 +299,11 @@ impl Workspace {
     }
 
     pub fn cancel_running_query(&mut self, cx: &mut Context<Self>) {
+        if let Some(op) = self.operations.active()
+            && let Some(tab) = self.tabs.iter_mut().find(|t| t.id == op.tab_id)
+        {
+            tab.pending_statements.clear();
+        }
         let Some((generation, driver)) = self.operations.request_cancel() else {
             return;
         };

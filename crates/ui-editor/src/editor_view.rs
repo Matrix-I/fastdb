@@ -17,7 +17,7 @@ const CHAR_WIDTH: f32 = 7.8;
 
 /// Called with `(line, col)` when a char of the editor is clicked; `col` may be past the
 /// end of the line (`usize::MAX` for a click right of the text)
-pub type EditorPick = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
+pub type EditorPick = Rc<dyn Fn(usize, usize, bool, &mut Window, &mut App)>;
 
 /// Completion entries shown in the popup; the selection wraps within them
 pub const MAX_VISIBLE_COMPLETIONS: usize = 6;
@@ -59,6 +59,9 @@ impl SqlEditorView {
     pub fn active_statement(&mut self) -> String {
         let text = self.buffer.text();
         let offset = self.buffer.cursor_offset();
+        if let Some(selected) = self.buffer.selected_text() {
+            return selected;
+        }
 
         if let Some(ref mut parser) = self.parser
             && let Some((_, _, stmt)) = parser.statement_at_offset(&text, offset)
@@ -200,7 +203,7 @@ impl SqlEditorView {
         let cmd = mods.platform || mods.control;
         let key = keystroke.key.as_str();
 
-        if self.show_completions {
+        if self.show_completions && !mods.shift {
             match key {
                 "up" => {
                     self.select_prev_completion();
@@ -219,21 +222,39 @@ impl SqlEditorView {
             }
         }
 
-        match key {
-            "left" if cmd => self.buffer.move_line_start(),
-            "right" if cmd => self.buffer.move_line_end(),
-            "up" if cmd => self.buffer.move_to_start(),
-            "down" if cmd => self.buffer.move_to_end(),
-            "left" if mods.alt => self.buffer.move_word_left(),
-            "right" if mods.alt => self.buffer.move_word_right(),
-            "left" => self.buffer.move_left(),
-            "right" => self.buffer.move_right(),
-            "up" => self.buffer.move_up(),
-            "down" => self.buffer.move_down(),
-            "home" => self.buffer.move_line_start(),
-            "end" => self.buffer.move_line_end(),
-            _ => return self.handle_edit_key(keystroke, cmd),
+        if !matches!(key, "left" | "right" | "up" | "down" | "home" | "end") {
+            return self.handle_edit_key(keystroke, cmd);
         }
+        if !mods.shift
+            && matches!(key, "left" | "right")
+            && !cmd
+            && !mods.alt
+            && let Some(range) = self.buffer.selection()
+        {
+            self.buffer.set_cursor_offset(if key == "left" {
+                range.start
+            } else {
+                range.end
+            });
+            self.caret_moved = true;
+            self.hide_completions();
+            return true;
+        }
+        self.buffer.move_selection(mods.shift, |buffer| match key {
+            "left" if cmd => buffer.move_line_start(),
+            "right" if cmd => buffer.move_line_end(),
+            "up" if cmd => buffer.move_to_start(),
+            "down" if cmd => buffer.move_to_end(),
+            "left" if mods.alt => buffer.move_word_left(),
+            "right" if mods.alt => buffer.move_word_right(),
+            "left" => buffer.move_left(),
+            "right" => buffer.move_right(),
+            "up" => buffer.move_up(),
+            "down" => buffer.move_down(),
+            "home" => buffer.move_line_start(),
+            "end" => buffer.move_line_end(),
+            _ => unreachable!(),
+        });
         self.caret_moved = true;
         self.hide_completions();
         true
@@ -300,6 +321,10 @@ impl SqlEditorView {
                 content,
                 caret_col,
                 caret_visible,
+                self.buffer.selection().map(|range| {
+                    let start = self.buffer.line_start_offset(l);
+                    range.start.saturating_sub(start)..range.end.saturating_sub(start)
+                }),
                 &on_pick,
                 &theme,
             ));
@@ -471,6 +496,7 @@ fn render_line(
     content: &str,
     caret_col: Option<usize>,
     caret_visible: bool,
+    selection: Option<std::ops::Range<usize>>,
     on_pick: &EditorPick,
     theme: &Theme,
 ) -> AnyElement {
@@ -478,9 +504,18 @@ fn render_line(
         let pick = on_pick.clone();
         let el = div().absolute().top_0().bottom_0().w(relative(0.5));
         let el = if right { el.right_0() } else { el.left_0() };
-        el.on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
-            cx.stop_propagation();
-            pick(line, col, window, cx);
+        let drag_pick = on_pick.clone();
+        el.on_mouse_down(
+            MouseButton::Left,
+            move |event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                pick(line, col, event.modifiers.shift, window, cx);
+            },
+        )
+        .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                drag_pick(line, col, true, window, cx);
+            }
         })
     };
 
@@ -497,6 +532,7 @@ fn render_line(
 
     // A `--` comment colours the rest of the line
     let mut col = 0;
+    let mut byte = 0;
     let mut in_comment = false;
     for word in content.split_inclusive(' ') {
         in_comment = in_comment || word.trim_start().starts_with("--");
@@ -516,11 +552,17 @@ fn render_line(
                     .relative()
                     .flex_none()
                     .text_color(color)
+                    .bg(if selection.as_ref().is_some_and(|r| r.contains(&byte)) {
+                        theme.bg_surface_selected
+                    } else {
+                        rgba(0x00000000)
+                    })
                     .child(glyph.to_string())
                     .child(half(col, false))
                     .child(half(col + 1, true)),
             );
             col += 1;
+            byte += ch.len_utf8();
         }
     }
     if caret_col.is_some_and(|c| c >= col) {
@@ -528,13 +570,24 @@ fn render_line(
     }
     // Clicking right of the text puts the caret at the end of the line
     let pick = on_pick.clone();
-    code = code.child(div().flex_1().h_full().on_mouse_down(
-        MouseButton::Left,
-        move |_: &MouseDownEvent, window, cx| {
-            cx.stop_propagation();
-            pick(line, usize::MAX, window, cx);
-        },
-    ));
+    let drag_pick = on_pick.clone();
+    code = code.child(
+        div()
+            .flex_1()
+            .h_full()
+            .on_mouse_down(
+                MouseButton::Left,
+                move |event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    pick(line, usize::MAX, event.modifiers.shift, window, cx);
+                },
+            )
+            .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    drag_pick(line, usize::MAX, true, window, cx);
+                }
+            }),
+    );
 
     div()
         .flex()
@@ -567,7 +620,7 @@ fn render_line(
 
 impl Render for SqlEditorView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_editor(true, true, Rc::new(|_, _, _, _| {}))
+        self.render_editor(true, true, Rc::new(|_, _, _, _, _| {}))
     }
 }
 

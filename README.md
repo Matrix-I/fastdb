@@ -64,7 +64,13 @@ What exists today that these targets build on: a paged result store with an LRU 
 - Table and script tabs keep their connection identity, results and staged edits when switching connections. Editing a connection preset does not change an open session's SQL dialect.
 - A script tab runs on its own connection: selecting it switches the active connection, and the toolbar shows which one.
 - Table names completed after `FROM` / `JOIN` get an alias (`"featureFlag" f`), and `f.` completes that table's columns.
-- `Cmd + Enter` runs the statement under the caret; its rows stream into the grid below the editor.
+- **Selection and clipboard**: drag, Shift-click or Shift + navigation keys to select text; `Cmd/Ctrl + A/C/X/V` selects all, copies, cuts or pastes. Typing replaces the selection; undo/redo restores edits.
+- `Cmd/Ctrl + Enter` runs the selected SQL, or the statement under the caret; its rows stream into the grid below the editor.
+- **Run script** (`Cmd/Ctrl + Shift + Enter`) executes ordinary semicolon-delimited statements sequentially, exactly once, stopping on the first error or Cancel. Each statement streams its full result into the paged/spilling store. Transaction control, unquoted procedural blocks and vendor batch directives (`GO`, `DELIMITER`) are rejected before execution; quoted literals/comments and PostgreSQL dollar-quoted bodies preserve embedded semicolons. Backslash string escapes, MySQL hash/executable comments are also rejected because their parsing depends on session settings. Session state across statements is not guaranteed with pooled providers.
+- **Result tabs** retain the latest 20 statement results per script, including each result's SQL, grid, selection, fetch state and errors. Switch results after execution completes; older results are released automatically.
+- **Format** (`Cmd/Ctrl + Shift + F`) lays out the selection, or the whole script, as one undoable edit. Formatting preserves token/literal/comment bytes and adds line breaks at top-level clauses; it does not rewrite dialect-specific SQL.
+- **History** lists up to 100 unique recent executions per connection, newest first; click an entry to insert it at the caret or replace selected text without executing it. History persists under `<config dir>/query-history` as plaintext SQL; queries larger than 64 KiB are omitted.
+- **Rename** changes the current script's `.sql` filename without overwriting another file. **Delete** asks for confirmation and moves the file into its connection folder's `.trash`; restore it manually by moving the `.sql` file back. Both wait for queued autosaves; input is paused during the move.
 - Plain `SELECT` / `WITH` statements without their own `LIMIT` are fetched in chunks of the fetch size, like table data; other statements run as written.
 - Schema-aware completion of keywords, functions, tables and `table.` columns, accepted with `Tab` or `Enter`.
 - The error of a failed statement is shown above the result, in script and table tabs.
@@ -93,7 +99,10 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 | macOS | Linux | Action |
 | :--- | :--- | :--- |
-| `Cmd + Enter` | `Ctrl + Enter` | Run the active tab's query (in a SQL script: the statement under the caret) |
+| `Cmd + Enter` | `Ctrl + Enter` | Run the active tab's query (in a SQL script: selection or statement under the caret) |
+| `Cmd + Shift + Enter` | `Ctrl + Shift + Enter` | Run the whole SQL script sequentially |
+| `Cmd + Shift + F` | `Ctrl + Shift + F` | Format selected SQL or the whole script |
+| `Shift` + navigation / click | same | Extend editor text selection |
 | `Cmd + ]` | `Ctrl + ]` | Open the latest SQL script of the connection (or choose one) |
 | `←` `→` `↑` `↓`, `Home`, `End` | same | Move the caret in the SQL editor |
 | `Alt + ←/→` | `Alt + ←/→` | Move the caret by word in the SQL editor |
@@ -111,7 +120,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 These are goals of the project, but they are not available in the app today:
 
-- **SQL editor extras.** Running a whole script, several result tabs, selection and copy inside the editor, renaming or deleting scripts, query history and SQL formatting are not built yet.
+- **Advanced script execution.** Pinned sessions/explicit transaction scripts and vendor procedural/batch syntax are not supported by Run script yet.
 - **Additional grid copy formats.** TSV copy is wired to the clipboard; CSV and SQL `INSERT` copy options are not available in the UI.
 - **Keychain-backed connection passwords.** OS keychain helpers exist, but saved connections still serialize passwords into JSON; keychain integration and migration remain to be done.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
@@ -301,7 +310,7 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] Grid selection, TSV copy, and inline editing with `UPDATE` generation
 - [x] Row insertion, duplication and deletion with transactional Save / Cancel
 - [ ] Keychain-backed connection passwords and migration from plaintext config
-- [ ] SQL editor extras: whole-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and formatting
+- [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
 - [ ] Grid copy as CSV / SQL `INSERT`
 - [ ] Export to CSV / SQL from the UI
 - [ ] Real table statistics and metadata in Properties

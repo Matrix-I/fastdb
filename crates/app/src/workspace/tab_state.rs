@@ -40,6 +40,22 @@ pub struct TabState {
     /// Text last written to the script file, to tell whether the editor has unsaved changes
     pub saved_text: String,
     pub saved_revision: u64,
+    pub(super) results: Vec<ScriptResult>,
+    pub(super) active_result: usize,
+    pub(super) pending_statements: std::collections::VecDeque<String>,
+    pub(super) show_history: bool,
+    pub(super) query_history: Arc<Vec<String>>,
+    pub(super) file_busy: bool,
+}
+
+/// Inactive results own their grid, pager and fetch state; switching swaps the complete
+/// view state instead of copying rows or borrowing another result's SQL.
+pub(super) struct ScriptResult {
+    grid: VirtualDataGrid,
+    fetch: FetchState,
+    sql: Option<String>,
+    error: Option<String>,
+    elapsed: Option<u64>,
 }
 
 /// DBeaver-style incremental fetching: the first run reads `size` rows, and reaching the
@@ -235,7 +251,69 @@ impl TabState {
             connection_id: None,
             saved_text: String::new(),
             saved_revision: 0,
+            results: Vec::new(),
+            active_result: 0,
+            pending_statements: Default::default(),
+            show_history: false,
+            query_history: Arc::new(Vec::new()),
+            file_busy: false,
         }
+    }
+
+    pub(super) fn result_count(&self) -> usize {
+        self.results.len() + usize::from(self.script_sql.is_some())
+    }
+
+    pub(super) fn select_result(&mut self, index: usize) {
+        if index >= self.result_count() || index == self.active_result {
+            return;
+        }
+        let slot = if index < self.active_result {
+            index
+        } else {
+            index - 1
+        };
+        let result = &mut self.results[slot];
+        std::mem::swap(&mut self.grid, &mut result.grid);
+        std::mem::swap(&mut self.fetch, &mut result.fetch);
+        std::mem::swap(&mut self.script_sql, &mut result.sql);
+        std::mem::swap(&mut self.last_error, &mut result.error);
+        std::mem::swap(&mut self.execution_time_ms, &mut result.elapsed);
+        // Keep inactive results in display order after removing the selected slot.
+        let result = self.results.remove(slot);
+        let old_slot = if index < self.active_result {
+            self.active_result - 1
+        } else {
+            self.active_result
+        };
+        self.results.insert(old_slot, result);
+        self.active_result = index;
+    }
+
+    pub(super) fn new_script_result(&mut self, sql: String) {
+        let fetch_size = self.fetch.size;
+        if self.script_sql.is_some() {
+            let result = ScriptResult {
+                grid: std::mem::replace(
+                    &mut self.grid,
+                    VirtualDataGrid::new(None, self.editor.theme.clone()),
+                ),
+                fetch: std::mem::take(&mut self.fetch),
+                sql: self.script_sql.take(),
+                error: self.last_error.take(),
+                elapsed: self.execution_time_ms.take(),
+            };
+            self.results
+                .insert(self.active_result.min(self.results.len()), result);
+            // Bound retained grid metadata and spill files as well as row memory.
+            if self.results.len() >= 20 {
+                self.results.remove(0);
+            }
+        }
+        self.fetch.size = fetch_size;
+        self.fetch.size_text = fetch_size.to_string();
+        self.active_result = self.results.len();
+        self.script_sql = Some(sql);
     }
 
     /// Rows currently shown in the grid
@@ -313,6 +391,7 @@ impl TabState {
 
     fn fail_fetch(&mut self, error: String) -> QueryStatus {
         // Rows copied before the failure stay; the next scroll to the end retries from there
+        self.pending_statements.clear();
         self.fetch.append = None;
         self.fetch.started_at = None;
         self.fetch.schema_ready_at = None;
@@ -725,5 +804,93 @@ mod row_save_tests {
         assert!(tab.finish_row_save(&latest, Ok(1)));
         assert!(!tab.grid.changeset.is_dirty());
         assert!(tab.last_error.is_none());
+    }
+}
+
+#[cfg(test)]
+mod script_result_tests {
+    use super::{ColumnMeta, DataType, QueryResultPager, SchemaCache, ScriptFile, TabState, Theme};
+    use std::sync::Arc;
+    fn tab() -> TabState {
+        TabState::script(
+            1,
+            &ScriptFile {
+                path: "/tmp/results.sql".into(),
+                connection_id: "a".into(),
+                name: "results".into(),
+                modified: std::time::SystemTime::now(),
+                preview: String::new(),
+            },
+            "",
+            Theme::dark(),
+            Arc::new(SchemaCache::new().unwrap()),
+        )
+    }
+    #[test]
+    fn sqlite_script_streams_individual_results_and_stops_after_an_error() {
+        let driver = db_wire::create_driver(db_wire::ConnectionConfig {
+            driver: db_wire::DbDriverKind::Sqlite,
+            database: ":memory:".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut tab = tab();
+        tab.pending_statements = sql_intel::split_script(
+            "create table t (v text); insert into t values ('a;b'); select * from t; select missing from t; insert into t values ('must not run');"
+        ).unwrap().into();
+        while let Some(sql) = tab.pending_statements.pop_front() {
+            tab.new_script_result(sql.clone());
+            tab.begin_fetch(false, false);
+            let (sender, receiver) = flume::unbounded();
+            let _ = db_wire::get_runtime().block_on(driver.execute_streaming(&sql, sender));
+            for event in receiver.drain() {
+                tab.apply_stream_event(event);
+            }
+        }
+        assert_eq!(tab.result_count(), 4);
+        assert!(tab.last_error.is_some());
+        assert!(!tab.fetch.has_more);
+        tab.select_result(2);
+        assert_eq!(tab.loaded_rows(), 1);
+        assert!(tab.last_error.is_none());
+        assert_eq!(
+            tab.grid.pager.as_ref().unwrap().get_cell(0, 0).as_deref(),
+            Some(b"a;b".as_slice())
+        );
+        assert_eq!(tab.connection_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn result_switching_preserves_order_sql_errors_fetch_size_and_pagers() {
+        let mut tab = tab();
+        for n in 0..4 {
+            tab.new_script_result(format!("select {n}"));
+            tab.fetch.size = n + 10;
+            tab.last_error = Some(n.to_string());
+            let pager = Arc::new(
+                QueryResultPager::new(vec![ColumnMeta::new(format!("col{n}"), DataType::Text)])
+                    .unwrap(),
+            );
+            tab.grid.refill_pager(pager);
+        }
+        for index in [0, 3, 1, 2, 0, 2, 3] {
+            tab.select_result(index);
+            assert_eq!(
+                tab.script_sql.as_deref(),
+                Some(format!("select {index}").as_str())
+            );
+            assert_eq!(tab.fetch.size, index + 10);
+            assert_eq!(tab.last_error.as_deref(), Some(index.to_string().as_str()));
+            assert_eq!(
+                tab.grid.pager.as_ref().unwrap().columns[0].name,
+                format!("col{index}")
+            );
+        }
+        tab.select_result(99);
+        assert_eq!(tab.active_result, 3);
+        for n in 0..30 {
+            tab.new_script_result(format!("select {n}"));
+        }
+        assert_eq!(tab.result_count(), 20);
     }
 }

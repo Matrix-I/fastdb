@@ -58,7 +58,10 @@ impl ScriptStore {
             let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if Self::number(file_name).is_none() {
+            if !file_name.ends_with(".sql")
+                || file_name.starts_with('.')
+                || !entry.file_type().is_ok_and(|t| t.is_file())
+            {
                 continue;
             }
             let modified = entry
@@ -148,6 +151,28 @@ impl ScriptStore {
             modified: SystemTime::now(),
             preview: String::new(),
         })
+    }
+
+    pub fn rename_target(path: &std::path::Path, name: &str) -> Result<PathBuf> {
+        let name = name.trim().strip_suffix(".sql").unwrap_or(name.trim());
+        anyhow::ensure!(
+            !name.is_empty()
+                && name.len() <= 120
+                && !name.starts_with('.')
+                && !name
+                    .chars()
+                    .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | ':')),
+            "Use a script name of 1–120 characters without path separators"
+        );
+        Ok(path.with_file_name(format!("{name}.sql")))
+    }
+
+    pub fn archive_target(path: &std::path::Path) -> PathBuf {
+        path.parent().unwrap().join(".trash").join(format!(
+            "{}-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            path.file_name().unwrap().to_string_lossy()
+        ))
     }
 
     pub fn read(&self, script: &ScriptFile) -> Result<String> {
@@ -250,5 +275,55 @@ mod tests {
         assert_eq!(filter_scripts(&all, "script-2")[0].name, "Script-2");
         assert!(filter_scripts(&all, "nothing").is_empty());
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use crate::workspace::script_saves::SaveQueue;
+    #[test]
+    fn rename_and_archive_follow_queued_saves_and_never_overwrite_another_script() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ScriptStore::new(root.path().into());
+        let script = store.create("a").unwrap();
+        let queue = SaveQueue::default();
+        let old = queue.write(script.path.clone(), "old".into());
+        let target = ScriptStore::rename_target(&script.path, "Monthly report.sql").unwrap();
+        queue
+            .move_script(script.path.clone(), target.clone(), "latest".into())
+            .recv()
+            .unwrap()
+            .unwrap();
+        old.recv().unwrap().unwrap();
+        assert!(!script.path.exists());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "latest");
+        assert_eq!(store.list(Some("a"))[0].name, "Monthly report");
+        let other = store.create("a").unwrap();
+        assert!(
+            queue
+                .move_script(other.path.clone(), target.clone(), "other".into())
+                .recv()
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "latest");
+        assert_eq!(std::fs::read_to_string(&other.path).unwrap(), "other");
+        let archived = ScriptStore::archive_target(&target);
+        queue
+            .move_script(target.clone(), archived.clone(), "archived".into())
+            .recv()
+            .unwrap()
+            .unwrap();
+        queue.flush().recv().unwrap().unwrap();
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_to_string(archived).unwrap(), "archived");
+        assert_eq!(store.list(Some("a")).len(), 1);
+        for name in ["", ".", "..", "../bad", "a/b", "a\\b", "bad\nname"] {
+            assert!(
+                ScriptStore::rename_target(&other.path, name).is_err(),
+                "{name:?}"
+            );
+        }
     }
 }
