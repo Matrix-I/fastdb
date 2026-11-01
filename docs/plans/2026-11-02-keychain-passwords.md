@@ -23,3 +23,28 @@ successful migration. Do not fall back to saving new passwords in plaintext.
 
 The user requested committing the completed implementation. Keep this plan in its
 own documentation commit before implementation.
+
+## Implementation and validation record (2026-11-02)
+
+Implemented keychain references, plaintext migration for both config formats,
+password updates/clearing/deletion, preservation of unreadable references, and
+best-effort rollback of credential updates when a config write fails. Secret
+cleanup is recorded in the config for retry after failure or restart. Connection
+saves run through the serialized background writer; failures have a visible retry
+banner and prevent Quit/Restart from ignoring a failed save.
+
+Validation:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets --offline -- -D warnings`: passed.
+- `cargo test --workspace --offline`: passed, including 103 app tests and the new
+  migration/failure/cleanup/queue regressions. External provider tests skipped
+  without their environment variables; no live database verification is claimed.
+- `FASTDB_TEST_KEYCHAIN=1 cargo test -p platform-hal --offline native_keychain_round_trip_when_enabled`:
+  passed against macOS Keychain using an isolated temporary credential; save,
+  read, update, delete and missing-entry behavior were verified.
+- `cargo build -p fastdb-app --offline`: passed.
+- Launched the built app from `/` with an isolated empty FASTDB_CONFIG_DIR;
+  startup remained running, then the test instance was terminated. Interactive
+  banner/dialog behavior and access across ad-hoc signed updates remain unverified.
+- Linux Secret Service was not exercised on this macOS host.

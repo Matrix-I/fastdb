@@ -34,7 +34,7 @@ Status checked against repository code on 2026-11-02; runtime smoke tests and pu
 ### Release blockers found while reviewing
 
 1. **Resolved: saved connection path.** Connections now use `platform_hal::paths::config_dir()/connections.json`, with migration from a legacy `./.fastdb_config.json`.
-2. **Saved passwords are still plaintext.** OS keychain helpers exist under `com.fastdb.credentials`, but connection load/save does not call them. Wire up credential storage and migrate existing plaintext passwords before claiming keychain-backed storage. Once integrated, verify access across ad-hoc signed updates and document any re-prompts; Developer ID signing remains a later goal.
+2. **Implemented in source: keychain-backed passwords.** Connection load/save uses `com.fastdb.credentials` and migrates existing plaintext config after successful secure storage. Verify access across ad-hoc signed updates and document any re-prompts before release; Developer ID signing remains a later goal. The published v0.1.0 preview predates this integration.
 3. **Resolved: app icon.** The macOS bundle copies `resources/FastDB.icns` and sets `CFBundleIconFile`.
 
 ## 3. Target process for FastDB
@@ -55,7 +55,8 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
   strip = true
   ```
 - [ ] Verify that `panic = "abort"` does not break required panic recovery in the tokio/GPUI paths; drop it if it does.
-- [ ] Integrate keychain-backed connection passwords and migrate plaintext credentials (blocker 2).
+- [x] Integrate keychain-backed connection passwords and migrate plaintext credentials (blocker 2).
+- [ ] Verify keychain access across ad-hoc signed updates and document any re-prompts.
 - [ ] Move `Info.plist` out of the heredoc into `resources/Info.plist` (like laplace), preserving the existing `CFBundleIconFile` and adding `LSMinimumSystemVersion` and `NSPrincipalClass = NSApplication`.
 - [ ] In both `ci/build-*.sh`, read the version from Cargo instead of hard-coding it:
   ```bash
@@ -116,7 +117,7 @@ xattr -dr com.apple.quarantine /Applications/FastDB.app
 Then launch FastDB normally from Spotlight, Launchpad, or the Applications folder.
 ````
 
-Once connection passwords move to the keychain (blocker 2), add a keychain note: ad-hoc signed updates may make macOS ask again for access to the saved passwords.
+For releases containing keychain integration, include a keychain note: ad-hoc signed updates may make macOS ask again for access to the saved passwords.
 
 ## 4. Artifacts for v0.1.0
 
@@ -137,9 +138,9 @@ Intel Macs are out of scope for v0.1.0; a universal binary (`lipo` over `x86_64-
 
 ## v0.1.0 preview release decision (2026-11-01)
 
-The first release is an early preview for macOS Apple Silicon. Keychain integration
-is deferred with an explicit plaintext-password disclosure in installation instructions
-and release notes. It remains required before claiming secure credential persistence.
+The first release is an early preview for macOS Apple Silicon. In that release, keychain integration
+was deferred with an explicit plaintext-password disclosure in installation instructions
+and release notes. It is now implemented in source; cross-update keychain access still needs release validation.
 Linux artifacts and release automation are deferred until built and verified on Linux.
 The local `bundle_macos.sh --no-install` flow supplies the app, DMG with Applications
 shortcut, and ZIP. Release assets are copied to versioned filenames and checksummed.
