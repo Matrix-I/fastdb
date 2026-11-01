@@ -1,6 +1,6 @@
+use db_wire::{DatabaseDriver, SqliteDriver, StreamEvent};
 use std::sync::Arc;
 use std::time::Duration;
-use db_wire::{DatabaseDriver, SqliteDriver, StreamEvent};
 
 #[tokio::test]
 async fn test_sqlite_driver_streaming_and_cancellation() {
@@ -8,7 +8,9 @@ async fn test_sqlite_driver_streaming_and_cancellation() {
 
     // Create a table and populate test rows
     driver
-        .execute_query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, score REAL);")
+        .execute_query(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, score REAL);",
+        )
         .await
         .unwrap();
     driver
@@ -31,7 +33,10 @@ async fn test_sqlite_driver_streaming_and_cancellation() {
     // Test execute_streaming: the driver creates the pager and announces it first
     let (event_tx, event_rx) = flume::unbounded();
     driver
-        .execute_streaming("SELECT id, name, score FROM users ORDER BY id ASC;", event_tx)
+        .execute_streaming(
+            "SELECT id, name, score FROM users ORDER BY id ASC;",
+            event_tx,
+        )
         .await
         .unwrap();
 
@@ -39,7 +44,10 @@ async fn test_sqlite_driver_streaming_and_cancellation() {
     let StreamEvent::SchemaReady(pager) = &events[0] else {
         panic!("first event must be SchemaReady, got {:?}", events[0]);
     };
-    assert!(matches!(events.last(), Some(StreamEvent::Completed { total_rows: 3, .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::Completed { total_rows: 3, .. })
+    ));
 
     assert_eq!(pager.num_cols(), 3);
     assert_eq!(pager.columns[1].name, "name");
@@ -57,10 +65,14 @@ async fn test_sqlite_errors_are_reported_as_event_and_result() {
     let driver = SqliteDriver::new_memory();
     let (event_tx, event_rx) = flume::unbounded();
 
-    let result = driver.execute_streaming("SELECT * FROM missing_table", event_tx).await;
+    let result = driver
+        .execute_streaming("SELECT * FROM missing_table", event_tx)
+        .await;
     assert!(result.is_err());
     let events: Vec<StreamEvent> = event_rx.drain().collect();
-    assert!(matches!(events.as_slice(), [StreamEvent::Error(msg)] if msg.contains("missing_table")));
+    assert!(
+        matches!(events.as_slice(), [StreamEvent::Error(msg)] if msg.contains("missing_table"))
+    );
 
     match driver.execute_query("SELECT * FROM missing_table").await {
         Ok(_) => panic!("query on a missing table must fail"),
@@ -84,7 +96,10 @@ async fn test_sqlite_long_query_can_be_cancelled() {
     });
 
     // Wait until the statement is running, then interrupt it
-    assert!(matches!(event_rx.recv_async().await, Ok(StreamEvent::SchemaReady(_))));
+    assert!(matches!(
+        event_rx.recv_async().await,
+        Ok(StreamEvent::SchemaReady(_))
+    ));
     tokio::time::sleep(Duration::from_millis(50)).await;
     driver.cancel_active_query().await.unwrap();
 
@@ -99,14 +114,23 @@ async fn test_sqlite_long_query_can_be_cancelled() {
 #[tokio::test]
 async fn test_sqlite_ping_succeeds() {
     let driver = SqliteDriver::new_memory();
-    driver.ping().await.expect("SQLite ping must succeed on a healthy connection");
+    driver
+        .ping()
+        .await
+        .expect("SQLite ping must succeed on a healthy connection");
 }
 
 #[tokio::test]
 async fn test_sqlite_apply_row_changes_is_all_or_nothing() {
     let driver = SqliteDriver::new_memory();
-    driver.execute_query("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);").await.unwrap();
-    driver.execute_query("INSERT INTO t (id, name) VALUES (1, 'a'), (2, 'b');").await.unwrap();
+    driver
+        .execute_query("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);")
+        .await
+        .unwrap();
+    driver
+        .execute_query("INSERT INTO t (id, name) VALUES (1, 'a'), (2, 'b');")
+        .await
+        .unwrap();
 
     let applied = driver
         .apply_row_changes(&[
@@ -128,7 +152,10 @@ async fn test_sqlite_apply_row_changes_is_all_or_nothing() {
         .unwrap_err();
     assert!(err.to_string().contains("not found"));
 
-    let (pager, total, _) = driver.execute_query("SELECT id, name FROM t ORDER BY id;").await.unwrap();
+    let (pager, total, _) = driver
+        .execute_query("SELECT id, name FROM t ORDER BY id;")
+        .await
+        .unwrap();
     assert_eq!(total, 2);
     assert_eq!(pager.get_cell(0, 1).as_deref(), Some(&b"z"[..]));
     assert_eq!(pager.get_cell(1, 0).as_deref(), Some(&b"3"[..]));

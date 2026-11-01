@@ -1,6 +1,6 @@
-use std::io::Write;
 use anyhow::Result;
 use mem_engine::QueryResultPager;
+use std::io::Write;
 
 /// Streams the entire dataset from QueryResultPager into CSV format without memory overhead
 pub fn export_to_csv<W: Write>(pager: &QueryResultPager, writer: &mut W) -> Result<u64> {
@@ -34,7 +34,9 @@ pub fn export_to_csv<W: Write>(pager: &QueryResultPager, writer: &mut W) -> Resu
 }
 
 fn write_csv_field<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<()> {
-    let needs_quotes = bytes.iter().any(|&b| b == b',' || b == b'"' || b == b'\n' || b == b'\r');
+    let needs_quotes = bytes
+        .iter()
+        .any(|&b| b == b',' || b == b'"' || b == b'\n' || b == b'\r');
     if needs_quotes {
         writer.write_all(b"\"")?;
         for &b in bytes {
@@ -67,7 +69,7 @@ pub fn export_to_sql_inserts<W: Write>(
 
     for r in 0..total_rows {
         if current_batch == 0 {
-            write!(writer, "INSERT INTO \"{table_name}\" ({col_list}) VALUES\n")?;
+            writeln!(writer, "INSERT INTO \"{table_name}\" ({col_list}) VALUES")?;
         }
 
         writer.write_all(b"  (")?;
@@ -109,7 +111,9 @@ mod tests {
             ColumnMeta::new("name", DataType::Text),
         ];
         let pager = QueryResultPager::new(cols).unwrap();
-        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice, Jr."[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some(&b"Alice, Jr."[..])])
+            .unwrap();
         pager.append_row(vec![Some(&b"2"[..]), None]).unwrap();
 
         let mut buf = Vec::new();
@@ -127,7 +131,9 @@ mod tests {
             ColumnMeta::new("title", DataType::Text),
         ];
         let pager = QueryResultPager::new(cols).unwrap();
-        pager.append_row(vec![Some(&b"1"[..]), Some(&b"O'Reilly"[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some(&b"O'Reilly"[..])])
+            .unwrap();
 
         let mut buf = Vec::new();
         let rows = export_to_sql_inserts("books", &pager, &mut buf, 10).unwrap();

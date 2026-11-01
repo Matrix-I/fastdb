@@ -146,15 +146,28 @@ pub fn script_fetch_query(tab: &TabState, offset: u64) -> (String, bool) {
 pub(super) fn quote_ident(kind: DbDriverKind, name: &str) -> String {
     match kind {
         DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`", name.replace('`', "``")),
-        DbDriverKind::Postgres | DbDriverKind::Sqlite | DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => format!("\"{}\"", name.replace('"', "\"\"")),
+        DbDriverKind::Postgres
+        | DbDriverKind::Sqlite
+        | DbDriverKind::SqlServer
+        | DbDriverKind::Oracle
+        | DbDriverKind::Db2 => format!("\"{}\"", name.replace('"', "\"\"")),
     }
 }
 
 /// Vendor-specific pagination for table browsing. Free-form ODBC SQL runs unchanged.
 fn table_page_suffix(kind: DbDriverKind, size: usize, offset: u64, ordered: bool) -> String {
     match kind {
-        DbDriverKind::SqlServer => format!("{} OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY", if ordered { "" } else { " ORDER BY (SELECT NULL)" }),
-        DbDriverKind::Oracle | DbDriverKind::Db2 => format!(" OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY"),
+        DbDriverKind::SqlServer => format!(
+            "{} OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY",
+            if ordered {
+                ""
+            } else {
+                " ORDER BY (SELECT NULL)"
+            }
+        ),
+        DbDriverKind::Oracle | DbDriverKind::Db2 => {
+            format!(" OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY")
+        }
         _ if offset > 0 => format!(" LIMIT {size} OFFSET {offset}"),
         _ => format!(" LIMIT {size}"),
     }
@@ -165,7 +178,7 @@ pub fn group_thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);
@@ -183,7 +196,13 @@ pub enum QueryStatus {
 
 impl TabState {
     /// Tab showing the rows of `schema.table`, opened on its Data sub-tab
-    pub fn table(id: u64, schema: &str, table: &str, theme: Theme, cache: Arc<SchemaCache>) -> Self {
+    pub fn table(
+        id: u64,
+        schema: &str,
+        table: &str,
+        theme: Theme,
+        cache: Arc<SchemaCache>,
+    ) -> Self {
         let mut grid = VirtualDataGrid::new(None, theme.clone());
         grid.set_table_name(table);
         Self {
@@ -197,7 +216,13 @@ impl TabState {
     }
 
     /// Tab editing the saved script `script`, whose file holds `text`; the editor has the keyboard
-    pub fn script(id: u64, script: &ScriptFile, text: &str, theme: Theme, cache: Arc<SchemaCache>) -> Self {
+    pub fn script(
+        id: u64,
+        script: &ScriptFile,
+        text: &str,
+        theme: Theme,
+        cache: Arc<SchemaCache>,
+    ) -> Self {
         Self {
             title: script.name.clone(),
             editor: SqlEditorView::new(text, theme.clone(), Some(cache)),
@@ -248,7 +273,11 @@ impl TabState {
 
     /// Rows currently shown in the grid
     pub fn loaded_rows(&self) -> u64 {
-        self.grid.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0)
+        self.grid
+            .pager
+            .as_ref()
+            .map(|p| p.total_rows())
+            .unwrap_or(0)
     }
 
     /// Marks the start of a run; `append` keeps the current rows and adds the new ones after them
@@ -274,16 +303,23 @@ impl TabState {
                     }
                     self.execution_time_ms = None;
                 }
-                QueryStatus::Running { rows: self.loaded_rows() }
+                QueryStatus::Running {
+                    rows: self.loaded_rows(),
+                }
             }
             StreamEvent::PageAppended { .. } => {
                 if let Err(e) = self.copy_appended_rows() {
                     return self.fail_fetch(e);
                 }
                 self.grid.on_rows_appended();
-                QueryStatus::Running { rows: self.loaded_rows() }
+                QueryStatus::Running {
+                    rows: self.loaded_rows(),
+                }
             }
-            StreamEvent::Completed { total_rows, elapsed_ms } => {
+            StreamEvent::Completed {
+                total_rows,
+                elapsed_ms,
+            } => {
                 if let Err(e) = self.copy_appended_rows() {
                     return self.fail_fetch(e);
                 }
@@ -326,7 +362,10 @@ impl TabState {
             return Ok(());
         };
         if source.num_cols() != target.num_cols() {
-            return Err("The table's columns changed since the first fetch; run the query again.".to_string());
+            return Err(
+                "The table's columns changed since the first fetch; run the query again."
+                    .to_string(),
+            );
         }
         let num_cols = source.num_cols() as usize;
         let available = source.total_rows();
@@ -356,14 +395,25 @@ impl Workspace {
         let schema = tab.schema_name.as_deref().unwrap_or("public");
         let table = match tab.table_name.as_deref() {
             Some(t) if !t.is_empty() => t,
-            _ => return if self.selected_driver_kind.uses_odbc() {
-                // Execute vendor SQL as written: CTEs, TOP and PL/SQL are not LIMIT dialects.
-                (tab.script_sql.clone().unwrap_or_default(), false)
-            } else { script_fetch_query(tab, offset) },
+            _ => {
+                return if self.selected_driver_kind.uses_odbc() {
+                    // Execute vendor SQL as written: CTEs, TOP and PL/SQL are not LIMIT dialects.
+                    (tab.script_sql.clone().unwrap_or_default(), false)
+                } else {
+                    script_fetch_query(tab, offset)
+                };
+            }
         };
 
         let target = match self.selected_driver_kind {
-            DbDriverKind::Postgres | DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => format!("{}.{}", quote_ident(self.selected_driver_kind, schema), quote_ident(self.selected_driver_kind, table)),
+            DbDriverKind::Postgres
+            | DbDriverKind::SqlServer
+            | DbDriverKind::Oracle
+            | DbDriverKind::Db2 => format!(
+                "{}.{}",
+                quote_ident(self.selected_driver_kind, schema),
+                quote_ident(self.selected_driver_kind, table)
+            ),
             DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`.`{}`", schema, table),
             DbDriverKind::Sqlite => format!("\"{}\"", table),
         };
@@ -373,21 +423,38 @@ impl Workspace {
         // A filter that orders or limits its rows itself already ends the statement,
         // so the header ordering cannot be appended after it
         let order_suffix = match &tab.grid.ordering {
-            Some(o) if !f_upper.contains("ORDER BY") && !["LIMIT", "OFFSET", "FETCH"].iter().any(|w| f_upper.split_whitespace().any(|p| p == *w)) => format!(
-                " ORDER BY {} {}",
-                quote_ident(self.selected_driver_kind, &o.column),
-                if o.descending { "DESC" } else { "ASC" }
-            ),
+            Some(o)
+                if !f_upper.contains("ORDER BY")
+                    && !["LIMIT", "OFFSET", "FETCH"]
+                        .iter()
+                        .any(|w| f_upper.split_whitespace().any(|p| p == *w)) =>
+            {
+                format!(
+                    " ORDER BY {} {}",
+                    quote_ident(self.selected_driver_kind, &o.column),
+                    if o.descending { "DESC" } else { "ASC" }
+                )
+            }
             _ => String::new(),
         };
 
-        let limit_suffix = table_page_suffix(self.selected_driver_kind, tab.fetch.size, offset, !order_suffix.is_empty() || f_upper.contains("ORDER BY"));
+        let limit_suffix = table_page_suffix(
+            self.selected_driver_kind,
+            tab.fetch.size,
+            offset,
+            !order_suffix.is_empty() || f_upper.contains("ORDER BY"),
+        );
 
         if filter.is_empty() {
-            (format!("SELECT * FROM {}{}{};", target, order_suffix, limit_suffix), true)
+            (
+                format!("SELECT * FROM {}{}{};", target, order_suffix, limit_suffix),
+                true,
+            )
         } else {
             // A filter with its own LIMIT decides the row count, so it is not fetched in chunks
-            let paged = !["LIMIT", "OFFSET", "FETCH"].iter().any(|word| f_upper.split_whitespace().any(|part| part == *word));
+            let paged = !["LIMIT", "OFFSET", "FETCH"]
+                .iter()
+                .any(|word| f_upper.split_whitespace().any(|part| part == *word));
             let limit_suffix = if paged { limit_suffix.as_str() } else { "" };
 
             let sql = if f_upper.starts_with("WHERE")
@@ -398,9 +465,15 @@ impl Workspace {
                 || f_upper.starts_with("OFFSET")
                 || f_upper.starts_with("FETCH")
             {
-                format!("SELECT * FROM {} {}{}{};", target, filter, order_suffix, limit_suffix)
+                format!(
+                    "SELECT * FROM {} {}{}{};",
+                    target, filter, order_suffix, limit_suffix
+                )
             } else {
-                format!("SELECT * FROM {} WHERE {}{}{};", target, filter, order_suffix, limit_suffix)
+                format!(
+                    "SELECT * FROM {} WHERE {}{}{};",
+                    target, filter, order_suffix, limit_suffix
+                )
             };
             (sql, paged)
         }
@@ -417,7 +490,13 @@ impl Workspace {
             self.active_tab = idx;
         } else {
             let id = self.allocate_tab_id();
-            self.tabs.push(TabState::table(id, schema, table, self.theme.clone(), self.schema_cache.clone()));
+            self.tabs.push(TabState::table(
+                id,
+                schema,
+                table,
+                self.theme.clone(),
+                self.schema_cache.clone(),
+            ));
             self.active_tab = self.tabs.len() - 1;
         }
 
@@ -454,7 +533,11 @@ impl Workspace {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        if self.is_running_query || self.driver.is_none() || !tab.fetch.has_more || tab.grid.pager.is_none() {
+        if self.is_running_query
+            || self.driver.is_none()
+            || !tab.fetch.has_more
+            || tab.grid.pager.is_none()
+        {
             return;
         }
         let offset = tab.loaded_rows();
@@ -565,7 +648,9 @@ impl Workspace {
         let driver = Arc::clone(driver);
         let generation = self.query_generation;
         cx.spawn(async move |this, cx| {
-            let result = db_wire::run_on_shared_runtime(async move { driver.cancel_active_query().await }).await;
+            let result =
+                db_wire::run_on_shared_runtime(async move { driver.cancel_active_query().await })
+                    .await;
             if result.is_err() {
                 let _ = this.update(cx, |this, cx| {
                     if this.query_generation == generation && this.is_running_query {
@@ -582,12 +667,20 @@ impl Workspace {
     /// `conn_id` (the active connection when `None`), creating one when it has none, or
     /// offers the script chooser when the latest one is already open
     pub fn open_sql_script(&mut self, conn_id: Option<&str>, cx: &mut Context<Self>) {
-        let Some(conn_id) = conn_id.map(str::to_string).or_else(|| self.active_connection_id.clone()) else {
+        let Some(conn_id) = conn_id
+            .map(str::to_string)
+            .or_else(|| self.active_connection_id.clone())
+        else {
             self.show_connection_modal = true;
             return;
         };
         let script = match self.script_store.most_recent(&conn_id) {
-            Some(recent) if self.tabs.iter().any(|t| t.script_path.as_deref() == Some(recent.path.as_path())) => {
+            Some(recent)
+                if self
+                    .tabs
+                    .iter()
+                    .any(|t| t.script_path.as_deref() == Some(recent.path.as_path())) =>
+            {
                 self.open_script_chooser(&conn_id);
                 return;
             }
@@ -605,7 +698,11 @@ impl Workspace {
 
     /// Activates the tab showing `script`, or reads it into a new tab, on its connection
     pub fn open_script_file(&mut self, script: &ScriptFile, cx: &mut Context<Self>) {
-        if let Some(idx) = self.tabs.iter().position(|t| t.script_path.as_deref() == Some(script.path.as_path())) {
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.script_path.as_deref() == Some(script.path.as_path()))
+        {
             self.active_tab = idx;
         } else {
             let text = match self.script_store.read(script) {
@@ -616,7 +713,13 @@ impl Workspace {
                 }
             };
             let id = self.allocate_tab_id();
-            self.tabs.push(TabState::script(id, script, &text, self.theme.clone(), self.schema_cache.clone()));
+            self.tabs.push(TabState::script(
+                id,
+                script,
+                &text,
+                self.theme.clone(),
+                self.schema_cache.clone(),
+            ));
             self.active_tab = self.tabs.len() - 1;
         }
         self.is_filter_focused = false;
@@ -626,7 +729,13 @@ impl Workspace {
 
     /// Makes the active script tab's connection the active connection, so it runs there
     pub fn activate_script_connection(&mut self, cx: &mut Context<Self>) {
-        let Some(conn_id) = self.tabs.get(self.active_tab).and_then(|t| t.connection_id.clone()) else { return };
+        let Some(conn_id) = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|t| t.connection_id.clone())
+        else {
+            return;
+        };
         if self.active_connection_id.as_deref() != Some(conn_id.as_str()) || !self.is_connected {
             self.connect_saved_by_id(&conn_id, cx);
         }
@@ -634,8 +743,12 @@ impl Workspace {
 
     /// Writes a script tab's text to its file when it changed; a failure shows in its banner
     pub fn save_script_tab(&mut self, idx: usize) {
-        let Some(tab) = self.tabs.get_mut(idx).filter(|t| t.is_dirty()) else { return };
-        let Some(path) = tab.script_path.clone() else { return };
+        let Some(tab) = self.tabs.get_mut(idx).filter(|t| t.is_dirty()) else {
+            return;
+        };
+        let Some(path) = tab.script_path.clone() else {
+            return;
+        };
         let text = tab.editor.buffer.text();
         match self.script_store.write(&path, &text) {
             Ok(()) => tab.saved_text = text,
@@ -664,16 +777,291 @@ mod provider_tests {
 
     #[test]
     fn enterprise_table_paging_uses_vendor_syntax() {
-        assert_eq!(table_page_suffix(DbDriverKind::SqlServer, 50, 100, false), " ORDER BY (SELECT NULL) OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY");
-        assert_eq!(table_page_suffix(DbDriverKind::SqlServer, 50, 0, true), " OFFSET 0 ROWS FETCH NEXT 50 ROWS ONLY");
+        assert_eq!(
+            table_page_suffix(DbDriverKind::SqlServer, 50, 100, false),
+            " ORDER BY (SELECT NULL) OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY"
+        );
+        assert_eq!(
+            table_page_suffix(DbDriverKind::SqlServer, 50, 0, true),
+            " OFFSET 0 ROWS FETCH NEXT 50 ROWS ONLY"
+        );
         for kind in [DbDriverKind::Oracle, DbDriverKind::Db2] {
-            assert_eq!(table_page_suffix(kind, 50, 100, false), " OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY");
+            assert_eq!(
+                table_page_suffix(kind, 50, 100, false),
+                " OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY"
+            );
             assert_eq!(quote_ident(kind, "a\"b"), "\"a\"\"b\"");
         }
     }
 
     #[test]
     fn mariadb_uses_mysql_identifier_quoting() {
-        assert_eq!(quote_ident(DbDriverKind::MariaDb, "user`name"), "`user``name`");
+        assert_eq!(
+            quote_ident(DbDriverKind::MariaDb, "user`name"),
+            "`user``name`"
+        );
+    }
+}
+
+#[cfg(test)]
+mod relocated_tests {
+    #[test]
+    fn test_property_sections_and_subtabs() {
+        use crate::workspace::{PropertySection, TabState, TableSubTab};
+        use ui_core::theme::Theme;
+
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        let mut tab = TabState::table(1, "public", "additionalInfo", Theme::dark(), cache);
+        tab.active_subtab = TableSubTab::Properties;
+
+        assert_eq!(tab.active_subtab, TableSubTab::Properties);
+        assert_eq!(tab.active_property_section, PropertySection::Columns);
+        assert!(!tab.properties_header_collapsed);
+    }
+
+    fn sample_table_tab() -> crate::workspace::TabState {
+        use ui_core::theme::Theme;
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        crate::workspace::TabState::table(7, "public", "users", Theme::dark(), cache)
+    }
+
+    fn sample_script_tab(text: &str) -> crate::workspace::TabState {
+        use crate::workspace::{ScriptFile, TabState};
+        use ui_core::theme::Theme;
+        let cache = std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap());
+        let script = ScriptFile {
+            path: std::path::PathBuf::from("/tmp/Script-4.sql"),
+            connection_id: "pg".to_string(),
+            name: "Script-4".to_string(),
+            modified: std::time::SystemTime::now(),
+            preview: String::new(),
+        };
+        TabState::script(3, &script, text, Theme::dark(), cache)
+    }
+
+    #[test]
+    fn test_script_tab_title_text_and_dirty_flag_come_from_its_file() {
+        let mut tab = sample_script_tab("SELECT 1;");
+        assert_eq!(tab.title, "Script-4");
+        assert_eq!(tab.connection_id.as_deref(), Some("pg"));
+        assert_eq!(tab.editor.buffer.text(), "SELECT 1;");
+        assert!(!tab.is_dirty());
+        tab.editor.insert_text("\nSELECT 2;");
+        assert!(tab.is_dirty());
+        assert!(!sample_table_tab().is_dirty());
+    }
+
+    #[test]
+    fn test_failed_run_keeps_its_message_until_the_next_run() {
+        use db_wire::StreamEvent;
+
+        let mut tab = sample_table_tab();
+        tab.begin_fetch(true, false);
+        tab.apply_stream_event(StreamEvent::Error(
+            "relation \"users\" does not exist".to_string(),
+        ));
+        assert_eq!(
+            tab.last_error.as_deref(),
+            Some("relation \"users\" does not exist")
+        );
+
+        tab.begin_fetch(true, false);
+        assert_eq!(tab.last_error, None);
+    }
+
+    #[test]
+    fn test_script_fetch_query_pages_selects_and_runs_other_statements_as_written() {
+        use crate::workspace::script_fetch_query;
+        let mut tab = sample_script_tab("");
+        tab.fetch.size = 100;
+
+        tab.script_sql = Some("SELECT * FROM users;".to_string());
+        assert_eq!(
+            script_fetch_query(&tab, 0),
+            (
+                "SELECT * FROM (SELECT * FROM users\n) fastdb_page LIMIT 100".to_string(),
+                true
+            )
+        );
+        assert_eq!(
+            script_fetch_query(&tab, 100).0,
+            "SELECT * FROM (SELECT * FROM users\n) fastdb_page LIMIT 100 OFFSET 100"
+        );
+
+        tab.script_sql = Some("DELETE FROM users WHERE id = 1;".to_string());
+        assert_eq!(
+            script_fetch_query(&tab, 0),
+            ("DELETE FROM users WHERE id = 1;".to_string(), false)
+        );
+
+        tab.script_sql = None;
+        assert_eq!(script_fetch_query(&tab, 0), (String::new(), false));
+    }
+
+    #[test]
+    fn test_script_tabs_start_empty_with_the_editor_focused() {
+        let tab = sample_script_tab("");
+        assert!(tab.is_script());
+        assert!(tab.editor_focused);
+        assert_eq!(tab.editor.buffer.text(), "");
+        assert!(!sample_table_tab().is_script());
+    }
+
+    #[test]
+    fn test_stream_events_fill_the_tab_grid_incrementally() {
+        use crate::workspace::QueryStatus;
+        use db_wire::{ColumnMeta, DataType, QueryResultPager, StreamEvent};
+        use std::sync::Arc;
+
+        let mut tab = sample_table_tab();
+        let pager = Arc::new(
+            QueryResultPager::new(vec![
+                ColumnMeta::new("id", DataType::Int4),
+                ColumnMeta::new("name", DataType::Text),
+            ])
+            .unwrap(),
+        );
+
+        // The grid shows the result as soon as the schema arrives
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::SchemaReady(Arc::clone(&pager))),
+            QueryStatus::Running { rows: 0 }
+        );
+        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &pager));
+        assert_eq!(tab.grid.table_name, "users");
+
+        pager
+            .append_row(vec![
+                Some(&b"1"[..]),
+                Some(&b"a fairly long user name streamed in"[..]),
+            ])
+            .unwrap();
+        pager.append_row(vec![Some(&b"2"[..]), None]).unwrap();
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::PageAppended { total_rows: 2 }),
+            QueryStatus::Running { rows: 2 }
+        );
+        assert_eq!(tab.grid.width_sampled_rows, 2);
+
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::Completed {
+                total_rows: 2,
+                elapsed_ms: 15
+            }),
+            QueryStatus::Done {
+                rows: 2,
+                elapsed_ms: 15
+            }
+        );
+        assert_eq!(tab.execution_time_ms, Some(15));
+    }
+
+    #[test]
+    fn test_stream_error_before_schema_keeps_previous_result() {
+        use crate::workspace::QueryStatus;
+        use db_wire::{ColumnMeta, DataType, QueryResultPager, StreamEvent};
+        use std::sync::Arc;
+
+        let mut tab = sample_table_tab();
+        let previous =
+            Arc::new(QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int4)]).unwrap());
+        tab.grid.set_pager(Arc::clone(&previous));
+
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::Error("relation does not exist".to_string())),
+            QueryStatus::Failed("relation does not exist".to_string())
+        );
+        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &previous));
+    }
+
+    #[test]
+    fn test_fetch_next_appends_rows_to_the_current_result() {
+        use crate::workspace::QueryStatus;
+        use db_wire::{ColumnMeta, DataType, QueryResultPager, StreamEvent};
+        use std::sync::Arc;
+
+        let columns = || vec![ColumnMeta::new("id", DataType::Int4)];
+        let mut tab = sample_table_tab();
+        tab.fetch.size = 2;
+
+        // First chunk comes back full, so more rows may follow
+        let first = Arc::new(QueryResultPager::new(columns()).unwrap());
+        tab.begin_fetch(true, false);
+        tab.apply_stream_event(StreamEvent::SchemaReady(Arc::clone(&first)));
+        first.append_row(vec![Some(&b"1"[..])]).unwrap();
+        first.append_row(vec![Some(&b"2"[..])]).unwrap();
+        tab.apply_stream_event(StreamEvent::Completed {
+            total_rows: 2,
+            elapsed_ms: 3,
+        });
+        assert!(tab.fetch.has_more);
+        assert!(
+            tab.fetch
+                .last
+                .as_ref()
+                .unwrap()
+                .message()
+                .starts_with("2 row(s) fetched - ")
+        );
+
+        // The next chunk lands after the existing rows in the same pager
+        let next = Arc::new(QueryResultPager::new(columns()).unwrap());
+        tab.begin_fetch(true, true);
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::SchemaReady(Arc::clone(&next))),
+            QueryStatus::Running { rows: 2 }
+        );
+        next.append_row(vec![Some(&b"3"[..])]).unwrap();
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::PageAppended { total_rows: 1 }),
+            QueryStatus::Running { rows: 3 }
+        );
+        assert_eq!(
+            tab.apply_stream_event(StreamEvent::Completed {
+                total_rows: 1,
+                elapsed_ms: 2
+            }),
+            QueryStatus::Done {
+                rows: 3,
+                elapsed_ms: 2
+            }
+        );
+
+        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &first));
+        assert_eq!(first.get_cell(2, 0), Some(b"3".to_vec()));
+        assert!(
+            !tab.fetch.has_more,
+            "a short chunk means the table is exhausted"
+        );
+        assert!(!tab.fetch.is_appending());
+        assert!(
+            tab.fetch
+                .last
+                .as_ref()
+                .unwrap()
+                .message()
+                .starts_with("3 row(s) fetched - ")
+        );
+    }
+
+    #[test]
+    fn test_fetch_size_text_falls_back_to_current_size() {
+        let mut tab = sample_table_tab();
+        tab.fetch.size_text = "500".to_string();
+        tab.fetch.commit_size_text();
+        assert_eq!(tab.fetch.size, 500);
+
+        tab.fetch.size_text = "0".to_string();
+        tab.fetch.commit_size_text();
+        assert_eq!((tab.fetch.size, tab.fetch.size_text.as_str()), (500, "500"));
+    }
+
+    #[test]
+    fn test_row_counts_group_thousands() {
+        use crate::workspace::group_thousands;
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1400), "1,400");
+        assert_eq!(group_thousands(1234567), "1,234,567");
     }
 }

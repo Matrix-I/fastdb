@@ -1,9 +1,9 @@
-use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use lru::LruCache;
 use parking_lot::{Mutex, RwLock};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::slotted_page::SlottedPage;
 use crate::spiller::DiskSpiller;
@@ -73,7 +73,10 @@ impl QueryResultPager {
         let mut active = self.active_page.lock();
         let mut rollover = false;
 
-        let row_slices: Vec<Option<&[u8]>> = cells_vec.iter().map(|c| c.as_ref().map(|b| b.as_ref())).collect();
+        let row_slices: Vec<Option<&[u8]>> = cells_vec
+            .iter()
+            .map(|c| c.as_ref().map(|b| b.as_ref()))
+            .collect();
         if !Arc::make_mut(&mut *active).try_append_row(row_slices.iter().copied()) {
             // Active page is full. Seal it and start a new page.
             rollover = true;
@@ -147,12 +150,12 @@ impl QueryResultPager {
         // Put back into LRU cache
         {
             let mut cache = self.cache.lock();
-            if cache.len() >= self.max_resident_pages {
-                if let Some((evicted_id, evicted_page)) = cache.pop_lru() {
-                    let mut spiller = self.spiller.lock();
-                    if !spiller.is_page_spilled(evicted_id) {
-                        spiller.spill_page(&evicted_page)?;
-                    }
+            if cache.len() >= self.max_resident_pages
+                && let Some((evicted_id, evicted_page)) = cache.pop_lru()
+            {
+                let mut spiller = self.spiller.lock();
+                if !spiller.is_page_spilled(evicted_id) {
+                    spiller.spill_page(&evicted_page)?;
                 }
             }
             cache.put(page_id, Arc::clone(&arc_page));
@@ -207,7 +210,9 @@ mod tests {
     fn test_active_page_reads_share_one_allocation() {
         let pager = QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int8)]).unwrap();
         for i in 0..10u32 {
-            pager.append_row(vec![Some(i.to_string().into_bytes())]).unwrap();
+            pager
+                .append_row(vec![Some(i.to_string().into_bytes())])
+                .unwrap();
         }
 
         // Repeated reads of the active page must not copy the 64KB page

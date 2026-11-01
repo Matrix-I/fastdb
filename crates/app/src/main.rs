@@ -4,12 +4,12 @@ use anyhow::Result;
 use gpui::*;
 use tracing::info;
 
-mod workspace;
 mod assets;
 pub mod updater;
-use workspace::Workspace;
+mod workspace;
 use assets::FastDbAssetSource;
 use ui_core::actions::{About, CheckForUpdates, Quit};
+use workspace::Workspace;
 
 fn about(_: &About, cx: &mut App) {
     for handle in cx.windows() {
@@ -103,10 +103,8 @@ fn main() -> Result<()> {
             ..Default::default()
         };
 
-        cx.open_window(window_options, |_window, cx| {
-            cx.new(Workspace::new)
-        })
-        .expect("Failed to open FastDB main window");
+        cx.open_window(window_options, |_window, cx| cx.new(Workspace::new))
+            .expect("Failed to open FastDB main window");
     });
 
     Ok(())

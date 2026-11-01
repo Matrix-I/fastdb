@@ -6,19 +6,10 @@ pub struct GridCoord {
     pub col: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GridSelection {
     pub anchor: Option<GridCoord>,
     pub focus: Option<GridCoord>,
-}
-
-impl Default for GridSelection {
-    fn default() -> Self {
-        Self {
-            anchor: None,
-            focus: None,
-        }
-    }
 }
 
 impl GridSelection {
@@ -117,10 +108,19 @@ impl GridSelection {
         };
 
         let col_names: Vec<&str> = (min_c..=max_c)
-            .map(|c| pager.columns.get(c).map(|col| col.name.as_str()).unwrap_or("col"))
+            .map(|c| {
+                pager
+                    .columns
+                    .get(c)
+                    .map(|col| col.name.as_str())
+                    .unwrap_or("col")
+            })
             .collect();
 
-        let mut out = format!("INSERT INTO \"{table_name}\" ({}) VALUES\n", col_names.join(", "));
+        let mut out = format!(
+            "INSERT INTO \"{table_name}\" ({}) VALUES\n",
+            col_names.join(", ")
+        );
 
         for r in min_r..=max_r {
             out.push_str("  (");
@@ -159,8 +159,12 @@ mod tests {
             ColumnMeta::new("name", DataType::Text),
         ];
         let pager = QueryResultPager::new(cols).unwrap();
-        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
-        pager.append_row(vec![Some(&b"2"[..]), Some(&b"Bob, Jr."[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])])
+            .unwrap();
+        pager
+            .append_row(vec![Some(&b"2"[..]), Some(&b"Bob, Jr."[..])])
+            .unwrap();
 
         let mut sel = GridSelection::new();
         sel.set_range(GridCoord { row: 0, col: 0 }, GridCoord { row: 1, col: 1 });

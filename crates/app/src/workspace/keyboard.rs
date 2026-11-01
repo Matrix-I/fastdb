@@ -42,13 +42,13 @@ impl Workspace {
 
         if self.update_dialog.is_some() {
             if event.keystroke.key == "escape" {
-                let is_downloading = match self.update_dialog.as_ref().map(|d| &d.status) {
+                let is_downloading = matches!(
+                    self.update_dialog.as_ref().map(|d| &d.status),
                     Some(UpdateDialogStatus::UpdateAvailable {
                         download: DownloadUiState::Downloading { .. },
                         ..
-                    }) => true,
-                    _ => false,
-                };
+                    })
+                );
                 if !is_downloading {
                     self.close_update_dialog();
                     cx.notify();
@@ -114,7 +114,9 @@ impl Workspace {
                     (_, Some(FormField::Port)) => Some(FormField::Database),
                     (_, Some(FormField::Database)) => Some(FormField::User),
                     (_, Some(FormField::User)) => Some(FormField::Password),
-                    (_, Some(FormField::Password)) if self.form_tls_enabled => Some(FormField::TlsCa),
+                    (_, Some(FormField::Password)) if self.form_tls_enabled => {
+                        Some(FormField::TlsCa)
+                    }
                     (_, Some(FormField::Password | FormField::TlsCa)) => Some(FormField::Name),
                 };
                 cx.notify();
@@ -140,7 +142,11 @@ impl Workspace {
                     cx.notify();
                 }
             }
-        } else if self.tabs.get(self.active_tab).is_some_and(|t| t.grid.editing_cell.is_some()) {
+        } else if self
+            .tabs
+            .get(self.active_tab)
+            .is_some_and(|t| t.grid.editing_cell.is_some())
+        {
             self.handle_cell_edit_key(event, cx);
         } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("s")
@@ -210,9 +216,20 @@ impl Workspace {
                 }
             } else if tab.is_script() && tab.editor_focused {
                 let cmd = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
-                tab.editor.identifier_quote = if matches!(self.selected_driver_kind, DbDriverKind::MySql | DbDriverKind::MariaDb) { '`' } else { '"' };
+                tab.editor.identifier_quote = if matches!(
+                    self.selected_driver_kind,
+                    DbDriverKind::MySql | DbDriverKind::MariaDb
+                ) {
+                    '`'
+                } else {
+                    '"'
+                };
                 if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
-                    if undo_key == UndoKey::Redo { tab.editor.redo() } else { tab.editor.undo() };
+                    if undo_key == UndoKey::Redo {
+                        tab.editor.redo()
+                    } else {
+                        tab.editor.undo()
+                    };
                 } else if cmd && event.keystroke.key.eq_ignore_ascii_case("v") {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                         tab.editor.insert_text(&text);
@@ -251,7 +268,11 @@ impl Workspace {
                 let next = self.tabs.get(self.active_tab).and_then(|t| {
                     let edit = t.grid.editing_cell.as_ref()?;
                     let num_cols = t.grid.pager.as_ref()?.num_cols() as usize;
-                    let col = if keystroke.modifiers.shift { edit.col.checked_sub(1)? } else { edit.col + 1 };
+                    let col = if keystroke.modifiers.shift {
+                        edit.col.checked_sub(1)?
+                    } else {
+                        edit.col + 1
+                    };
                     (col < num_cols).then_some((edit.row, col))
                 });
                 self.commit_cell_edit();
@@ -261,7 +282,13 @@ impl Workspace {
             }
             "s" if cmd => self.save_pending_edits(cx),
             _ => {
-                let Some(edit) = self.tabs.get_mut(self.active_tab).and_then(|t| t.grid.editing_cell.as_mut()) else { return };
+                let Some(edit) = self
+                    .tabs
+                    .get_mut(self.active_tab)
+                    .and_then(|t| t.grid.editing_cell.as_mut())
+                else {
+                    return;
+                };
                 let input = LineInput {
                     text: &mut edit.text,
                     caret: &mut edit.caret,

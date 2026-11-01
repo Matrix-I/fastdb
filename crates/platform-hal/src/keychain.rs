@@ -8,7 +8,8 @@ pub const FASTDB_KEYCHAIN_SERVICE: &str = "com.fastdb.credentials";
 pub fn save_credential(service: &str, account: &str, secret: &str) -> Result<()> {
     let entry = Entry::new(service, account)
         .with_context(|| format!("Failed to create keyring entry for account: {account}"))?;
-    entry.set_password(secret)
+    entry
+        .set_password(secret)
         .with_context(|| format!("Failed to save secret in keyring for account: {account}"))?;
     debug!("Successfully saved credential in keychain for {}", account);
     Ok(())
@@ -38,7 +39,9 @@ pub fn delete_credential(service: &str, account: &str) -> Result<()> {
             Ok(())
         }
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("Failed to delete credential for account: {account}")),
+        Err(e) => {
+            Err(e).with_context(|| format!("Failed to delete credential for account: {account}"))
+        }
     }
 }
 
@@ -56,7 +59,9 @@ pub struct KeychainStore {
 
 impl KeychainStore {
     pub fn new(service: impl Into<String>) -> Self {
-        Self { service: service.into() }
+        Self {
+            service: service.into(),
+        }
     }
 }
 
@@ -88,7 +93,10 @@ pub struct InMemoryCredentialStore {
 
 impl CredentialStore for InMemoryCredentialStore {
     fn save(&self, account: &str, secret: &str) -> Result<()> {
-        self.secrets.lock().unwrap().insert(account.to_string(), secret.to_string());
+        self.secrets
+            .lock()
+            .unwrap()
+            .insert(account.to_string(), secret.to_string());
         Ok(())
     }
 

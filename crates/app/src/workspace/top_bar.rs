@@ -1,5 +1,5 @@
-use gpui::prelude::FluentBuilder;
 use super::*;
+use gpui::prelude::FluentBuilder;
 
 pub(super) const TOP_BAR_HEIGHT: f32 = 38.0;
 
@@ -39,16 +39,31 @@ impl Workspace {
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(14.0))
                             .text_color(theme.text_accent)
-                            .child("⚡ FastDB")
-                    )
+                            .child("⚡ FastDB"),
+                    ),
             )
             // Tabs Bar: only open tables, the first one flush with the navigator edge
             .child({
-                let mut tabs_bar = div().flex().flex_1().min_w_0().items_center().gap_1().pr_2().overflow_hidden();
+                let mut tabs_bar = div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap_1()
+                    .pr_2()
+                    .overflow_hidden();
                 for (i, tab) in self.tabs.iter().enumerate() {
                     let is_active = i == active_tab_idx;
-                    let bg = if is_active { theme.bg_surface_selected } else { theme.bg_surface };
-                    let border_color = if is_active { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() };
+                    let bg = if is_active {
+                        theme.bg_surface_selected
+                    } else {
+                        theme.bg_surface
+                    };
+                    let border_color = if is_active {
+                        rgb(0x388bfd)
+                    } else {
+                        hsla(0.0, 0.0, 0.0, 0.0).into()
+                    };
                     let tab_id = format!("tab-select-{}", i);
                     let close_id = format!("tab-close-{}", i);
 
@@ -66,7 +81,11 @@ impl Workspace {
                             .border_t_2()
                             .border_color(border_color)
                             .text_size(px(12.0))
-                            .text_color(if is_active { theme.text_primary } else { theme.text_secondary })
+                            .text_color(if is_active {
+                                theme.text_primary
+                            } else {
+                                theme.text_secondary
+                            })
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.active_tab = i;
@@ -74,12 +93,23 @@ impl Workspace {
                                 this.activate_script_connection(cx);
                                 cx.notify();
                             }))
-                            .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                this.open_tab_context_menu(i, event.position);
-                                cx.notify();
-                            }))
-                            .child(img(if tab.is_script() { "icons/sql_script.svg" } else { "icons/table.svg" }).w(px(13.0)).h(px(13.0)))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.open_tab_context_menu(i, event.position);
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                img(if tab.is_script() {
+                                    "icons/sql_script.svg"
+                                } else {
+                                    "icons/table.svg"
+                                })
+                                .w(px(13.0))
+                                .h(px(13.0)),
+                            )
                             .child(tab.title.clone())
                             .child(
                                 div()
@@ -92,15 +122,17 @@ impl Workspace {
                                     .rounded_xs()
                                     .text_size(px(11.0))
                                     .text_color(theme.text_muted)
-                                    .hover(|s| s.text_color(rgb(0xff7b72)).bg(theme.bg_surface_hover))
+                                    .hover(|s| {
+                                        s.text_color(rgb(0xff7b72)).bg(theme.bg_surface_hover)
+                                    })
                                     .cursor_pointer()
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
                                         this.close_tab(i);
                                         cx.notify();
                                     }))
-                                    .child("✕")
-                            )
+                                    .child("✕"),
+                            ),
                     );
                 }
                 tabs_bar.child(
@@ -122,7 +154,7 @@ impl Workspace {
                             cx.notify();
                         }))
                         .child(img("icons/sql_script.svg").w(px(12.0)).h(px(12.0)))
-                        .child("+ SQL")
+                        .child("+ SQL"),
                 )
             })
             // Update notification badge shown when a new release is available

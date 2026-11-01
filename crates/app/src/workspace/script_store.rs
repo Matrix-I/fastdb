@@ -41,21 +41,37 @@ impl ScriptStore {
 
     /// Number of a `Script-<n>.sql` file name
     fn number(file_name: &str) -> Option<u64> {
-        file_name.strip_prefix(PREFIX)?.strip_suffix(".sql")?.parse().ok()
+        file_name
+            .strip_prefix(PREFIX)?
+            .strip_suffix(".sql")?
+            .parse()
+            .ok()
     }
 
     fn list_dir(&self, connection_id: &str, out: &mut Vec<ScriptFile>) {
-        let Ok(entries) = std::fs::read_dir(self.dir(connection_id)) else { return };
+        let Ok(entries) = std::fs::read_dir(self.dir(connection_id)) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
             if Self::number(file_name).is_none() {
                 continue;
             }
-            let modified = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+            let modified = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
             let preview = std::fs::read_to_string(&path)
                 .ok()
-                .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string))
+                .and_then(|t| {
+                    t.lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty())
+                        .map(str::to_string)
+                })
                 .unwrap_or_default();
             out.push(ScriptFile {
                 name: file_name.trim_end_matches(".sql").to_string(),
@@ -73,16 +89,24 @@ impl ScriptStore {
         match connection_id {
             Some(id) => self.list_dir(id, &mut out),
             None => {
-                for entry in std::fs::read_dir(&self.root).into_iter().flatten().flatten() {
-                    if entry.path().is_dir() {
-                        if let Some(id) = entry.file_name().to_str() {
-                            self.list_dir(id, &mut out);
-                        }
+                for entry in std::fs::read_dir(&self.root)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                {
+                    if entry.path().is_dir()
+                        && let Some(id) = entry.file_name().to_str()
+                    {
+                        self.list_dir(id, &mut out);
                     }
                 }
             }
         }
-        out.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.name.cmp(&a.name)));
+        out.sort_by(|a, b| {
+            b.modified
+                .cmp(&a.modified)
+                .then_with(|| b.name.cmp(&a.name))
+        });
         out
     }
 
@@ -93,7 +117,8 @@ impl ScriptStore {
     /// Creates an empty `Script-<n>.sql` numbered after the connection's highest script
     pub fn create(&self, connection_id: &str) -> Result<ScriptFile> {
         let dir = self.dir(connection_id);
-        std::fs::create_dir_all(&dir).with_context(|| format!("Cannot create {}", dir.display()))?;
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("Cannot create {}", dir.display()))?;
         let next = std::fs::read_dir(&dir)?
             .flatten()
             .filter_map(|e| e.file_name().to_str().and_then(Self::number))
@@ -113,7 +138,8 @@ impl ScriptStore {
     }
 
     pub fn read(&self, script: &ScriptFile) -> Result<String> {
-        std::fs::read_to_string(&script.path).with_context(|| format!("Cannot read {}", script.path.display()))
+        std::fs::read_to_string(&script.path)
+            .with_context(|| format!("Cannot read {}", script.path.display()))
     }
 
     pub fn write(&self, path: &Path, text: &str) -> Result<()> {
@@ -126,25 +152,31 @@ pub fn filter_scripts<'a>(scripts: &'a [ScriptFile], query: &str) -> Vec<&'a Scr
     let query = query.trim().to_lowercase();
     scripts
         .iter()
-        .filter(|s| query.is_empty() || s.name.to_lowercase().contains(&query) || s.preview.to_lowercase().contains(&query))
+        .filter(|s| {
+            query.is_empty()
+                || s.name.to_lowercase().contains(&query)
+                || s.preview.to_lowercase().contains(&query)
+        })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_scripts, ScriptStore};
+    use super::{ScriptStore, filter_scripts};
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
     fn temp_root(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fastdb-scripts-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fastdb-scripts-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
 
     fn touch(path: &std::path::Path, secs_ago: u64) {
         let file = std::fs::File::options().write(true).open(path).unwrap();
-        file.set_modified(SystemTime::now() - Duration::from_secs(secs_ago)).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(secs_ago))
+            .unwrap();
     }
 
     #[test]
@@ -172,7 +204,10 @@ mod tests {
         store.create("mysql").unwrap();
 
         let pg = store.list(Some("pg"));
-        assert_eq!(pg.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Script-2", "Script-1"]);
+        assert_eq!(
+            pg.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["Script-2", "Script-1"]
+        );
         assert_eq!(pg[1].preview, "SELECT 1;");
         assert_eq!(pg[0].connection_id, "pg");
         assert_eq!(store.most_recent("pg").unwrap().name, "Script-2");

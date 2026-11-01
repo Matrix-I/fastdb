@@ -170,7 +170,14 @@ impl RopeyBuffer {
         let old_text = self.rope.slice(char_start..char_end).to_string();
         self.rope.remove(char_start..char_end);
         self.rope.insert(char_start, text);
-        self.record(TextEdit { offset: start, old_text, new_text: text.to_string() }, EditKind::Other);
+        self.record(
+            TextEdit {
+                offset: start,
+                old_text,
+                new_text: text.to_string(),
+            },
+            EditKind::Other,
+        );
         self.cursor_offset = start + text.len();
     }
 
@@ -180,20 +187,18 @@ impl RopeyBuffer {
         self.redo_stack.clear();
         let joins = kind != EditKind::Other && self.open_run == Some(kind);
         self.open_run = (kind != EditKind::Other).then_some(kind);
-        if joins {
-            if let Some(last) = self.undo_stack.last_mut() {
-                match kind {
-                    EditKind::Typing if last.offset + last.new_text.len() == edit.offset => {
-                        last.new_text.push_str(&edit.new_text);
-                        return;
-                    }
-                    EditKind::Deleting if edit.offset + edit.old_text.len() == last.offset => {
-                        last.old_text.insert_str(0, &edit.old_text);
-                        last.offset = edit.offset;
-                        return;
-                    }
-                    _ => {}
+        if joins && let Some(last) = self.undo_stack.last_mut() {
+            match kind {
+                EditKind::Typing if last.offset + last.new_text.len() == edit.offset => {
+                    last.new_text.push_str(&edit.new_text);
+                    return;
                 }
+                EditKind::Deleting if edit.offset + edit.old_text.len() == last.offset => {
+                    last.old_text.insert_str(0, &edit.old_text);
+                    last.offset = edit.offset;
+                    return;
+                }
+                _ => {}
             }
         }
         self.undo_stack.push(edit);
@@ -230,9 +235,21 @@ impl RopeyBuffer {
         self.rope.insert(char_idx, s);
 
         let mut chars = s.chars();
-        let word_char = matches!((chars.next(), chars.next()), (Some(c), None) if !c.is_whitespace());
-        let kind = if word_char { EditKind::Typing } else { EditKind::Other };
-        self.record(TextEdit { offset, old_text: String::new(), new_text: s.to_string() }, kind);
+        let word_char =
+            matches!((chars.next(), chars.next()), (Some(c), None) if !c.is_whitespace());
+        let kind = if word_char {
+            EditKind::Typing
+        } else {
+            EditKind::Other
+        };
+        self.record(
+            TextEdit {
+                offset,
+                old_text: String::new(),
+                new_text: s.to_string(),
+            },
+            kind,
+        );
 
         self.cursor_offset += s.len();
     }
@@ -249,7 +266,14 @@ impl RopeyBuffer {
 
         self.rope.remove(prev_char_idx..char_idx);
 
-        self.record(TextEdit { offset: prev_byte, old_text: removed_str, new_text: String::new() }, EditKind::Deleting);
+        self.record(
+            TextEdit {
+                offset: prev_byte,
+                old_text: removed_str,
+                new_text: String::new(),
+            },
+            EditKind::Deleting,
+        );
 
         self.cursor_offset = prev_byte;
     }
@@ -268,7 +292,14 @@ impl RopeyBuffer {
         let removed_str = self.rope.slice(char_idx..next_char_idx).to_string();
         self.rope.remove(char_idx..next_char_idx);
 
-        self.record(TextEdit { offset: self.cursor_offset, old_text: removed_str, new_text: String::new() }, EditKind::Other);
+        self.record(
+            TextEdit {
+                offset: self.cursor_offset,
+                old_text: removed_str,
+                new_text: String::new(),
+            },
+            EditKind::Other,
+        );
     }
 
     pub fn undo(&mut self) -> bool {

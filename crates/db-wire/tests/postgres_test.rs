@@ -1,8 +1,8 @@
 //! Integration tests against a live PostgreSQL server.
 //! Set FASTDB_TEST_PG_PORT (and optionally FASTDB_TEST_PG_HOST / FASTDB_TEST_PG_USER) to run them.
 
-use std::sync::Arc;
 use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, PostgresDriver};
+use std::sync::Arc;
 
 fn test_config() -> Option<ConnectionConfig> {
     let Ok(port) = std::env::var("FASTDB_TEST_PG_PORT") else {
@@ -13,7 +13,9 @@ fn test_config() -> Option<ConnectionConfig> {
         );
         return None;
     };
-    let port = port.parse().expect("FASTDB_TEST_PG_PORT must be a port number");
+    let port = port
+        .parse()
+        .expect("FASTDB_TEST_PG_PORT must be a port number");
     Some(ConnectionConfig {
         driver: DbDriverKind::Postgres,
         host: std::env::var("FASTDB_TEST_PG_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
@@ -26,7 +28,9 @@ fn test_config() -> Option<ConnectionConfig> {
 }
 
 fn cell_text(pager: &db_wire::QueryResultPager, row: u64, col: usize) -> Option<String> {
-    pager.get_cell(row, col).map(|b| String::from_utf8(b).unwrap())
+    pager
+        .get_cell(row, col)
+        .map(|b| String::from_utf8(b).unwrap())
 }
 
 #[test]
@@ -39,8 +43,14 @@ fn test_postgres_binary_decoding_matches_server_text_output() {
     let rt = db_wire::get_runtime();
 
     rt.block_on(async {
-        driver.execute_query("DROP TYPE IF EXISTS fastdb_mood").await.unwrap();
-        driver.execute_query("CREATE TYPE fastdb_mood AS ENUM ('happy', 'sad')").await.unwrap();
+        driver
+            .execute_query("DROP TYPE IF EXISTS fastdb_mood")
+            .await
+            .unwrap();
+        driver
+            .execute_query("CREATE TYPE fastdb_mood AS ENUM ('happy', 'sad')")
+            .await
+            .unwrap();
     });
 
     let exprs = [
@@ -78,7 +88,11 @@ fn test_postgres_binary_decoding_matches_server_text_output() {
 
     // text(inet) always appends the netmask, unlike inet's output function, so compare literally
     let (pager, _, _) = rt
-        .block_on(driver.execute_query("SELECT NULL::numeric, 12.5::money, '192.168.1.10'::inet, '::1'::inet"))
+        .block_on(
+            driver.execute_query(
+                "SELECT NULL::numeric, 12.5::money, '192.168.1.10'::inet, '::1'::inet",
+            ),
+        )
         .unwrap();
     assert_eq!(cell_text(&pager, 0, 0), None);
     assert_eq!(cell_text(&pager, 0, 1).as_deref(), Some("12.50"));
@@ -99,7 +113,9 @@ fn test_postgres_connection_survives_short_lived_caller_runtime() {
         .enable_all()
         .build()
         .unwrap();
-    let (pager, _, _) = temp_rt.block_on(driver.execute_query("SELECT pg_backend_pid()")).unwrap();
+    let (pager, _, _) = temp_rt
+        .block_on(driver.execute_query("SELECT pg_backend_pid()"))
+        .unwrap();
     let first_pid = cell_text(&pager, 0, 0).unwrap();
     drop(temp_rt);
 
@@ -107,7 +123,11 @@ fn test_postgres_connection_survives_short_lived_caller_runtime() {
     let (pager, _, _) = db_wire::get_runtime()
         .block_on(driver.execute_query("SELECT pg_backend_pid()"))
         .unwrap();
-    assert_eq!(cell_text(&pager, 0, 0).unwrap(), first_pid, "connection was lost and silently reopened");
+    assert_eq!(
+        cell_text(&pager, 0, 0).unwrap(),
+        first_pid,
+        "connection was lost and silently reopened"
+    );
 }
 
 #[test]
@@ -137,9 +157,18 @@ fn test_postgres_streams_rows_incrementally() {
             _ => None,
         })
         .collect();
-    assert!(appended.len() > 1, "rows must arrive in several batches, got {appended:?}");
+    assert!(
+        appended.len() > 1,
+        "rows must arrive in several batches, got {appended:?}"
+    );
     assert!(appended.windows(2).all(|w| w[0] < w[1]));
-    assert!(matches!(events.last(), Some(db_wire::StreamEvent::Completed { total_rows: 20000, .. })));
+    assert!(matches!(
+        events.last(),
+        Some(db_wire::StreamEvent::Completed {
+            total_rows: 20000,
+            ..
+        })
+    ));
     assert_eq!(cell_text(pager, 19_999, 0).as_deref(), Some("20000"));
 }
 
@@ -154,10 +183,17 @@ fn test_postgres_running_query_can_be_cancelled() {
     let (event_tx, event_rx) = flume::unbounded();
 
     let runner = Arc::clone(&driver);
-    let query = rt.spawn(async move { runner.execute_streaming("SELECT pg_sleep(30)", event_tx).await });
+    let query = rt.spawn(async move {
+        runner
+            .execute_streaming("SELECT pg_sleep(30)", event_tx)
+            .await
+    });
 
     rt.block_on(async {
-        assert!(matches!(event_rx.recv_async().await, Ok(db_wire::StreamEvent::SchemaReady(_))));
+        assert!(matches!(
+            event_rx.recv_async().await,
+            Ok(db_wire::StreamEvent::SchemaReady(_))
+        ));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         driver.cancel_active_query().await.unwrap();
 
@@ -166,6 +202,9 @@ fn test_postgres_running_query_can_be_cancelled() {
             .expect("cancelled query must stop promptly")
             .unwrap();
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("canceling statement"), "unexpected error: {err}");
+        assert!(
+            err.contains("canceling statement"),
+            "unexpected error: {err}"
+        );
     });
 }

@@ -34,7 +34,12 @@ impl TabMenuAction {
 /// The active tab stays active if it survives; otherwise `fallback` (the right-clicked tab)
 /// takes over if it survives, else the survivor that slides into the old active slot
 /// (its right neighbour), or the last tab when nothing is left to its right.
-fn active_after_close(len: usize, active: usize, fallback: usize, keep: impl Fn(usize) -> bool) -> usize {
+fn active_after_close(
+    len: usize,
+    active: usize,
+    fallback: usize,
+    keep: impl Fn(usize) -> bool,
+) -> usize {
     let new_index = |idx: usize| (0..idx).filter(|&i| keep(i)).count();
     if active < len && keep(active) {
         return new_index(active);
@@ -65,7 +70,11 @@ impl Workspace {
             idx += 1;
             kept
         });
-        self.active_tab = if self.tabs.is_empty() { 0 } else { new_active.min(self.tabs.len() - 1) };
+        self.active_tab = if self.tabs.is_empty() {
+            0
+        } else {
+            new_active.min(self.tabs.len() - 1)
+        };
         if self.tabs.is_empty() || !keep(old_active) {
             self.is_filter_focused = false;
         }
@@ -77,14 +86,22 @@ impl Workspace {
         }
     }
 
-    pub(super) fn render_tab_context_menu(&mut self, menu: TabContextMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_tab_context_menu(
+        &mut self,
+        menu: TabContextMenu,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let target = menu.tab_idx;
         let len = self.tabs.len();
         let has_left = target > 0;
         let has_right = target + 1 < len;
 
-        let item = |id: &'static str, label: &'static str, enabled: bool, action: TabMenuAction, cx: &mut Context<Self>| {
+        let item = |id: &'static str,
+                    label: &'static str,
+                    enabled: bool,
+                    action: TabMenuAction,
+                    cx: &mut Context<Self>| {
             let mut row = div()
                 .id(id)
                 .flex()
@@ -93,7 +110,11 @@ impl Workspace {
                 .px_2()
                 .rounded_sm()
                 .text_size(px(12.0))
-                .text_color(if enabled { theme.text_primary } else { theme.text_muted })
+                .text_color(if enabled {
+                    theme.text_primary
+                } else {
+                    theme.text_muted
+                })
                 .child(label);
             if enabled {
                 row = row
@@ -125,27 +146,61 @@ impl Workspace {
                 this.tab_context_menu = None;
                 cx.notify();
             }))
-            .child(item("tab-menu-close", "Close", true, TabMenuAction::Close, cx))
-            .child(item("tab-menu-close-others", "Close Others", len > 1, TabMenuAction::CloseOthers, cx));
+            .child(item(
+                "tab-menu-close",
+                "Close",
+                true,
+                TabMenuAction::Close,
+                cx,
+            ))
+            .child(item(
+                "tab-menu-close-others",
+                "Close Others",
+                len > 1,
+                TabMenuAction::CloseOthers,
+                cx,
+            ));
         // Directional items only show when there is a tab on that side
         if has_left {
-            panel = panel.child(item("tab-menu-close-left", "Close Tabs to the Left", true, TabMenuAction::CloseLeft, cx));
+            panel = panel.child(item(
+                "tab-menu-close-left",
+                "Close Tabs to the Left",
+                true,
+                TabMenuAction::CloseLeft,
+                cx,
+            ));
         }
         if has_right {
-            panel = panel.child(item("tab-menu-close-right", "Close Tabs to the Right", true, TabMenuAction::CloseRight, cx));
+            panel = panel.child(item(
+                "tab-menu-close-right",
+                "Close Tabs to the Right",
+                true,
+                TabMenuAction::CloseRight,
+                cx,
+            ));
         }
-        panel = panel
-            .child(separator())
-            .child(item("tab-menu-close-all", "Close All", true, TabMenuAction::CloseAll, cx));
+        panel = panel.child(separator()).child(item(
+            "tab-menu-close-all",
+            "Close All",
+            true,
+            TabMenuAction::CloseAll,
+            cx,
+        ));
 
-        deferred(anchored().position(menu.position).snap_to_window().child(panel)).with_priority(1)
+        deferred(
+            anchored()
+                .position(menu.position)
+                .snap_to_window()
+                .child(panel),
+        )
+        .with_priority(1)
     }
 }
 
 #[cfg(test)]
 mod tests {
     // Not a glob: `super::*` brings in `gpui::test`, which shadows the built-in `#[test]`.
-    use super::{active_after_close, TabMenuAction};
+    use super::{TabMenuAction, active_after_close};
 
     fn after(action: TabMenuAction, len: usize, active: usize, target: usize) -> usize {
         active_after_close(len, active, target, |i| action.keeps(i, target))

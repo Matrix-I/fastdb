@@ -1,7 +1,7 @@
+use super::value_format::{FormattedValue, ValueFormat, detect_format, format_value};
 use super::*;
-use ui_grid::RowRef;
 use gpui::prelude::FluentBuilder;
-use super::value_format::{detect_format, format_value, FormattedValue, ValueFormat};
+use ui_grid::RowRef;
 
 /// Default width of the record value side panel
 pub(super) const VALUE_PANEL_WIDTH: f32 = 340.0;
@@ -54,11 +54,24 @@ struct CellValue {
 
 impl Workspace {
     /// Click on a grid cell: selects it, or extends the selection with Shift
-    pub(super) fn select_grid_cell(&mut self, row: u64, col: usize, extend: bool, cx: &mut Context<Self>) {
-        if self.tabs.get(self.active_tab).and_then(|t| t.grid.editing_cell.as_ref()).is_some_and(|e| (e.row, e.col) != (row, col)) {
+    pub(super) fn select_grid_cell(
+        &mut self,
+        row: u64,
+        col: usize,
+        extend: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|t| t.grid.editing_cell.as_ref())
+            .is_some_and(|e| (e.row, e.col) != (row, col))
+        {
             self.commit_cell_edit();
         }
-        let Some(tab) = self.tabs.get_mut(self.active_tab) else { return };
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
         let coord = ui_grid::GridCoord { row, col };
         let prev_col = tab.grid.selection.focus.map(|f| f.col);
         match tab.grid.selection.anchor {
@@ -82,8 +95,12 @@ impl Workspace {
         }
         // Fetched values keep their raw bytes (binary data); staged edits are text
         let bytes = match grid.changeset.resolve_row(focus.row) {
-            RowRef::Fetched(f) if !grid.changeset.is_modified(f, focus.col) => pager.get_cell(f, focus.col),
-            _ => grid.cell_value(focus.row, focus.col).map(String::into_bytes),
+            RowRef::Fetched(f) if !grid.changeset.is_modified(f, focus.col) => {
+                pager.get_cell(f, focus.col)
+            }
+            _ => grid
+                .cell_value(focus.row, focus.col)
+                .map(String::into_bytes),
         };
         Some(CellValue {
             column: col.name.clone(),
@@ -94,7 +111,11 @@ impl Workspace {
         })
     }
 
-    fn formatted_cell(&mut self, cell: &CellValue, format: ValueFormat) -> Option<Arc<FormattedValue>> {
+    fn formatted_cell(
+        &mut self,
+        cell: &CellValue,
+        format: ValueFormat,
+    ) -> Option<Arc<FormattedValue>> {
         let bytes = cell.bytes.as_ref()?;
         let key = CacheKey {
             bytes: bytes.clone(),
@@ -102,10 +123,10 @@ impl Workspace {
             format,
             auto_format: self.value_panel.auto_format,
         };
-        if let Some((cached_key, value)) = &self.value_panel.cache {
-            if *cached_key == key {
-                return Some(value.clone());
-            }
+        if let Some((cached_key, value)) = &self.value_panel.cache
+            && *cached_key == key
+        {
+            return Some(value.clone());
         }
         let value = Arc::new(format_value(bytes, cell.data_type, format, key.auto_format));
         self.value_panel.cache = Some((key, value.clone()));
@@ -113,7 +134,11 @@ impl Workspace {
     }
 
     /// DBeaver-style "Value" panel showing the focused grid cell in a chosen format
-    pub(super) fn render_value_panel(&mut self, active_tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_value_panel(
+        &mut self,
+        active_tab_idx: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let cell = self.focused_cell_value(active_tab_idx);
         let detected = cell
@@ -170,7 +195,9 @@ impl Workspace {
                                 .text_size(px(11.0))
                                 .text_color(theme.text_muted)
                                 .cursor_pointer()
-                                .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_primary))
+                                .hover(|s| {
+                                    s.bg(theme.bg_surface_hover).text_color(theme.text_primary)
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.show_right_panels = false;
                                     this.value_panel.show_format_menu = false;
@@ -230,19 +257,27 @@ impl Workspace {
                                 .when(state.show_format_menu, |d| d.bg(theme.bg_surface_selected))
                                 .hover(|s| s.bg(theme.bg_surface_hover))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.value_panel.show_format_menu = !this.value_panel.show_format_menu;
+                                    this.value_panel.show_format_menu =
+                                        !this.value_panel.show_format_menu;
                                     cx.notify();
                                 }))
                                 .child(format_glyph(format, &theme))
                                 .child(format.label())
-                                .child(div().text_size(px(8.0)).text_color(theme.text_muted).child("▼")),
+                                .child(
+                                    div()
+                                        .text_size(px(8.0))
+                                        .text_color(theme.text_muted)
+                                        .child("▼"),
+                                ),
                         )
-                        .child(
-                            toolbar_button("btn-value-copy", "⧉", &theme)
-                                .when_some(copy_text, |d, text| {
-                                    d.on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())))
-                                }),
-                        ),
+                        .child(toolbar_button("btn-value-copy", "⧉", &theme).when_some(
+                            copy_text,
+                            |d, text| {
+                                d.on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                                })
+                            },
+                        )),
                 )
                 .child(
                     toolbar_button("btn-value-wrap", "⋮", &theme)
@@ -290,7 +325,11 @@ impl Workspace {
 
         // Footer: what is shown
         if let Some(cell) = &cell {
-            let size = cell.bytes.as_ref().map(|b| human_size(b.len())).unwrap_or_else(|| "NULL".to_string());
+            let size = cell
+                .bytes
+                .as_ref()
+                .map(|b| human_size(b.len()))
+                .unwrap_or_else(|| "NULL".to_string());
             panel = panel.child(
                 div()
                     .flex()
@@ -305,7 +344,12 @@ impl Workspace {
                     .border_color(theme.border)
                     .text_size(px(10.5))
                     .text_color(theme.text_muted)
-                    .child(div().min_w_0().truncate().child(format!("{} · {} · row {}", cell.column, cell.type_name, cell.row + 1)))
+                    .child(div().min_w_0().truncate().child(format!(
+                        "{} · {} · row {}",
+                        cell.column,
+                        cell.type_name,
+                        cell.row + 1
+                    )))
                     .child(div().flex_none().child(format!("{size} · UTF-8"))),
             );
         }
@@ -319,7 +363,12 @@ impl Workspace {
         panel
     }
 
-    fn render_format_menu(&self, current: ValueFormat, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_format_menu(
+        &self,
+        current: ValueFormat,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let state = &self.value_panel;
         let mut menu = div()
             .id("value-format-menu")
@@ -344,7 +393,13 @@ impl Workspace {
         for fmt in ValueFormat::ALL {
             menu = menu.child(
                 menu_item(("value-format-item", fmt as usize), fmt == current, theme)
-                    .child(div().w(px(22.0)).flex().justify_center().child(format_glyph(fmt, theme)))
+                    .child(
+                        div()
+                            .w(px(22.0))
+                            .flex()
+                            .justify_center()
+                            .child(format_glyph(fmt, theme)),
+                    )
                     .child(fmt.label())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.value_panel.format_override = Some(fmt);
@@ -401,7 +456,12 @@ fn menu_item(id: impl Into<ElementId>, checked: bool, theme: &Theme) -> Stateful
         .text_color(theme.text_primary)
         .cursor_pointer()
         .hover(|s| s.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
-        .child(div().w(px(14.0)).text_size(px(11.0)).child(if checked { "✓" } else { "" }))
+        .child(
+            div()
+                .w(px(14.0))
+                .text_size(px(11.0))
+                .child(if checked { "✓" } else { "" }),
+        )
 }
 
 fn toolbar_button(id: &'static str, label: &'static str, theme: &Theme) -> Stateful<Div> {
@@ -430,7 +490,11 @@ fn format_glyph(format: ValueFormat, theme: &Theme) -> Div {
 }
 
 fn empty_message(text: &'static str, theme: &Theme) -> Div {
-    div().p_3().text_size(px(11.5)).text_color(theme.text_muted).child(text)
+    div()
+        .p_3()
+        .text_size(px(11.5))
+        .text_color(theme.text_muted)
+        .child(text)
 }
 
 /// Numbered lines in a monospace font; without wrap each line keeps its full width

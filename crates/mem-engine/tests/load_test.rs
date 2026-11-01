@@ -20,7 +20,7 @@ fn test_large_dataset_spill_and_accuracy() {
         let bytes = r_str.as_bytes();
         let row: Vec<Option<&[u8]>> = (0..15)
             .map(|c| {
-                if (r + c as u64) % 7 == 0 {
+                if (r + c as u64).is_multiple_of(7) {
                     None
                 } else {
                     Some(bytes)
@@ -37,7 +37,7 @@ fn test_large_dataset_spill_and_accuracy() {
     for r in (0..total_test_rows).step_by(step as usize) {
         let r_str = r.to_string();
         for c in 0..15 {
-            let expected_null = (r + c as u64) % 7 == 0;
+            let expected_null = (r + c as u64).is_multiple_of(7);
             let val = pager.get_cell(r, c);
             if expected_null {
                 assert_eq!(val, None, "Expected NULL at row {}, col {}", r, c);

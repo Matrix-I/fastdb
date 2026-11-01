@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 pub const PAGE_SIZE: usize = 64 * 1024; // 64 KB (Standard 16KB Apple Silicon & 4KB Linux Alignment)
 
@@ -33,7 +33,7 @@ impl SlottedPage {
         }
 
         let row_start = *self.row_offsets.get(row_idx)? as usize;
-        let bitmap_len = (self.num_cols as usize + 7) / 8;
+        let bitmap_len = (self.num_cols as usize).div_ceil(8);
 
         if row_start + bitmap_len > self.payload.len() {
             return None;
@@ -54,13 +54,17 @@ impl SlottedPage {
         } else {
             let prev_offset_pos = offsets_start + (col_idx - 1) * 4;
             u32::from_le_bytes(
-                self.payload[prev_offset_pos..prev_offset_pos + 4].try_into().ok()?
+                self.payload[prev_offset_pos..prev_offset_pos + 4]
+                    .try_into()
+                    .ok()?,
             ) as usize
         };
 
         let curr_offset_pos = offsets_start + col_idx * 4;
         let cell_end = u32::from_le_bytes(
-            self.payload[curr_offset_pos..curr_offset_pos + 4].try_into().ok()?
+            self.payload[curr_offset_pos..curr_offset_pos + 4]
+                .try_into()
+                .ok()?,
         ) as usize;
 
         if data_start_base + cell_end > self.payload.len() || cell_start > cell_end {
@@ -75,7 +79,7 @@ impl SlottedPage {
     where
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
-        let bitmap_len = (num_cols as usize + 7) / 8;
+        let bitmap_len = (num_cols as usize).div_ceil(8);
         let offsets_len = num_cols as usize * 4;
         let data_len: usize = cells.into_iter().filter_map(|c| c.map(|b| b.len())).sum();
         bitmap_len + offsets_len + data_len
@@ -90,14 +94,12 @@ impl SlottedPage {
     {
         let cell_vec: Vec<Option<C>> = cells.into_iter().collect();
         let num_cols = self.num_cols as usize;
-        let bitmap_len = (num_cols + 7) / 8;
+        let bitmap_len = num_cols.div_ceil(8);
         let offsets_len = num_cols * 4;
 
         let mut data_len = 0;
-        for c in cell_vec.iter().take(num_cols) {
-            if let Some(bytes) = c {
-                data_len += bytes.as_ref().len();
-            }
+        for bytes in cell_vec.iter().take(num_cols).flatten() {
+            data_len += bytes.as_ref().len();
         }
 
         let needed_bytes = bitmap_len + offsets_len + data_len;
@@ -114,10 +116,7 @@ impl SlottedPage {
         // 1. Build Null Bitmap
         let mut null_bitmap = vec![0u8; bitmap_len];
         for i in 0..num_cols {
-            let is_null = match cell_vec.get(i) {
-                Some(Some(_)) => false,
-                _ => true,
-            };
+            let is_null = !matches!(cell_vec.get(i), Some(Some(_)));
             if is_null {
                 null_bitmap[i / 8] |= 1 << (i % 8);
             }
@@ -169,7 +168,10 @@ impl SlottedPage {
     /// Deserializes a SlottedPage from bytes
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 18 {
-            bail!("Invalid SlottedPage payload: too short ({} bytes)", bytes.len());
+            bail!(
+                "Invalid SlottedPage payload: too short ({} bytes)",
+                bytes.len()
+            );
         }
 
         let page_id = u32::from_le_bytes(bytes[0..4].try_into()?);
@@ -189,7 +191,8 @@ impl SlottedPage {
             row_offsets.push(val);
         }
 
-        let payload_len = u32::from_le_bytes(bytes[offsets_end..offsets_end + 4].try_into()?) as usize;
+        let payload_len =
+            u32::from_le_bytes(bytes[offsets_end..offsets_end + 4].try_into()?) as usize;
         let payload_start = offsets_end + 4;
         let payload_end = payload_start + payload_len;
 
@@ -216,7 +219,7 @@ mod tests {
     #[test]
     fn test_page_append_and_get_cell() {
         let mut page = SlottedPage::with_capacity(1, 3);
-        
+
         let row1 = vec![Some(&b"alice"[..]), None, Some(&b"123"[..])];
         let ok = page.try_append_row(row1);
         assert!(ok);

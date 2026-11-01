@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use std::time::Instant;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -7,10 +5,12 @@ use mem_engine::{ColumnMeta, DataType};
 use mysql_async::prelude::*;
 use mysql_async::{Opts, OptsBuilder, Params, Pool, SslOpts, TxOpts, Value};
 use parking_lot::Mutex;
-use platform_hal::socket::{detect_local_unix_socket, DbKind};
+use platform_hal::socket::{DbKind, detect_local_unix_socket};
+use std::sync::Arc;
+use std::time::Instant;
 
-use crate::stream::{report_error, RowSink};
-use crate::traits::{row_count_error, ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
+use crate::stream::{RowSink, report_error};
+use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary, row_count_error};
 
 pub struct MySqlDriver {
     pub config: ConnectionConfig,
@@ -45,7 +45,9 @@ impl MySqlDriver {
         if let Some(sock_path) = socket {
             builder = builder.socket(Some(sock_path.to_string_lossy().to_string()));
         } else {
-            builder = builder.ip_or_hostname(self.config.host.clone()).tcp_port(self.config.port);
+            builder = builder
+                .ip_or_hostname(self.config.host.clone())
+                .tcp_port(self.config.port);
         }
 
         // Disable mysql_async's implicit TCP-to-socket upgrade when TLS is requested.
@@ -101,17 +103,18 @@ impl MySqlDriver {
         *active_conn_id.lock() = Some(conn.id());
 
         let result = async {
-            let mut query_result = conn
-                .query_iter(sql)
-                .await
-                .map_err(|e| report_error(&event_tx, format!("MySQL query execution error: {e}")))?;
+            let mut query_result = conn.query_iter(sql).await.map_err(|e| {
+                report_error(&event_tx, format!("MySQL query execution error: {e}"))
+            })?;
 
             let columns: Vec<ColumnMeta> = query_result
                 .columns()
                 .as_ref()
                 .map(|cols| {
                     cols.iter()
-                        .map(|c| ColumnMeta::new(c.name_str().to_string(), mysql_column_data_type(c)))
+                        .map(|c| {
+                            ColumnMeta::new(c.name_str().to_string(), mysql_column_data_type(c))
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -123,7 +126,8 @@ impl MySqlDriver {
                 .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
             if let Some(mut stream) = stream {
                 while let Some(row_res) = stream.next().await {
-                    let row = row_res.map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+                    let row =
+                        row_res.map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
                     for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
                         *cell = mysql_value_to_bytes(row.get(i));
                     }
@@ -144,7 +148,9 @@ impl MySqlDriver {
 fn mysql_column_data_type(column: &mysql_async::Column) -> DataType {
     use mysql_async::consts::{ColumnFlags, ColumnType};
     match column.column_type() {
-        ColumnType::MYSQL_TYPE_TINY | ColumnType::MYSQL_TYPE_SHORT | ColumnType::MYSQL_TYPE_YEAR => DataType::Int2,
+        ColumnType::MYSQL_TYPE_TINY
+        | ColumnType::MYSQL_TYPE_SHORT
+        | ColumnType::MYSQL_TYPE_YEAR => DataType::Int2,
         ColumnType::MYSQL_TYPE_LONG | ColumnType::MYSQL_TYPE_INT24 => DataType::Int4,
         ColumnType::MYSQL_TYPE_LONGLONG => DataType::Int8,
         ColumnType::MYSQL_TYPE_FLOAT => DataType::Float4,
@@ -162,7 +168,8 @@ fn mysql_column_data_type(column: &mysql_async::Column) -> DataType {
         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
         | ColumnType::MYSQL_TYPE_LONG_BLOB
         | ColumnType::MYSQL_TYPE_BLOB
-            if column.flags().contains(ColumnFlags::BINARY_FLAG) && column.character_set() == 63 =>
+            if column.flags().contains(ColumnFlags::BINARY_FLAG)
+                && column.character_set() == 63 =>
         {
             // Character set 63 is "binary": BLOB rather than TEXT
             DataType::Bytea
@@ -191,7 +198,12 @@ fn info_schema_data_type(data_type: &str) -> DataType {
 }
 
 /// Builds column metadata from an information_schema.columns row
-fn info_schema_column(name: String, data_type: &str, is_nullable: &str, column_key: &str) -> ColumnMeta {
+fn info_schema_column(
+    name: String,
+    data_type: &str,
+    is_nullable: &str,
+    column_key: &str,
+) -> ColumnMeta {
     ColumnMeta::new(name, info_schema_data_type(data_type))
         .with_nullable(is_nullable == "YES")
         .with_pk(column_key == "PRI")
@@ -228,7 +240,11 @@ impl DatabaseDriver for MySqlDriver {
         .await
     }
 
-    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()> {
+    async fn execute_streaming(
+        &self,
+        sql: &str,
+        event_tx: flume::Sender<StreamEvent>,
+    ) -> Result<()> {
         let pool = self.get_pool()?;
         let sql = sql.to_string();
         let active_conn_id = Arc::clone(&self.active_conn_id);
@@ -280,7 +296,8 @@ impl DatabaseDriver for MySqlDriver {
             ORDER BY table_schema, table_name;
         "#;
 
-        let rows: Vec<(String, String, String, Option<u64>)> = self.query_rows(sql.to_string(), ()).await?;
+        let rows: Vec<(String, String, String, Option<u64>)> =
+            self.query_rows(sql.to_string(), ()).await?;
         let tables = rows
             .into_iter()
             .map(|(schema, name, table_type, estimated_rows)| TableSummary {
@@ -297,11 +314,14 @@ impl DatabaseDriver for MySqlDriver {
     async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
         let sql = "SELECT column_name, data_type, is_nullable, column_key FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position;";
 
-        let rows: Vec<(String, String, String, String)> =
-            self.query_rows(sql.to_string(), (schema.to_string(), table.to_string())).await?;
+        let rows: Vec<(String, String, String, String)> = self
+            .query_rows(sql.to_string(), (schema.to_string(), table.to_string()))
+            .await?;
         let cols = rows
             .into_iter()
-            .map(|(name, dtype, is_null, col_key)| info_schema_column(name, &dtype, &is_null, &col_key))
+            .map(|(name, dtype, is_null, col_key)| {
+                info_schema_column(name, &dtype, &is_null, &col_key)
+            })
             .collect();
 
         Ok(cols)
@@ -315,8 +335,10 @@ impl DatabaseDriver for MySqlDriver {
             ORDER BY table_schema, table_name, ordinal_position;
         "#;
 
-        let rows: Vec<(String, String, String, String, String, String)> = self.query_rows(sql.to_string(), ()).await?;
-        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> = std::collections::BTreeMap::new();
+        let rows: Vec<(String, String, String, String, String, String)> =
+            self.query_rows(sql.to_string(), ()).await?;
+        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> =
+            std::collections::BTreeMap::new();
         for (schema, table, name, dtype, is_null, col_key) in rows {
             let col = info_schema_column(name, &dtype, &is_null, &col_key);
             map.entry((schema, table)).or_default().push(col);
@@ -332,7 +354,8 @@ impl DatabaseDriver for MySqlDriver {
             WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             ORDER BY table_schema, table_name, constraint_name;
         "#;
-        let rows: Vec<(String, String, String, String)> = self.query_rows(sql.to_string(), ()).await?;
+        let rows: Vec<(String, String, String, String)> =
+            self.query_rows(sql.to_string(), ()).await?;
         Ok(rows)
     }
 
@@ -369,12 +392,18 @@ mod tests {
     fn test_value_to_bytes() {
         assert_eq!(mysql_value_to_bytes(None), None);
         assert_eq!(mysql_value_to_bytes(Some(Value::NULL)), None);
-        assert_eq!(mysql_value_to_bytes(Some(Value::Int(-7))), Some(b"-7".to_vec()));
+        assert_eq!(
+            mysql_value_to_bytes(Some(Value::Int(-7))),
+            Some(b"-7".to_vec())
+        );
         assert_eq!(
             mysql_value_to_bytes(Some(Value::Date(2024, 2, 29, 13, 5, 9, 0))),
             Some(b"2024-02-29 13:05:09".to_vec())
         );
-        assert_eq!(mysql_value_to_bytes(Some(Value::Time(true, 1, 2, 3, 4, 0))), Some(b"-1d 02:03:04".to_vec()));
+        assert_eq!(
+            mysql_value_to_bytes(Some(Value::Time(true, 1, 2, 3, 4, 0))),
+            Some(b"-1d 02:03:04".to_vec())
+        );
     }
 }
 
@@ -389,7 +418,8 @@ mod tls_tests {
             use_unix_socket: true,
             tls_ca_cert: Some("/private-ca.pem".into()),
             ..ConnectionConfig::default()
-        }).get_opts();
+        })
+        .get_opts();
         assert!(!opts.prefer_socket());
         assert!(opts.socket().is_none());
         let ssl = opts.ssl_opts().unwrap();
@@ -400,7 +430,11 @@ mod tls_tests {
 
     #[test]
     fn legacy_connection_does_not_enable_tls() {
-        let opts = MySqlDriver::new(ConnectionConfig { use_unix_socket: false, ..ConnectionConfig::default() }).get_opts();
+        let opts = MySqlDriver::new(ConnectionConfig {
+            use_unix_socket: false,
+            ..ConnectionConfig::default()
+        })
+        .get_opts();
         assert!(opts.ssl_opts().is_none());
         assert!(!opts.prefer_socket());
     }

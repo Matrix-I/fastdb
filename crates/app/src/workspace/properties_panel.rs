@@ -2,7 +2,11 @@ use super::*;
 
 impl Workspace {
     /// Properties sub-tab: table header form plus columns, constraints, indexes and DDL
-    pub(super) fn render_properties_panel(&mut self, active_tab_idx: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_properties_panel(
+        &mut self,
+        active_tab_idx: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
@@ -17,16 +21,23 @@ impl Workspace {
         let owner_name = if t_name == "additionalInfo" {
             "ubiid".to_string()
         } else {
-            active_saved_conn.map(|c| c.user.clone()).unwrap_or_else(|| "postgres".to_string())
+            active_saved_conn
+                .map(|c| c.user.clone())
+                .unwrap_or_else(|| "postgres".to_string())
         };
         let table_oid = if t_name == "additionalInfo" {
             29627
         } else {
-            20000 + (t_name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)) % 70000)
+            20000
+                + (t_name
+                    .bytes()
+                    .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32))
+                    % 70000)
         };
 
         // Columns metadata
-        let mut columns_vec: Vec<ColumnMeta> = self.table_columns
+        let mut columns_vec: Vec<ColumnMeta> = self
+            .table_columns
             .get(&(s_name.to_string(), t_name.to_string()))
             .cloned()
             .unwrap_or_default();
@@ -43,14 +54,15 @@ impl Workspace {
                         .with_nullable(true)
                         .with_raw_type("jsonb"),
                 ];
-            } else if active_tab_idx < self.tabs.len() {
-                if let Some(ref p) = self.tabs[active_tab_idx].grid.pager {
-                    columns_vec = p.columns.clone();
-                }
+            } else if active_tab_idx < self.tabs.len()
+                && let Some(ref p) = self.tabs[active_tab_idx].grid.pager
+            {
+                columns_vec = p.columns.clone();
             }
         }
 
-        let constraints_vec = self.table_constraints
+        let constraints_vec = self
+            .table_constraints
             .get(&(s_name.to_string(), t_name.to_string()))
             .cloned()
             .unwrap_or_else(|| {
@@ -61,7 +73,8 @@ impl Workspace {
                 }
             });
 
-        let indexes_vec = self.table_indexes
+        let indexes_vec = self
+            .table_indexes
             .get(&(s_name.to_string(), t_name.to_string()))
             .cloned()
             .unwrap_or_else(|| {
@@ -105,7 +118,13 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(75.0)).text_size(px(11.5)).text_color(theme.text_secondary).child("Table Name:"))
+                                .child(
+                                    div()
+                                        .w(px(75.0))
+                                        .text_size(px(11.5))
+                                        .text_color(theme.text_secondary)
+                                        .child("Table Name:"),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -118,9 +137,19 @@ impl Workspace {
                                         .border_1()
                                         .border_color(theme.border)
                                         .rounded_xs()
-                                        .child(div().text_size(px(11.5)).text_color(theme.text_primary).child(t_name.to_string()))
-                                        .child(div().text_size(px(9.0)).text_color(theme.text_muted).child("⤢"))
-                                )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .text_color(theme.text_primary)
+                                                .child(t_name.to_string()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(9.0))
+                                                .text_color(theme.text_muted)
+                                                .child("⤢"),
+                                        ),
+                                ),
                         )
                         // Tablespace
                         .child(
@@ -128,7 +157,13 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(70.0)).text_size(px(11.5)).text_color(theme.text_secondary).child("Tablespace:"))
+                                .child(
+                                    div()
+                                        .w(px(70.0))
+                                        .text_size(px(11.5))
+                                        .text_color(theme.text_secondary)
+                                        .child("Tablespace:"),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -141,9 +176,19 @@ impl Workspace {
                                         .border_1()
                                         .border_color(rgb(0x388bfd))
                                         .rounded_xs()
-                                        .child(div().text_size(px(11.5)).text_color(rgb(0xffffff)).child("pg_default"))
-                                        .child(div().text_size(px(9.0)).text_color(rgb(0x58a6ff)).child("▾"))
-                                )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .text_color(rgb(0xffffff))
+                                                .child("pg_default"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(9.0))
+                                                .text_color(rgb(0x58a6ff))
+                                                .child("▾"),
+                                        ),
+                                ),
                         )
                         // Object ID
                         .child(
@@ -151,7 +196,13 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(65.0)).text_size(px(11.5)).text_color(theme.text_secondary).child("Object ID:"))
+                                .child(
+                                    div()
+                                        .w(px(65.0))
+                                        .text_size(px(11.5))
+                                        .text_color(theme.text_secondary)
+                                        .child("Object ID:"),
+                                )
                                 .child(
                                     div()
                                         .w(px(130.0))
@@ -165,9 +216,9 @@ impl Workspace {
                                         .rounded_xs()
                                         .text_size(px(11.5))
                                         .text_color(theme.text_primary)
-                                        .child(format!("{}", table_oid))
-                                )
-                        )
+                                        .child(format!("{}", table_oid)),
+                                ),
+                        ),
                 )
                 // Row 2
                 .child(
@@ -181,7 +232,13 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(75.0)).text_size(px(11.5)).text_color(theme.text_secondary).child("Comment:"))
+                                .child(
+                                    div()
+                                        .w(px(75.0))
+                                        .text_size(px(11.5))
+                                        .text_color(theme.text_secondary)
+                                        .child("Comment:"),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -195,8 +252,13 @@ impl Workspace {
                                         .border_color(theme.border)
                                         .rounded_xs()
                                         .child(div())
-                                        .child(div().text_size(px(8.5)).text_color(theme.text_muted).child("⤡"))
-                                )
+                                        .child(
+                                            div()
+                                                .text_size(px(8.5))
+                                                .text_color(theme.text_muted)
+                                                .child("⤡"),
+                                        ),
+                                ),
                         )
                         // Checkboxes
                         .child(
@@ -210,17 +272,43 @@ impl Workspace {
                                         .flex()
                                         .items_center()
                                         .gap_1p5()
-                                        .child(div().w(px(12.0)).h(px(12.0)).border_1().border_color(theme.border).rounded_xs().bg(theme.bg_editor))
-                                        .child(div().text_size(px(11.5)).text_color(theme.text_secondary).child("Has Row-Level Security"))
+                                        .child(
+                                            div()
+                                                .w(px(12.0))
+                                                .h(px(12.0))
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .rounded_xs()
+                                                .bg(theme.bg_editor),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .text_color(theme.text_secondary)
+                                                .child("Has Row-Level Security"),
+                                        ),
                                 )
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap_1p5()
-                                        .child(div().w(px(12.0)).h(px(12.0)).border_1().border_color(theme.border).rounded_xs().bg(theme.bg_editor))
-                                        .child(div().text_size(px(11.5)).text_color(theme.text_secondary).child("Partitions"))
-                                )
+                                        .child(
+                                            div()
+                                                .w(px(12.0))
+                                                .h(px(12.0))
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .rounded_xs()
+                                                .bg(theme.bg_editor),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .text_color(theme.text_secondary)
+                                                .child("Partitions"),
+                                        ),
+                                ),
                         )
                         // Owner
                         .child(
@@ -228,7 +316,13 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(65.0)).text_size(px(11.5)).text_color(theme.text_secondary).child("Owner:"))
+                                .child(
+                                    div()
+                                        .w(px(65.0))
+                                        .text_size(px(11.5))
+                                        .text_color(theme.text_secondary)
+                                        .child("Owner:"),
+                                )
                                 .child(
                                     div()
                                         .w(px(130.0))
@@ -239,9 +333,9 @@ impl Workspace {
                                         .text_size(px(11.5))
                                         .text_color(rgb(0x58a6ff))
                                         .cursor_pointer()
-                                        .child(owner_name.clone())
-                                )
-                        )
+                                        .child(owner_name.clone()),
+                                ),
+                        ),
                 )
                 // Row 3
                 .child(
@@ -257,7 +351,12 @@ impl Workspace {
                                 .items_center()
                                 .gap_2()
                                 .w(px(240.0))
-                                .child(div().text_size(px(11.5)).text_color(theme.text_secondary).child("Partition by:"))
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .text_color(theme.text_secondary)
+                                        .child("Partition by:"),
+                                )
                                 .child(
                                     div()
                                         .flex_1()
@@ -266,8 +365,8 @@ impl Workspace {
                                         .bg(theme.bg_editor)
                                         .border_1()
                                         .border_color(theme.border)
-                                        .rounded_xs()
-                                )
+                                        .rounded_xs(),
+                                ),
                         )
                         // Extra Options
                         .child(
@@ -275,7 +374,13 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(80.0)).text_size(px(11.5)).text_color(theme.text_secondary).child("Extra Options:"))
+                                .child(
+                                    div()
+                                        .w(px(80.0))
+                                        .text_size(px(11.5))
+                                        .text_color(theme.text_secondary)
+                                        .child("Extra Options:"),
+                                )
                                 .child(
                                     div()
                                         .w(px(115.0))
@@ -284,9 +389,9 @@ impl Workspace {
                                         .bg(theme.bg_editor)
                                         .border_1()
                                         .border_color(theme.border)
-                                        .rounded_xs()
-                                )
-                        )
+                                        .rounded_xs(),
+                                ),
+                        ),
                 );
 
             prop_container = prop_container.child(top_form);
@@ -323,33 +428,66 @@ impl Workspace {
                     .border_color(theme.border)
                     .text_size(px(8.0))
                     .text_color(theme.text_muted)
-                    .child(if is_header_collapsed { "▼" } else { "▲" })
+                    .child(if is_header_collapsed { "▼" } else { "▲" }),
             );
 
         prop_container = prop_container.child(splitter_bar);
 
         // 3. Bottom Master-Detail Layout
-        let mut master_detail = div()
-            .flex()
-            .flex_1()
-            .overflow_hidden();
+        let mut master_detail = div().flex().flex_1().overflow_hidden();
 
         // Left Navigation Categories
         let categories = [
-            (PropertySection::Columns, "Columns", "icons/folder_table.svg"),
-            (PropertySection::Constraints, "Constraints", "icons/folder_constraint.svg"),
-            (PropertySection::ForeignKeys, "Foreign Keys", "icons/foreign_key.svg"),
+            (
+                PropertySection::Columns,
+                "Columns",
+                "icons/folder_table.svg",
+            ),
+            (
+                PropertySection::Constraints,
+                "Constraints",
+                "icons/folder_constraint.svg",
+            ),
+            (
+                PropertySection::ForeignKeys,
+                "Foreign Keys",
+                "icons/foreign_key.svg",
+            ),
             (PropertySection::Indexes, "Indexes", "icons/table_index.svg"),
-            (PropertySection::Dependencies, "Dependencies", "icons/folder.svg"),
-            (PropertySection::References, "References", "icons/folder.svg"),
-            (PropertySection::Partitions, "Partitions", "icons/partition.svg"),
+            (
+                PropertySection::Dependencies,
+                "Dependencies",
+                "icons/folder.svg",
+            ),
+            (
+                PropertySection::References,
+                "References",
+                "icons/folder.svg",
+            ),
+            (
+                PropertySection::Partitions,
+                "Partitions",
+                "icons/partition.svg",
+            ),
             (PropertySection::Triggers, "Triggers", "icons/trigger.svg"),
             (PropertySection::Rules, "Rules", "icons/folder.svg"),
             (PropertySection::Policies, "Policies", "icons/folder.svg"),
-            (PropertySection::Statistics, "Statistics", "icons/configuration.svg"),
-            (PropertySection::Permissions, "Permissions", "icons/folder.svg"),
+            (
+                PropertySection::Statistics,
+                "Statistics",
+                "icons/configuration.svg",
+            ),
+            (
+                PropertySection::Permissions,
+                "Permissions",
+                "icons/folder.svg",
+            ),
             (PropertySection::Ddl, "DDL", "icons/sql_script.svg"),
-            (PropertySection::Virtual, "Virtual", "icons/configuration.svg"),
+            (
+                PropertySection::Virtual,
+                "Virtual",
+                "icons/configuration.svg",
+            ),
         ];
 
         let mut left_nav = div()
@@ -374,7 +512,11 @@ impl Workspace {
                     .h(px(22.0))
                     .px_2()
                     .cursor_pointer()
-                    .bg(if is_selected { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                    .bg(if is_selected {
+                        theme.bg_surface_selected
+                    } else {
+                        hsla(0.0, 0.0, 0.0, 0.0).into()
+                    })
                     .hover(|s| s.bg(theme.bg_surface_hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
@@ -386,10 +528,18 @@ impl Workspace {
                     .child(
                         div()
                             .text_size(px(11.5))
-                            .font_weight(if is_selected { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                            .text_color(if is_selected { theme.text_primary } else { theme.text_secondary })
-                            .child(label)
-                    )
+                            .font_weight(if is_selected {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if is_selected {
+                                theme.text_primary
+                            } else {
+                                theme.text_secondary
+                            })
+                            .child(label),
+                    ),
             );
         }
 
@@ -425,13 +575,62 @@ impl Workspace {
                     .border_color(theme.border)
                     .text_size(px(11.0))
                     .text_color(theme.text_secondary)
-                    .child(div().w(px(220.0)).px_2().border_r_1().border_color(theme.border).child("Column Name"))
-                    .child(div().w(px(40.0)).px_2().border_r_1().border_color(theme.border).child("#"))
-                    .child(div().w(px(120.0)).px_2().border_r_1().border_color(theme.border).child("Data type"))
-                    .child(div().w(px(80.0)).px_2().border_r_1().border_color(theme.border).child("Identity"))
-                    .child(div().w(px(90.0)).px_2().border_r_1().border_color(theme.border).child("Collation"))
-                    .child(div().w(px(90.0)).px_2().border_r_1().border_color(theme.border).child("Default"))
-                    .child(div().w(px(80.0)).px_2().border_r_1().border_color(theme.border).child("Not Null"))
+                    .child(
+                        div()
+                            .w(px(220.0))
+                            .px_2()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child("Column Name"),
+                    )
+                    .child(
+                        div()
+                            .w(px(40.0))
+                            .px_2()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child("#"),
+                    )
+                    .child(
+                        div()
+                            .w(px(120.0))
+                            .px_2()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child("Data type"),
+                    )
+                    .child(
+                        div()
+                            .w(px(80.0))
+                            .px_2()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child("Identity"),
+                    )
+                    .child(
+                        div()
+                            .w(px(90.0))
+                            .px_2()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child("Collation"),
+                    )
+                    .child(
+                        div()
+                            .w(px(90.0))
+                            .px_2()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child("Default"),
+                    )
+                    .child(
+                        div()
+                            .w(px(80.0))
+                            .px_2()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child("Not Null"),
+                    )
                     .child(div().flex_1().min_w(px(100.0)).px_2().child("Comment"));
 
                 col_grid = col_grid.child(col_header);
@@ -457,11 +656,7 @@ impl Workspace {
                                 .w(px(220.0))
                                 .px_2()
                                 .child(render_dbeaver_col_badge(&dtype_disp))
-                                .child(
-                                    div()
-                                        .text_color(theme.text_primary)
-                                        .child(c.name.clone())
-                                )
+                                .child(div().text_color(theme.text_primary).child(c.name.clone())),
                         )
                         // 2. #
                         .child(
@@ -469,7 +664,7 @@ impl Workspace {
                                 .w(px(40.0))
                                 .px_2()
                                 .text_color(theme.text_muted)
-                                .child(format!("{}", idx + 1))
+                                .child(format!("{}", idx + 1)),
                         )
                         // 3. Data type
                         .child(
@@ -477,7 +672,7 @@ impl Workspace {
                                 .w(px(120.0))
                                 .px_2()
                                 .text_color(theme.text_primary)
-                                .child(dtype_disp)
+                                .child(dtype_disp),
                         )
                         // 4. Identity
                         .child(
@@ -485,7 +680,7 @@ impl Workspace {
                                 .w(px(80.0))
                                 .px_2()
                                 .text_color(theme.text_muted)
-                                .child("")
+                                .child(""),
                         )
                         // 5. Collation
                         .child(
@@ -494,7 +689,9 @@ impl Workspace {
                                 .px_2()
                                 .text_color(rgb(0x58a6ff))
                                 .cursor_pointer()
-                                .child(c.collation.clone().unwrap_or_else(|| "default".to_string()))
+                                .child(
+                                    c.collation.clone().unwrap_or_else(|| "default".to_string()),
+                                ),
                         )
                         // 6. Default
                         .child(
@@ -502,15 +699,19 @@ impl Workspace {
                                 .w(px(90.0))
                                 .px_2()
                                 .text_color(theme.text_muted)
-                                .child(c.default_val.clone().unwrap_or_default())
+                                .child(c.default_val.clone().unwrap_or_default()),
                         )
                         // 7. Not Null
                         .child(
                             div()
                                 .w(px(80.0))
                                 .px_2()
-                                .text_color(if is_not_null { theme.text_primary } else { theme.text_muted })
-                                .child(if is_not_null { "[v]" } else { "[ ]" })
+                                .text_color(if is_not_null {
+                                    theme.text_primary
+                                } else {
+                                    theme.text_muted
+                                })
+                                .child(if is_not_null { "[v]" } else { "[ ]" }),
                         )
                         // 8. Comment
                         .child(
@@ -519,7 +720,7 @@ impl Workspace {
                                 .min_w(px(100.0))
                                 .px_2()
                                 .text_color(theme.text_muted)
-                                .child(c.comment.clone().unwrap_or_default())
+                                .child(c.comment.clone().unwrap_or_default()),
                         );
 
                     col_grid = col_grid.child(row);
@@ -546,13 +747,38 @@ impl Workspace {
                         .border_color(theme.border)
                         .text_size(px(11.0))
                         .text_color(theme.text_secondary)
-                        .child(div().w(px(240.0)).px_2().border_r_1().border_color(theme.border).child("Constraint Name"))
-                        .child(div().w(px(140.0)).px_2().border_r_1().border_color(theme.border).child("Type"))
-                        .child(div().w(px(160.0)).px_2().border_r_1().border_color(theme.border).child("Columns"))
-                        .child(div().flex_1().px_2().child("Status"))
+                        .child(
+                            div()
+                                .w(px(240.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Constraint Name"),
+                        )
+                        .child(
+                            div()
+                                .w(px(140.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Type"),
+                        )
+                        .child(
+                            div()
+                                .w(px(160.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Columns"),
+                        )
+                        .child(div().flex_1().px_2().child("Status")),
                 );
 
-                let pk_cols: Vec<String> = columns_vec.iter().filter(|c| c.is_primary_key).map(|c| c.name.clone()).collect();
+                let pk_cols: Vec<String> = columns_vec
+                    .iter()
+                    .filter(|c| c.is_primary_key)
+                    .map(|c| c.name.clone())
+                    .collect();
                 let effective_constraints = if !constraints_vec.is_empty() {
                     constraints_vec.clone()
                 } else if !pk_cols.is_empty() {
@@ -567,12 +793,16 @@ impl Workspace {
                             .p_4()
                             .text_size(px(11.5))
                             .text_color(theme.text_muted)
-                            .child("No constraints defined for this table.")
+                            .child("No constraints defined for this table."),
                     );
                 } else {
                     for (cname, ctype) in &effective_constraints {
                         let cols_str = if ctype.contains("PRIMARY KEY") {
-                            if !pk_cols.is_empty() { pk_cols.join(", ") } else { "key".to_string() }
+                            if !pk_cols.is_empty() {
+                                pk_cols.join(", ")
+                            } else {
+                                "key".to_string()
+                            }
                         } else {
                             "-".to_string()
                         };
@@ -594,11 +824,33 @@ impl Workspace {
                                         .w(px(240.0))
                                         .px_2()
                                         .child(img("icons/constraint.svg").w(px(13.0)).h(px(13.0)))
-                                        .child(div().text_color(theme.text_primary).child(cname.clone()))
+                                        .child(
+                                            div()
+                                                .text_color(theme.text_primary)
+                                                .child(cname.clone()),
+                                        ),
                                 )
-                                .child(div().w(px(140.0)).px_2().text_color(theme.text_secondary).child(ctype.clone()))
-                                .child(div().w(px(160.0)).px_2().text_color(rgb(0x58a6ff)).child(cols_str))
-                                .child(div().flex_1().px_2().text_color(theme.text_success).child("Enabled"))
+                                .child(
+                                    div()
+                                        .w(px(140.0))
+                                        .px_2()
+                                        .text_color(theme.text_secondary)
+                                        .child(ctype.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(160.0))
+                                        .px_2()
+                                        .text_color(rgb(0x58a6ff))
+                                        .child(cols_str),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .px_2()
+                                        .text_color(theme.text_success)
+                                        .child("Enabled"),
+                                ),
                         );
                     }
                 }
@@ -624,21 +876,50 @@ impl Workspace {
                         .border_color(theme.border)
                         .text_size(px(11.0))
                         .text_color(theme.text_secondary)
-                        .child(div().w(px(220.0)).px_2().border_r_1().border_color(theme.border).child("Foreign Key Name"))
-                        .child(div().w(px(180.0)).px_2().border_r_1().border_color(theme.border).child("Referenced Table"))
-                        .child(div().w(px(140.0)).px_2().border_r_1().border_color(theme.border).child("Columns"))
-                        .child(div().w(px(100.0)).px_2().border_r_1().border_color(theme.border).child("On Delete"))
-                        .child(div().flex_1().px_2().child("On Update"))
+                        .child(
+                            div()
+                                .w(px(220.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Foreign Key Name"),
+                        )
+                        .child(
+                            div()
+                                .w(px(180.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Referenced Table"),
+                        )
+                        .child(
+                            div()
+                                .w(px(140.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Columns"),
+                        )
+                        .child(
+                            div()
+                                .w(px(100.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("On Delete"),
+                        )
+                        .child(div().flex_1().px_2().child("On Update")),
                 );
 
-                let fk_cols: Vec<&ColumnMeta> = columns_vec.iter().filter(|c| c.is_foreign_key).collect();
+                let fk_cols: Vec<&ColumnMeta> =
+                    columns_vec.iter().filter(|c| c.is_foreign_key).collect();
                 if fk_cols.is_empty() {
                     grid = grid.child(
                         div()
                             .p_4()
                             .text_size(px(11.5))
                             .text_color(theme.text_muted)
-                            .child("No foreign keys defined for this table.")
+                            .child("No foreign keys defined for this table."),
                     );
                 } else {
                     for c in fk_cols {
@@ -659,12 +940,40 @@ impl Workspace {
                                         .w(px(220.0))
                                         .px_2()
                                         .child(img("icons/foreign_key.svg").w(px(13.0)).h(px(13.0)))
-                                        .child(div().text_color(theme.text_primary).child(format!("fk_{}_{}", t_name, c.name)))
+                                        .child(
+                                            div()
+                                                .text_color(theme.text_primary)
+                                                .child(format!("fk_{}_{}", t_name, c.name)),
+                                        ),
                                 )
-                                .child(div().w(px(180.0)).px_2().text_color(rgb(0x58a6ff)).child("-"))
-                                .child(div().w(px(140.0)).px_2().text_color(theme.text_primary).child(c.name.clone()))
-                                .child(div().w(px(100.0)).px_2().text_color(theme.text_muted).child("NO ACTION"))
-                                .child(div().flex_1().px_2().text_color(theme.text_muted).child("NO ACTION"))
+                                .child(
+                                    div()
+                                        .w(px(180.0))
+                                        .px_2()
+                                        .text_color(rgb(0x58a6ff))
+                                        .child("-"),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(140.0))
+                                        .px_2()
+                                        .text_color(theme.text_primary)
+                                        .child(c.name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(100.0))
+                                        .px_2()
+                                        .text_color(theme.text_muted)
+                                        .child("NO ACTION"),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .px_2()
+                                        .text_color(theme.text_muted)
+                                        .child("NO ACTION"),
+                                ),
                         );
                     }
                 }
@@ -690,10 +999,31 @@ impl Workspace {
                         .border_color(theme.border)
                         .text_size(px(11.0))
                         .text_color(theme.text_secondary)
-                        .child(div().w(px(240.0)).px_2().border_r_1().border_color(theme.border).child("Index Name"))
-                        .child(div().w(px(100.0)).px_2().border_r_1().border_color(theme.border).child("Type"))
-                        .child(div().w(px(160.0)).px_2().border_r_1().border_color(theme.border).child("Columns"))
-                        .child(div().flex_1().px_2().child("Unique"))
+                        .child(
+                            div()
+                                .w(px(240.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Index Name"),
+                        )
+                        .child(
+                            div()
+                                .w(px(100.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Type"),
+                        )
+                        .child(
+                            div()
+                                .w(px(160.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Columns"),
+                        )
+                        .child(div().flex_1().px_2().child("Unique")),
                 );
 
                 let effective_indexes = if !indexes_vec.is_empty() {
@@ -710,14 +1040,23 @@ impl Workspace {
                             .p_4()
                             .text_size(px(11.5))
                             .text_color(theme.text_muted)
-                            .child("No indexes defined for this table.")
+                            .child("No indexes defined for this table."),
                     );
                 } else {
-                    let pk_col_names = columns_vec.iter().filter(|c| c.is_primary_key).map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ");
+                    let pk_col_names = columns_vec
+                        .iter()
+                        .filter(|c| c.is_primary_key)
+                        .map(|c| c.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     for iname in &effective_indexes {
                         let is_unique = iname.ends_with("_pkey") || iname.contains("uniq");
                         let col_name = if iname.ends_with("_pkey") {
-                            if !pk_col_names.is_empty() { pk_col_names.clone() } else { "key".to_string() }
+                            if !pk_col_names.is_empty() {
+                                pk_col_names.clone()
+                            } else {
+                                "key".to_string()
+                            }
                         } else {
                             "-".to_string()
                         };
@@ -739,11 +1078,37 @@ impl Workspace {
                                         .w(px(240.0))
                                         .px_2()
                                         .child(img("icons/table_index.svg").w(px(13.0)).h(px(13.0)))
-                                        .child(div().text_color(theme.text_primary).child(iname.clone()))
+                                        .child(
+                                            div()
+                                                .text_color(theme.text_primary)
+                                                .child(iname.clone()),
+                                        ),
                                 )
-                                .child(div().w(px(100.0)).px_2().text_color(theme.text_secondary).child("BTREE"))
-                                .child(div().w(px(160.0)).px_2().text_color(rgb(0x58a6ff)).child(col_name))
-                                .child(div().flex_1().px_2().text_color(if is_unique { theme.text_accent } else { theme.text_muted }).child(if is_unique { "YES" } else { "NO" }))
+                                .child(
+                                    div()
+                                        .w(px(100.0))
+                                        .px_2()
+                                        .text_color(theme.text_secondary)
+                                        .child("BTREE"),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(160.0))
+                                        .px_2()
+                                        .text_color(rgb(0x58a6ff))
+                                        .child(col_name),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .px_2()
+                                        .text_color(if is_unique {
+                                            theme.text_accent
+                                        } else {
+                                            theme.text_muted
+                                        })
+                                        .child(if is_unique { "YES" } else { "NO" }),
+                                ),
                         );
                     }
                 }
@@ -751,7 +1116,13 @@ impl Workspace {
                 right_content = right_content.child(grid);
             }
             PropertySection::Ddl => {
-                let ddl_code = generate_table_ddl(s_name, t_name, &columns_vec, &constraints_vec, &indexes_vec);
+                let ddl_code = generate_table_ddl(
+                    s_name,
+                    t_name,
+                    &columns_vec,
+                    &constraints_vec,
+                    &indexes_vec,
+                );
                 let ddl_copy = ddl_code.clone();
 
                 let ddl_view = div()
@@ -781,8 +1152,8 @@ impl Workspace {
                                             .text_size(px(11.5))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme.text_secondary)
-                                            .child("DDL Source (PostgreSQL)")
-                                    )
+                                            .child("DDL Source (PostgreSQL)"),
+                                    ),
                             )
                             .child(
                                 div()
@@ -801,11 +1172,13 @@ impl Workspace {
                                     .cursor_pointer()
                                     .hover(|s| s.bg(theme.bg_surface_hover))
                                     .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(ddl_copy.clone()));
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            ddl_copy.clone(),
+                                        ));
                                         cx.notify();
                                     }))
-                                    .child("📋 Copy DDL")
-                            )
+                                    .child("📋 Copy DDL"),
+                            ),
                     )
                     .child(
                         div()
@@ -819,40 +1192,38 @@ impl Workspace {
                             .id("props-ddl-code-scroll")
                             .overflow_y_scroll()
                             .overflow_x_scroll()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_0p5()
-                                    .children(
-                                        ddl_code.lines().enumerate().map(|(idx, line)| {
+                            .child(div().flex().flex_col().gap_0p5().children(
+                                ddl_code.lines().enumerate().map(|(idx, line)| {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(
                                             div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_3()
-                                                .child(
-                                                    div()
-                                                        .w(px(28.0))
-                                                        .text_color(theme.text_muted)
-                                                        .text_size(px(11.0))
-                                                        .child(format!("{}", idx + 1))
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_color(if line.starts_with("--") {
-                                                            theme.text_muted
-                                                        } else if line.starts_with("CREATE") || line.starts_with(");") {
-                                                            rgb(0xc586c0)
-                                                        } else if line.contains("CONSTRAINT") || line.contains("PRIMARY KEY") {
-                                                            rgb(0x4ec9b0)
-                                                        } else {
-                                                            rgb(0x9cdcfe)
-                                                        })
-                                                        .child(line.to_string())
-                                                )
-                                        })
-                                    )
-                            )
+                                                .w(px(28.0))
+                                                .text_color(theme.text_muted)
+                                                .text_size(px(11.0))
+                                                .child(format!("{}", idx + 1)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_color(if line.starts_with("--") {
+                                                    theme.text_muted
+                                                } else if line.starts_with("CREATE")
+                                                    || line.starts_with(");")
+                                                {
+                                                    rgb(0xc586c0)
+                                                } else if line.contains("CONSTRAINT")
+                                                    || line.contains("PRIMARY KEY")
+                                                {
+                                                    rgb(0x4ec9b0)
+                                                } else {
+                                                    rgb(0x9cdcfe)
+                                                })
+                                                .child(line.to_string()),
+                                        )
+                                }),
+                            )),
                     );
 
                 right_content = right_content.child(ddl_view);
@@ -876,11 +1247,22 @@ impl Workspace {
                         .border_color(theme.border)
                         .text_size(px(11.0))
                         .text_color(theme.text_secondary)
-                        .child(div().w(px(220.0)).px_2().border_r_1().border_color(theme.border).child("Name"))
-                        .child(div().flex_1().px_2().child("Value"))
+                        .child(
+                            div()
+                                .w(px(220.0))
+                                .px_2()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child("Name"),
+                        )
+                        .child(div().flex_1().px_2().child("Value")),
                 );
 
-                let has_pk = if columns_vec.iter().any(|c| c.is_primary_key) { "Yes" } else { "No" };
+                let has_pk = if columns_vec.iter().any(|c| c.is_primary_key) {
+                    "Yes"
+                } else {
+                    "No"
+                };
                 let cols_cnt = format!("{}", columns_vec.len());
                 let oid_str = format!("{}", table_oid);
                 let rows = [
@@ -906,8 +1288,20 @@ impl Workspace {
                             .border_color(hsla(0.0, 0.0, 0.0, 0.04))
                             .text_size(px(11.5))
                             .hover(|s| s.bg(theme.bg_surface_hover))
-                            .child(div().w(px(220.0)).px_2().text_color(theme.text_secondary).child(k))
-                            .child(div().flex_1().px_2().text_color(theme.text_primary).child(v.to_string()))
+                            .child(
+                                div()
+                                    .w(px(220.0))
+                                    .px_2()
+                                    .text_color(theme.text_secondary)
+                                    .child(k),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .px_2()
+                                    .text_color(theme.text_primary)
+                                    .child(v.to_string()),
+                            ),
                     );
                 }
 
@@ -942,14 +1336,19 @@ impl Workspace {
                             .px_2()
                             .text_size(px(11.0))
                             .text_color(theme.text_secondary)
-                            .child(format!("{} (0 items)", sec_title))
+                            .child(format!("{} (0 items)", sec_title)),
                     )
                     .child(
                         div()
                             .p_6()
                             .text_size(px(11.5))
                             .text_color(theme.text_muted)
-                            .child(format!("No {} defined for table {}.{}.", sec_title.to_lowercase(), s_name, t_name))
+                            .child(format!(
+                                "No {} defined for table {}.{}.",
+                                sec_title.to_lowercase(),
+                                s_name,
+                                t_name
+                            )),
                     );
 
                 right_content = right_content.child(empty_view);

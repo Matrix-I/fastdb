@@ -1,5 +1,5 @@
-use std::collections::{BTreeSet, HashMap};
 use mem_engine::QueryResultPager;
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CellKey {
@@ -134,7 +134,9 @@ impl Changeset {
     /// What the grid row at `position` is. Positions past the last row map to fetched
     /// indexes past the result, which callers bound by the row count.
     pub fn resolve_row(&self, position: u64) -> RowRef {
-        let before = self.inserted_rows.partition_point(|r| r.position < position);
+        let before = self
+            .inserted_rows
+            .partition_point(|r| r.position < position);
         match self.inserted_rows.get(before) {
             Some(r) if r.position == position => RowRef::New(before),
             _ => RowRef::Fetched(position - before as u64),
@@ -143,17 +145,28 @@ impl Changeset {
 
     /// Adds a new row at grid `position`, moving the rows from there down by one
     pub fn insert_row_at(&mut self, position: u64, values: Vec<Option<String>>) {
-        for r in self.inserted_rows.iter_mut().filter(|r| r.position >= position) {
+        for r in self
+            .inserted_rows
+            .iter_mut()
+            .filter(|r| r.position >= position)
+        {
             r.position += 1;
         }
-        let at = self.inserted_rows.partition_point(|r| r.position < position);
-        self.inserted_rows.insert(at, InsertedRow { position, values });
+        let at = self
+            .inserted_rows
+            .partition_point(|r| r.position < position);
+        self.inserted_rows
+            .insert(at, InsertedRow { position, values });
     }
 
     /// Drops the new row `index`, moving the rows below it up by one
     pub fn remove_inserted_row(&mut self, index: usize) {
         let removed = self.inserted_rows.remove(index);
-        for r in self.inserted_rows.iter_mut().filter(|r| r.position > removed.position) {
+        for r in self
+            .inserted_rows
+            .iter_mut()
+            .filter(|r| r.position > removed.position)
+        {
             r.position -= 1;
         }
     }
@@ -169,15 +182,27 @@ impl Changeset {
         dialect: SqlDialect,
     ) -> Vec<String> {
         let col_name = |c: usize| {
-            let name = pager.columns.get(c).map(|col| col.name.as_str()).unwrap_or("col");
+            let name = pager
+                .columns
+                .get(c)
+                .map(|col| col.name.as_str())
+                .unwrap_or("col");
             dialect.quote_ident(name)
         };
         let where_clause = |row: u64| {
             let all_cols: Vec<usize> = (0..pager.columns.len()).collect();
-            let cols = if key_cols.is_empty() { &all_cols[..] } else { key_cols };
+            let cols = if key_cols.is_empty() {
+                &all_cols[..]
+            } else {
+                key_cols
+            };
             cols.iter()
                 .map(|&c| match pager.get_cell(row, c) {
-                    Some(bytes) => format!("{} = {}", col_name(c), dialect.literal(Some(&String::from_utf8_lossy(&bytes)))),
+                    Some(bytes) => format!(
+                        "{} = {}",
+                        col_name(c),
+                        dialect.literal(Some(&String::from_utf8_lossy(&bytes)))
+                    ),
                     None => format!("{} IS NULL", col_name(c)),
                 })
                 .collect::<Vec<_>>()
@@ -189,7 +214,10 @@ impl Changeset {
         let mut edited_rows: HashMap<u64, Vec<(usize, Option<&str>)>> = HashMap::new();
         for (key, cell) in &self.changes {
             if !self.deleted_rows.contains(&key.row_idx) {
-                edited_rows.entry(key.row_idx).or_default().push((key.col_idx, cell.new_value.as_deref()));
+                edited_rows
+                    .entry(key.row_idx)
+                    .or_default()
+                    .push((key.col_idx, cell.new_value.as_deref()));
             }
         }
         let mut edited_rows: Vec<_> = edited_rows.into_iter().collect();
@@ -201,7 +229,10 @@ impl Changeset {
                 .map(|&(c, v)| format!("{} = {}", col_name(c), dialect.literal(v)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            statements.push(format!("UPDATE {target} SET {set_clause} WHERE {};", where_clause(row)));
+            statements.push(format!(
+                "UPDATE {target} SET {set_clause} WHERE {};",
+                where_clause(row)
+            ));
         }
 
         for row in &self.inserted_rows {
@@ -217,8 +248,16 @@ impl Changeset {
                     SqlDialect::MySql => format!("INSERT INTO {target} () VALUES ();"),
                 });
             } else {
-                let cols = set.iter().map(|&(c, _)| col_name(c)).collect::<Vec<_>>().join(", ");
-                let vals = set.iter().map(|&(_, v)| dialect.literal(Some(v))).collect::<Vec<_>>().join(", ");
+                let cols = set
+                    .iter()
+                    .map(|&(c, _)| col_name(c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let vals = set
+                    .iter()
+                    .map(|&(_, v)| dialect.literal(Some(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 statements.push(format!("INSERT INTO {target} ({cols}) VALUES ({vals});"));
             }
         }
@@ -242,7 +281,9 @@ mod tests {
             ColumnMeta::new("username", DataType::Text),
         ];
         let pager = QueryResultPager::new(cols).unwrap();
-        pager.append_row(vec![Some(&b"42"[..]), Some(&b"old_name"[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"42"[..]), Some(&b"old_name"[..])])
+            .unwrap();
         pager.append_row(vec![Some(&b"43"[..]), None]).unwrap();
         pager
     }
@@ -252,7 +293,12 @@ mod tests {
         let pager = users_pager();
 
         let mut cs = Changeset::new();
-        cs.set_cell(0, 1, Some(b"old_name".to_vec()), Some("it's new".to_string()));
+        cs.set_cell(
+            0,
+            1,
+            Some(b"old_name".to_vec()),
+            Some("it's new".to_string()),
+        );
 
         assert!(cs.is_modified(0, 1));
         assert_eq!(cs.get_modified_value(0, 1), Some("it's new"));
@@ -296,7 +342,13 @@ mod tests {
         let order: Vec<RowRef> = (0..5).map(|p| cs.resolve_row(p)).collect();
         assert_eq!(
             order,
-            vec![RowRef::Fetched(0), RowRef::New(0), RowRef::New(1), RowRef::Fetched(1), RowRef::Fetched(2)]
+            vec![
+                RowRef::Fetched(0),
+                RowRef::New(0),
+                RowRef::New(1),
+                RowRef::Fetched(1),
+                RowRef::Fetched(2)
+            ]
         );
         assert_eq!(cs.inserted_rows[0].values, vec![Some("b".to_string())]);
 

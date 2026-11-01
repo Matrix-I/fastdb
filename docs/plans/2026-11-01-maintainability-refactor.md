@@ -39,11 +39,13 @@ Line numbers and counts are review snapshots, not acceptance targets.
 
 ## Phase 1: Establish reliable verification
 
-- [ ] Fix the updater test server to handle partial reads and detect the end of the HTTP request headers, EOF and read errors. Do not replace the call with a fixed-size `read_exact` that can wait forever on a shorter request.
-- [ ] Apply `cargo fmt --all` in a dedicated formatting commit before moving code.
-- [ ] Review existing Clippy warnings; fix them in focused changes and document any narrowly scoped allowance. Avoid mass automated fixes mixed into structural moves.
-- [ ] Add `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` to the macOS CI job once the workspace is clean. Install the required toolchain components explicitly.
-- [ ] Move connection tests to connection persistence, stream/fetch tests to query/result state, and DDL tests to the SQL/DDL owner. Leave asset-loading tests in `assets.rs`.
+Implementation note: the requested one-commit-per-phase structure combines baseline formatting, lint cleanup, test relocation and CI changes in this phase. Form/session regression tests land with Phase 2.
+
+- [x] Fix the updater test server to handle partial reads and detect the end of the HTTP request headers, EOF and read errors. Do not replace the call with a fixed-size `read_exact` that can wait forever on a shorter request.
+- [x] Apply `cargo fmt --all` in a dedicated formatting commit before moving code.
+- [x] Review existing Clippy warnings; fix them in focused changes and document any narrowly scoped allowance. Avoid mass automated fixes mixed into structural moves.
+- [x] Add `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` to the macOS CI job once the workspace is clean. Install the required toolchain components explicitly.
+- [x] Move connection tests to connection persistence, stream/fetch tests to query/result state, and DDL tests to the SQL/DDL owner. Leave asset-loading tests in `assets.rs`.
 - [ ] Add regression tests for form/session isolation and tab connection ownership alongside the fixes in Phase 2; use fake drivers where server behavior is irrelevant.
 
 Acceptance: formatting, strict Clippy and workspace tests pass. Existing test assertions survive relocation. CI fails on formatting drift or newly introduced warnings.

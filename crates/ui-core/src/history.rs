@@ -29,7 +29,11 @@ pub struct History<T> {
 
 impl<T> Default for History<T> {
     fn default() -> Self {
-        Self { undo: Vec::new(), redo: Vec::new(), open: None }
+        Self {
+            undo: Vec::new(),
+            redo: Vec::new(),
+            open: None,
+        }
     }
 }
 

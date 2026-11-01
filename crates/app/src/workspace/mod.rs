@@ -1,9 +1,12 @@
+use db_wire::{
+    ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary,
+    create_driver,
+};
+use gpui::*;
+use mem_engine::DataType;
+use sql_intel::SchemaCache;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-use db_wire::{create_driver, ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary};
-use mem_engine::DataType;
-use gpui::*;
-use sql_intel::SchemaCache;
 use ui_core::theme::Theme;
 use ui_editor::SqlEditorView;
 use ui_grid::VirtualDataGrid;
@@ -37,29 +40,31 @@ mod value_format;
 mod value_panel;
 mod widgets;
 
-pub use column_menu::ColumnMenu;
-pub use filter_suggest::FilterSuggest;
-pub use panes::Panes;
-pub use script_chooser::ScriptChooser;
-pub use script_store::{filter_scripts, ScriptFile, ScriptStore};
-pub use connections::{LiveConnection, SavedConnection};
-pub use nav_context_menu::NavContextMenu;
-pub use tab_context_menu::TabContextMenu;
-pub use update_dialog::{DownloadUiState, UpdateDialog, UpdateDialogStatus};
 use crate::updater::{
-    check_github_latest_release, ReleaseInfo, UpdateCheckResult, UpdateState, DEFAULT_REPO,
+    DEFAULT_REPO, ReleaseInfo, UpdateCheckResult, UpdateState, check_github_latest_release,
+};
+pub use column_menu::ColumnMenu;
+pub use connections::{LiveConnection, SavedConnection};
+pub use ddl::generate_table_ddl;
+use ddl::render_dbeaver_col_badge;
+pub use filter_suggest::FilterSuggest;
+pub use nav_context_menu::NavContextMenu;
+use panel_resize::{CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH, PanelDrag, PanelSplitter};
+pub use panes::Panes;
+#[cfg(test)]
+pub use query::{QueryStatus, script_fetch_query};
+pub use query::{TabState, group_thousands};
+pub use script_chooser::ScriptChooser;
+pub use script_store::{ScriptFile, ScriptStore, filter_scripts};
+pub use tab_context_menu::TabContextMenu;
+use text_input::{
+    CaretPick, LineHistory, LineInput, apply_pick, handle_line_key, render_caret_text,
+    selection_range,
 };
 use ui_core::actions::CheckForUpdates;
-pub use ddl::generate_table_ddl;
-pub use query::{group_thousands, TabState};
-#[cfg(test)]
-pub use query::{script_fetch_query, QueryStatus};
-use ddl::render_dbeaver_col_badge;
-use text_input::{apply_pick, handle_line_key, render_caret_text, selection_range, CaretPick, LineHistory, LineInput};
-use panel_resize::{PanelDrag, PanelSplitter, CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH};
-use value_panel::{ValuePanelState, VALUE_PANEL_WIDTH};
+pub use update_dialog::{DownloadUiState, UpdateDialog, UpdateDialogStatus};
+use value_panel::{VALUE_PANEL_WIDTH, ValuePanelState};
 use widgets::{dbeaver_driver_icon, render_field_content};
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableSubTab {
@@ -217,31 +222,39 @@ impl Workspace {
             saved_connections.first().cloned()
         };
 
-        let (form_name, form_driver, form_host, form_port, form_database, form_user, form_password, form_sock) =
-            if let Some(ref saved) = initial_active_conn {
-                let drv = DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
-                (
-                    saved.name.clone(),
-                    drv,
-                    saved.host.clone(),
-                    saved.port.to_string(),
-                    saved.database.clone(),
-                    saved.user.clone(),
-                    saved.password.clone().unwrap_or_default(),
-                    saved.use_unix_socket,
-                )
-            } else {
-                (
-                    "".to_string(),
-                    DbDriverKind::Postgres,
-                    "localhost".to_string(),
-                    "5432".to_string(),
-                    "".to_string(),
-                    "postgres".to_string(),
-                    "".to_string(),
-                    false,
-                )
-            };
+        let (
+            form_name,
+            form_driver,
+            form_host,
+            form_port,
+            form_database,
+            form_user,
+            form_password,
+            form_sock,
+        ) = if let Some(ref saved) = initial_active_conn {
+            let drv = DbDriverKind::from_name(&saved.driver).unwrap_or(DbDriverKind::Postgres);
+            (
+                saved.name.clone(),
+                drv,
+                saved.host.clone(),
+                saved.port.to_string(),
+                saved.database.clone(),
+                saved.user.clone(),
+                saved.password.clone().unwrap_or_default(),
+                saved.use_unix_socket,
+            )
+        } else {
+            (
+                "".to_string(),
+                DbDriverKind::Postgres,
+                "localhost".to_string(),
+                "5432".to_string(),
+                "".to_string(),
+                "postgres".to_string(),
+                "".to_string(),
+                false,
+            )
+        };
 
         let workspace = Self {
             theme,
@@ -275,7 +288,10 @@ impl Workspace {
             form_password,
             form_use_unix_socket: form_sock,
             form_tls_enabled: initial_active_conn.as_ref().is_some_and(|c| c.tls_enabled),
-            form_tls_ca_cert: initial_active_conn.as_ref().and_then(|c| c.tls_ca_cert.clone()).unwrap_or_default(),
+            form_tls_ca_cert: initial_active_conn
+                .as_ref()
+                .and_then(|c| c.tls_ca_cert.clone())
+                .unwrap_or_default(),
             active_field: Some(FormField::Name),
             form_history: HashMap::new(),
             show_password: false,
@@ -350,16 +366,22 @@ impl Workspace {
 
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(std::time::Duration::from_millis(530)).await;
-                if this.update(cx, |this, cx| {
-                    this.cursor_visible = !this.cursor_visible;
-                    this.save_dirty_scripts();
-                    cx.notify();
-                }).is_err() {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(530))
+                    .await;
+                if this
+                    .update(cx, |this, cx| {
+                        this.cursor_visible = !this.cursor_visible;
+                        this.save_dirty_scripts();
+                        cx.notify();
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
-        }).detach();
+        })
+        .detach();
 
         workspace
     }
@@ -403,35 +425,50 @@ impl Render for Workspace {
                         }
                     }
                 }))
-                .on_mouse_up(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.resizing_column.is_some() {
-                        this.resizing_column = None;
-                        cx.notify();
-                    }
-                }))
-                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.resizing_column.is_some() {
-                        this.resizing_column = None;
-                        cx.notify();
-                    }
-                }));
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                        if this.resizing_column.is_some() {
+                            this.resizing_column = None;
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                        if this.resizing_column.is_some() {
+                            this.resizing_column = None;
+                            cx.notify();
+                        }
+                    }),
+                );
         }
 
         if self.resizing_panel.is_some() {
             root = root
                 .cursor_col_resize()
                 .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                    this.drag_panel_splitter(f32::from(event.position.x), f32::from(window.viewport_size().width));
+                    this.drag_panel_splitter(
+                        f32::from(event.position.x),
+                        f32::from(window.viewport_size().width),
+                    );
                     cx.notify();
                 }))
-                .on_mouse_up(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    this.resizing_panel = None;
-                    cx.notify();
-                }))
-                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    this.resizing_panel = None;
-                    cx.notify();
-                }));
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                        this.resizing_panel = None;
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                        this.resizing_panel = None;
+                        cx.notify();
+                    }),
+                );
         }
 
         // 1. Top Bar / Tabs & Toolbar
@@ -447,7 +484,6 @@ impl Render for Workspace {
                 .child(panes.navigator(self.navigator_width))
                 .child(panes.table_view()),
         );
-
 
         if let Some(menu) = self.nav_context_menu.clone() {
             root = root.child(self.render_nav_context_menu(menu, cx));
@@ -524,37 +560,34 @@ impl Workspace {
 
         cx.spawn(async move |this, cx| {
             if let Ok(res) = rx.recv_async().await {
-                let _ = this.update(cx, |workspace, cx| {
-                    match res {
-                        UpdateCheckResult::UpdateAvailable(info) => {
-                            workspace.pending_update = Some(*info.clone());
+                let _ = this.update(cx, |workspace, cx| match res {
+                    UpdateCheckResult::UpdateAvailable(info) => {
+                        workspace.pending_update = Some(*info.clone());
+                        workspace.update_dialog =
+                            Some(UpdateDialog::update_available(*info, is_manual));
+                        cx.notify();
+                    }
+                    UpdateCheckResult::UpToDate { current_version } => {
+                        if is_manual {
                             workspace.update_dialog =
-                                Some(UpdateDialog::update_available(*info, is_manual));
+                                Some(UpdateDialog::up_to_date(current_version, true));
                             cx.notify();
                         }
-                        UpdateCheckResult::UpToDate { current_version } => {
-                            if is_manual {
-                                workspace.update_dialog =
-                                    Some(UpdateDialog::up_to_date(current_version, true));
-                                cx.notify();
-                            }
+                    }
+                    UpdateCheckResult::Skipped(info) => {
+                        if is_manual {
+                            workspace.pending_update = Some(*info.clone());
+                            workspace.update_dialog =
+                                Some(UpdateDialog::update_available(*info, true));
+                            cx.notify();
                         }
-                        UpdateCheckResult::Skipped(info) => {
-                            if is_manual {
-                                workspace.pending_update = Some(*info.clone());
-                                workspace.update_dialog =
-                                    Some(UpdateDialog::update_available(*info, true));
-                                cx.notify();
-                            }
-                        }
-                        UpdateCheckResult::Error(err) => {
-                            if is_manual {
-                                workspace.update_dialog =
-                                    Some(UpdateDialog::error(err, true));
-                                cx.notify();
-                            } else {
-                                tracing::warn!("Auto update background check failed: {}", err);
-                            }
+                    }
+                    UpdateCheckResult::Error(err) => {
+                        if is_manual {
+                            workspace.update_dialog = Some(UpdateDialog::error(err, true));
+                            cx.notify();
+                        } else {
+                            tracing::warn!("Auto update background check failed: {}", err);
                         }
                     }
                 });

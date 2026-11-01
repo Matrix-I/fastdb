@@ -55,7 +55,11 @@ impl ScriptChooser {
 
     pub fn move_selection(&mut self, down: bool) {
         let len = self.visible().len();
-        self.selected = if down { (self.selected + 1).min(len.saturating_sub(1)) } else { self.selected.saturating_sub(1) };
+        self.selected = if down {
+            (self.selected + 1).min(len.saturating_sub(1))
+        } else {
+            self.selected.saturating_sub(1)
+        };
     }
 
     /// Script under the selection, if any
@@ -78,7 +82,9 @@ impl Workspace {
     }
 
     fn choose_new_script(&mut self, cx: &mut Context<Self>) {
-        let Some(chooser) = self.script_chooser.take() else { return };
+        let Some(chooser) = self.script_chooser.take() else {
+            return;
+        };
         match self.script_store.create(&chooser.connection_id) {
             Ok(script) => self.open_script_file(&script, cx),
             Err(e) => tracing::warn!("{e:#}"),
@@ -86,7 +92,9 @@ impl Workspace {
     }
 
     fn toggle_all_connections(&mut self) {
-        let Some(chooser) = self.script_chooser.as_mut() else { return };
+        let Some(chooser) = self.script_chooser.as_mut() else {
+            return;
+        };
         chooser.all_connections = !chooser.all_connections;
         let filter = (!chooser.all_connections).then_some(chooser.connection_id.as_str());
         chooser.scripts = self.script_store.list(filter);
@@ -94,8 +102,14 @@ impl Workspace {
     }
 
     /// Keys while the chooser is open: arrows move, Enter opens, Escape closes, the rest search
-    pub(super) fn handle_script_chooser_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
-        let Some(chooser) = self.script_chooser.as_mut() else { return };
+    pub(super) fn handle_script_chooser_key(
+        &mut self,
+        keystroke: &Keystroke,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(chooser) = self.script_chooser.as_mut() else {
+            return;
+        };
         match keystroke.key.as_str() {
             "escape" => self.script_chooser = None,
             "up" => chooser.move_selection(false),
@@ -140,20 +154,39 @@ impl Workspace {
         })
     }
 
-    pub(super) fn render_script_chooser(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_script_chooser(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let pick = self.chooser_caret_pick(cx);
         let connection_name = |id: &str| {
-            self.saved_connections.iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_else(|| id.to_string())
+            self.saved_connections
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| id.to_string())
         };
-        let Some(chooser) = self.script_chooser.as_ref() else { return div().into_any_element() };
-        let title = format!("Choose SQL script for '{}'", connection_name(&chooser.connection_id));
+        let Some(chooser) = self.script_chooser.as_ref() else {
+            return div().into_any_element();
+        };
+        let title = format!(
+            "Choose SQL script for '{}'",
+            connection_name(&chooser.connection_id)
+        );
         let all = chooser.all_connections;
         let visible = chooser.visible();
         let first = chooser.selected.saturating_sub(VISIBLE_ROWS - 1);
 
-        let cell = |w: f32| div().flex_none().w(px(w)).overflow_hidden().whitespace_nowrap().text_ellipsis();
+        let cell = |w: f32| {
+            div()
+                .flex_none()
+                .w(px(w))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+        };
         let header = div()
             .flex()
             .items_center()
@@ -169,11 +202,17 @@ impl Workspace {
             .child(div().flex_1().child("Info"))
             .when(all, |d| d.child(cell(110.0).child("Connection")));
 
-        let mut rows = div().flex().flex_col().h(px(VISIBLE_ROWS as f32 * 24.0)).overflow_hidden();
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .h(px(VISIBLE_ROWS as f32 * 24.0))
+            .overflow_hidden();
         for (pos, &i) in visible.iter().enumerate().skip(first).take(VISIBLE_ROWS) {
             let script = &chooser.scripts[i];
             let is_sel = pos == chooser.selected;
-            let time = chrono::DateTime::<chrono::Local>::from(script.modified).format("%Y-%m-%d %H:%M:%S").to_string();
+            let time = chrono::DateTime::<chrono::Local>::from(script.modified)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string();
             let clicked = script.clone();
             rows = rows.child(
                 div()
@@ -198,14 +237,41 @@ impl Workspace {
                         }
                         cx.notify();
                     }))
-                    .child(cell(170.0).flex().items_center().gap_1p5().child(img("icons/sql_script.svg").w(px(13.0)).h(px(13.0))).child(script.name.clone()))
+                    .child(
+                        cell(170.0)
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(img("icons/sql_script.svg").w(px(13.0)).h(px(13.0)))
+                            .child(script.name.clone()),
+                    )
                     .child(cell(150.0).text_color(theme.text_secondary).child(time))
-                    .child(div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(theme.text_muted).child(script.preview.clone()))
-                    .when(all, |d| d.child(cell(110.0).text_color(theme.text_secondary).child(connection_name(&script.connection_id)))),
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(theme.text_muted)
+                            .child(script.preview.clone()),
+                    )
+                    .when(all, |d| {
+                        d.child(
+                            cell(110.0)
+                                .text_color(theme.text_secondary)
+                                .child(connection_name(&script.connection_id)),
+                        )
+                    }),
             );
         }
         if visible.is_empty() {
-            rows = rows.child(div().p_3().text_size(px(12.0)).text_color(theme.text_muted).child("No scripts match."));
+            rows = rows.child(
+                div()
+                    .p_3()
+                    .text_size(px(12.0))
+                    .text_color(theme.text_muted)
+                    .child("No scripts match."),
+            );
         }
 
         let search = div()
@@ -275,7 +341,9 @@ impl Workspace {
                             .border_1()
                             .border_color(theme.border_focused)
                             .text_size(px(10.0))
-                            .when(all, |d| d.bg(rgb(0x388bfd)).text_color(rgb(0xffffff)).child("✓")),
+                            .when(all, |d| {
+                                d.bg(rgb(0x388bfd)).text_color(rgb(0xffffff)).child("✓")
+                            }),
                     )
                     .child("Show scripts for all connections"),
             );
@@ -305,10 +373,24 @@ impl Workspace {
                         this.script_chooser = None;
                         cx.notify();
                     }))
-                    .child(div().text_size(px(13.0)).font_weight(FontWeight::SEMIBOLD).child(title))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
                     .child(search)
                     .child(actions)
-                    .child(div().flex().flex_col().border_1().border_color(theme.border).rounded_sm().child(header).child(rows)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded_sm()
+                            .child(header)
+                            .child(rows),
+                    ),
             )
             .into_any_element()
     }
@@ -331,7 +413,14 @@ mod tests {
     }
 
     fn chooser() -> ScriptChooser {
-        ScriptChooser::new("pg".into(), vec![script("Script-3", "explain x"), script("Script-2", "select 1"), script("Script-1", "")])
+        ScriptChooser::new(
+            "pg".into(),
+            vec![
+                script("Script-3", "explain x"),
+                script("Script-2", "select 1"),
+                script("Script-1", ""),
+            ],
+        )
     }
 
     #[test]

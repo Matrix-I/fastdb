@@ -29,6 +29,10 @@ fn test_editor_active_statement_parsing() {
     let mut editor3 = SqlEditorView::new(code3, Theme::dark(), None);
     // Default cursor is at code3.len()
     let stmt3 = editor3.active_statement();
-    println!("stmt3 at offset {}: {:?}", editor3.buffer.cursor_offset(), stmt3);
+    println!(
+        "stmt3 at offset {}: {:?}",
+        editor3.buffer.cursor_offset(),
+        stmt3
+    );
     assert_eq!(stmt3, code3);
 }

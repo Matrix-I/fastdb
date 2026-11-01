@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 pub use mem_engine::{ColumnMeta, DataType, QueryResultPager};
+use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbDriverKind {
@@ -18,21 +18,41 @@ pub enum DbDriverKind {
 impl DbDriverKind {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Postgres => "Postgres", Self::MySql => "MySql", Self::MariaDb => "MariaDb",
-            Self::Sqlite => "Sqlite", Self::SqlServer => "SqlServer", Self::Oracle => "Oracle", Self::Db2 => "Db2",
+            Self::Postgres => "Postgres",
+            Self::MySql => "MySql",
+            Self::MariaDb => "MariaDb",
+            Self::Sqlite => "Sqlite",
+            Self::SqlServer => "SqlServer",
+            Self::Oracle => "Oracle",
+            Self::Db2 => "Db2",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
-        [Self::Postgres, Self::MySql, Self::MariaDb, Self::Sqlite, Self::SqlServer, Self::Oracle, Self::Db2]
-            .into_iter().find(|kind| kind.name().eq_ignore_ascii_case(name))
+        [
+            Self::Postgres,
+            Self::MySql,
+            Self::MariaDb,
+            Self::Sqlite,
+            Self::SqlServer,
+            Self::Oracle,
+            Self::Db2,
+        ]
+        .into_iter()
+        .find(|kind| kind.name().eq_ignore_ascii_case(name))
     }
     pub fn default_port(self) -> u16 {
         match self {
-            Self::Postgres => 5432, Self::MySql | Self::MariaDb => 3306, Self::Sqlite => 0,
-            Self::SqlServer => 1433, Self::Oracle => 1521, Self::Db2 => 50000,
+            Self::Postgres => 5432,
+            Self::MySql | Self::MariaDb => 3306,
+            Self::Sqlite => 0,
+            Self::SqlServer => 1433,
+            Self::Oracle => 1521,
+            Self::Db2 => 50000,
         }
     }
-    pub fn uses_odbc(self) -> bool { matches!(self, Self::SqlServer | Self::Oracle | Self::Db2) }
+    pub fn uses_odbc(self) -> bool {
+        matches!(self, Self::SqlServer | Self::Oracle | Self::Db2)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,18 +104,33 @@ impl Default for ConnectionConfig {
 pub enum StreamEvent {
     /// Result columns are known; rows are appended into this pager as they arrive
     SchemaReady(Arc<QueryResultPager>),
-    PageAppended { total_rows: u64 },
-    Completed { total_rows: u64, elapsed_ms: u64 },
+    PageAppended {
+        total_rows: u64,
+    },
+    Completed {
+        total_rows: u64,
+        elapsed_ms: u64,
+    },
     Error(String),
 }
 
 impl std::fmt::Debug for StreamEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StreamEvent::SchemaReady(pager) => write!(f, "SchemaReady({} columns)", pager.num_cols()),
-            StreamEvent::PageAppended { total_rows } => write!(f, "PageAppended {{ total_rows: {total_rows} }}"),
-            StreamEvent::Completed { total_rows, elapsed_ms } => {
-                write!(f, "Completed {{ total_rows: {total_rows}, elapsed_ms: {elapsed_ms} }}")
+            StreamEvent::SchemaReady(pager) => {
+                write!(f, "SchemaReady({} columns)", pager.num_cols())
+            }
+            StreamEvent::PageAppended { total_rows } => {
+                write!(f, "PageAppended {{ total_rows: {total_rows} }}")
+            }
+            StreamEvent::Completed {
+                total_rows,
+                elapsed_ms,
+            } => {
+                write!(
+                    f,
+                    "Completed {{ total_rows: {total_rows}, elapsed_ms: {elapsed_ms} }}"
+                )
             }
             StreamEvent::Error(e) => write!(f, "Error({e:?})"),
         }
@@ -117,7 +152,11 @@ pub trait DatabaseDriver: Send + Sync {
 
     /// Stream query results into a new QueryResultPager, announced via StreamEvent::SchemaReady.
     /// Errors are both sent as StreamEvent::Error and returned.
-    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()>;
+    async fn execute_streaming(
+        &self,
+        sql: &str,
+        event_tx: flume::Sender<StreamEvent>,
+    ) -> Result<()>;
 
     /// Execute query to completion and return the populated pager, total rows, and elapsed ms
     async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
@@ -129,7 +168,10 @@ pub trait DatabaseDriver: Send + Sync {
         for event in event_rx.drain() {
             match event {
                 StreamEvent::SchemaReady(p) => pager = Some(p),
-                StreamEvent::Completed { total_rows, elapsed_ms } => summary = Some((total_rows, elapsed_ms)),
+                StreamEvent::Completed {
+                    total_rows,
+                    elapsed_ms,
+                } => summary = Some((total_rows, elapsed_ms)),
                 StreamEvent::Error(e) => anyhow::bail!(e),
                 StreamEvent::PageAppended { .. } => {}
             }
@@ -183,6 +225,8 @@ pub fn row_count_error(statement: &str, affected: u64) -> anyhow::Error {
     if affected == 0 {
         anyhow::anyhow!("The row was not found (changed or deleted by someone else?): {statement}")
     } else {
-        anyhow::anyhow!("The statement would change {affected} rows instead of one, so nothing was saved: {statement}")
+        anyhow::anyhow!(
+            "The statement would change {affected} rows instead of one, so nothing was saved: {statement}"
+        )
     }
 }

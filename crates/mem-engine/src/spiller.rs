@@ -1,8 +1,8 @@
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use anyhow::{bail, Context, Result};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -105,7 +105,11 @@ impl Drop for DiskSpiller {
     fn drop(&mut self) {
         if self.file_path.exists() {
             if let Err(e) = fs::remove_file(&self.file_path) {
-                warn!("Failed to clean up spill file {}: {}", self.file_path.display(), e);
+                warn!(
+                    "Failed to clean up spill file {}: {}",
+                    self.file_path.display(),
+                    e
+                );
             } else {
                 debug!("Cleaned up spill file {}", self.file_path.display());
             }

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -84,12 +84,11 @@ impl UpdateState {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        if path.exists() {
-            if let Ok(data) = fs::read_to_string(&path) {
-                if let Ok(state) = serde_json::from_str::<UpdateState>(&data) {
-                    return state;
-                }
-            }
+        if path.exists()
+            && let Ok(data) = fs::read_to_string(&path)
+            && let Ok(state) = serde_json::from_str::<UpdateState>(&data)
+        {
+            return state;
         }
         Self::default()
     }
@@ -154,7 +153,7 @@ pub fn format_bytes(bytes: u64) -> String {
 
 /// Cleans version strings by trimming 'v' or 'V' prefixes
 pub fn clean_version_str(tag: &str) -> &str {
-    tag.trim().trim_start_matches(|c| c == 'v' || c == 'V')
+    tag.trim().trim_start_matches(['v', 'V'])
 }
 
 /// Determines whether `latest_tag` is semantically newer than `current_ver`
@@ -310,7 +309,9 @@ async fn check_github_latest_release_inner(
 
     // If GitHub returns 404, the repo has no releases yet -> current version is latest
     if resp.status().as_u16() == 404 {
-        info!("GitHub Releases returned 404: no published releases yet, treating current version as latest");
+        info!(
+            "GitHub Releases returned 404: no published releases yet, treating current version as latest"
+        );
         return Ok(UpdateCheckResult::UpToDate {
             current_version: current_version.to_string(),
         });
@@ -350,12 +351,11 @@ async fn check_github_latest_release_inner(
 
     if is_version_newer(&dto.tag_name, current_version) {
         // If automatic check and user previously skipped this version, ignore
-        if !is_manual {
-            if let Some(ref skipped) = state.skipped_version {
-                if skipped == &dto.tag_name {
-                    return Ok(UpdateCheckResult::Skipped(Box::new(info)));
-                }
-            }
+        if !is_manual
+            && let Some(ref skipped) = state.skipped_version
+            && skipped == &dto.tag_name
+        {
+            return Ok(UpdateCheckResult::Skipped(Box::new(info)));
         }
         Ok(UpdateCheckResult::UpdateAvailable(Box::new(info)))
     } else {
@@ -391,13 +391,13 @@ async fn download_asset_file_inner(
     dest_path: PathBuf,
     sender: flume::Sender<DownloadProgressEvent>,
 ) {
-    if let Some(parent) = dest_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            let _ = sender.send(DownloadProgressEvent::Failed {
-                error: format!("Failed to create download directory: {}", e),
-            });
-            return;
-        }
+    if let Some(parent) = dest_path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        let _ = sender.send(DownloadProgressEvent::Failed {
+            error: format!("Failed to create download directory: {}", e),
+        });
+        return;
     }
 
     let part_path = dest_path.with_extension(format!(
@@ -606,17 +606,17 @@ pub fn apply_update_file(downloaded_file: &Path) -> Result<()> {
                     .arg(&app_bundle_dest)
                     .status();
 
-                if let Ok(status) = ditto {
-                    if status.success() {
-                        install_success = true;
-                        let _ = std::process::Command::new("codesign")
-                            .args(["--force", "--deep", "--sign", "-"])
-                            .arg(&app_bundle_dest)
-                            .status();
-                        let _ = std::process::Command::new("touch")
-                            .arg(&app_bundle_dest)
-                            .status();
-                    }
+                if let Ok(status) = ditto
+                    && status.success()
+                {
+                    install_success = true;
+                    let _ = std::process::Command::new("codesign")
+                        .args(["--force", "--deep", "--sign", "-"])
+                        .arg(&app_bundle_dest)
+                        .status();
+                    let _ = std::process::Command::new("touch")
+                        .arg(&app_bundle_dest)
+                        .status();
                 }
             }
 
@@ -727,8 +727,14 @@ mod tests {
             socket
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            let mut request = [0; 4096];
-            socket.read(&mut request).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let count = socket.read(&mut chunk).expect("HTTP request read failed");
+                assert!(count > 0, "HTTP peer closed before finishing headers");
+                request.extend_from_slice(&chunk[..count]);
+                assert!(request.len() <= 64 * 1024, "HTTP headers too large");
+            }
             write!(
                 socket,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

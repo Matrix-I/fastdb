@@ -35,6 +35,8 @@ pub enum DownloadUiState {
 
 /// Current status shown inside the update dialog
 #[derive(Debug, Clone)]
+// The modal owns one status; boxing would complicate every UI transition.
+#[allow(clippy::large_enum_variant)]
 pub enum UpdateDialogStatus {
     Checking,
     UpToDate {
@@ -98,11 +100,11 @@ impl Workspace {
 
     /// Skips the current release version so automatic checks will ignore it
     pub(super) fn skip_current_version(&mut self) {
-        if let Some(ref dialog) = self.update_dialog {
-            if let UpdateDialogStatus::UpdateAvailable { ref release, .. } = dialog.status {
-                self.update_state.skipped_version = Some(release.tag_name.clone());
-                let _ = self.update_state.save();
-            }
+        if let Some(ref dialog) = self.update_dialog
+            && let UpdateDialogStatus::UpdateAvailable { ref release, .. } = dialog.status
+        {
+            self.update_state.skipped_version = Some(release.tag_name.clone());
+            let _ = self.update_state.save();
         }
         self.update_dialog = None;
         self.pending_update = None;
@@ -128,14 +130,20 @@ impl Workspace {
         };
 
         // Transition state to Downloading
-        if let Some(ref mut dialog) = self.update_dialog {
-            if let UpdateDialogStatus::UpdateAvailable { ref mut download, .. } = dialog.status {
-                *download = DownloadUiState::Downloading {
-                    downloaded: 0,
-                    total: if asset.size > 0 { Some(asset.size) } else { None },
-                    percent: 0.0,
-                };
-            }
+        if let Some(ref mut dialog) = self.update_dialog
+            && let UpdateDialogStatus::UpdateAvailable {
+                ref mut download, ..
+            } = dialog.status
+        {
+            *download = DownloadUiState::Downloading {
+                downloaded: 0,
+                total: if asset.size > 0 {
+                    Some(asset.size)
+                } else {
+                    None
+                },
+                percent: 0.0,
+            };
         }
 
         // Determine destination file path in user's Downloads or updates directory
@@ -164,74 +172,77 @@ impl Workspace {
             while let Ok(event) = rx.recv_async().await {
                 let event_clone = event.clone();
                 let _ = this.update(cx, |workspace, cx| {
-                    if let Some(ref mut dialog) = workspace.update_dialog {
-                        if let UpdateDialogStatus::UpdateAvailable { ref mut download, .. } =
-                            dialog.status
-                        {
-                            match event_clone {
-                                DownloadProgressEvent::Progress { downloaded, total } => {
-                                    let percent = if let Some(tot) = total {
-                                        if tot > 0 {
-                                            (downloaded as f32 / tot as f32).clamp(0.0, 1.0)
-                                        } else {
-                                            0.0
-                                        }
+                    if let Some(ref mut dialog) = workspace.update_dialog
+                        && let UpdateDialogStatus::UpdateAvailable {
+                            ref mut download, ..
+                        } = dialog.status
+                    {
+                        match event_clone {
+                            DownloadProgressEvent::Progress { downloaded, total } => {
+                                let percent = if let Some(tot) = total {
+                                    if tot > 0 {
+                                        (downloaded as f32 / tot as f32).clamp(0.0, 1.0)
                                     } else {
                                         0.0
-                                    };
-                                    *download = DownloadUiState::Downloading {
-                                        downloaded,
-                                        total,
-                                        percent,
-                                    };
-                                }
-                                DownloadProgressEvent::Finished { path } => {
-                                    *download = DownloadUiState::Installing;
-                                    cx.notify();
+                                    }
+                                } else {
+                                    0.0
+                                };
+                                *download = DownloadUiState::Downloading {
+                                    downloaded,
+                                    total,
+                                    percent,
+                                };
+                            }
+                            DownloadProgressEvent::Finished { path } => {
+                                *download = DownloadUiState::Installing;
+                                cx.notify();
 
-                                    let target_path = path.clone();
-                                    let tag = tag_name.clone();
-                                    let (install_tx, install_rx) = flume::bounded::<Result<(), String>>(1);
+                                let target_path = path.clone();
+                                let tag = tag_name.clone();
+                                let (install_tx, install_rx) =
+                                    flume::bounded::<Result<(), String>>(1);
 
-                                    cx.background_executor()
-                                        .spawn(async move {
-                                            let res = apply_update_file(&target_path)
-                                                .map_err(|e| e.to_string());
-                                            let _ = install_tx.send(res);
-                                        })
-                                        .detach();
-
-                                    cx.spawn(async move |this, cx| {
-                                        if let Ok(res) = install_rx.recv_async().await {
-                                            let _ = this.update(cx, |workspace, cx| {
-                                                if let Some(ref mut dialog) = workspace.update_dialog {
-                                                    if let UpdateDialogStatus::UpdateAvailable { ref mut download, .. } =
-                                                        dialog.status
-                                                    {
-                                                        match res {
-                                                            Ok(()) => {
-                                                                *download = DownloadUiState::Complete {
-                                                                    new_version: tag,
-                                                                };
-                                                            }
-                                                            Err(_) => {
-                                                                *download = DownloadUiState::Finished { path };
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    }
-                                                }
-                                            });
-                                        }
+                                cx.background_executor()
+                                    .spawn(async move {
+                                        let res = apply_update_file(&target_path)
+                                            .map_err(|e| e.to_string());
+                                        let _ = install_tx.send(res);
                                     })
                                     .detach();
-                                }
-                                DownloadProgressEvent::Failed { error } => {
-                                    *download = DownloadUiState::Failed { error };
-                                }
+
+                                cx.spawn(async move |this, cx| {
+                                    if let Ok(res) = install_rx.recv_async().await {
+                                        let _ = this.update(cx, |workspace, cx| {
+                                            if let Some(ref mut dialog) = workspace.update_dialog
+                                                && let UpdateDialogStatus::UpdateAvailable {
+                                                    ref mut download,
+                                                    ..
+                                                } = dialog.status
+                                            {
+                                                match res {
+                                                    Ok(()) => {
+                                                        *download = DownloadUiState::Complete {
+                                                            new_version: tag,
+                                                        };
+                                                    }
+                                                    Err(_) => {
+                                                        *download =
+                                                            DownloadUiState::Finished { path };
+                                                    }
+                                                }
+                                                cx.notify();
+                                            }
+                                        });
+                                    }
+                                })
+                                .detach();
                             }
-                            cx.notify();
+                            DownloadProgressEvent::Failed { error } => {
+                                *download = DownloadUiState::Failed { error };
+                            }
                         }
+                        cx.notify();
                     }
                 });
             }
@@ -240,7 +251,10 @@ impl Workspace {
     }
 
     /// Renders the complete Software Update modal dialog
-    pub(super) fn render_update_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_update_dialog(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let auto_check = self.update_state.auto_check_enabled;
@@ -260,13 +274,13 @@ impl Workspace {
             .justify_center()
             .on_click(cx.listener(|this, _, _, cx| {
                 // Clicking outside closes only when not downloading
-                let is_downloading = match this.update_dialog.as_ref().map(|d| &d.status) {
+                let is_downloading = matches!(
+                    this.update_dialog.as_ref().map(|d| &d.status),
                     Some(UpdateDialogStatus::UpdateAvailable {
                         download: DownloadUiState::Downloading { .. },
                         ..
-                    }) => true,
-                    _ => false,
-                };
+                    })
+                );
                 if !is_downloading {
                     this.close_update_dialog();
                     cx.notify();
@@ -336,9 +350,9 @@ impl Workspace {
                     // 2. Dialog Content Area
                     .child(match dialog_status {
                         UpdateDialogStatus::Checking => self.render_checking_state(theme, cx),
-                        UpdateDialogStatus::UpToDate { ref current_version } => {
-                            self.render_up_to_date_state(current_version, theme, cx)
-                        }
+                        UpdateDialogStatus::UpToDate {
+                            ref current_version,
+                        } => self.render_up_to_date_state(current_version, theme, cx),
                         UpdateDialogStatus::Error { ref message } => {
                             self.render_error_state(message, theme, cx)
                         }
@@ -353,11 +367,7 @@ impl Workspace {
     }
 
     /// Renders the "Checking for updates..." state
-    fn render_checking_state(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_checking_state(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         div()
             .flex()
             .flex_col()
@@ -365,11 +375,7 @@ impl Workspace {
             .justify_center()
             .py_8()
             .gap_3()
-            .child(
-                div()
-                    .text_size(px(28.0))
-                    .child("🔄"),
-            )
+            .child(div().text_size(px(28.0)).child("🔄"))
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -384,27 +390,25 @@ impl Workspace {
                     .child("Connecting to GitHub Releases to check for newer versions."),
             )
             .child(
-                div()
-                    .pt_3()
-                    .child(
-                        div()
-                            .id("btn-cancel-checking")
-                            .px_4()
-                            .py_1p5()
-                            .rounded_md()
-                            .bg(theme.bg_surface_hover)
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_size(px(12.0))
-                            .text_color(theme.text_primary)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_surface_selected))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_update_dialog();
-                                cx.notify();
-                            }))
-                            .child("Cancel"),
-                    ),
+                div().pt_3().child(
+                    div()
+                        .id("btn-cancel-checking")
+                        .px_4()
+                        .py_1p5()
+                        .rounded_md()
+                        .bg(theme.bg_surface_hover)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_size(px(12.0))
+                        .text_color(theme.text_primary)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_surface_selected))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_update_dialog();
+                            cx.notify();
+                        }))
+                        .child("Cancel"),
+                ),
             )
             .into_any_element()
     }
@@ -447,25 +451,23 @@ impl Workspace {
                     )),
             )
             .child(
-                div()
-                    .pt_4()
-                    .child(
-                        div()
-                            .id("btn-uptodate-ok")
-                            .px_5()
-                            .py_1p5()
-                            .rounded_md()
-                            .bg(theme.text_accent)
-                            .text_color(theme.bg_app)
-                            .font_weight(FontWeight::BOLD)
-                            .text_size(px(12.0))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_update_dialog();
-                                cx.notify();
-                            }))
-                            .child("OK"),
-                    ),
+                div().pt_4().child(
+                    div()
+                        .id("btn-uptodate-ok")
+                        .px_5()
+                        .py_1p5()
+                        .rounded_md()
+                        .bg(theme.text_accent)
+                        .text_color(theme.bg_app)
+                        .font_weight(FontWeight::BOLD)
+                        .text_size(px(12.0))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_update_dialog();
+                            cx.notify();
+                        }))
+                        .child("OK"),
+                ),
             )
             .into_any_element()
     }
@@ -583,7 +585,7 @@ impl Workspace {
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(15.0))
                             .text_color(theme.text_primary)
-                            .child(format!("A new version of FastDB is available!")),
+                            .child("A new version of FastDB is available!".to_string()),
                     )
                     .child(
                         div()
@@ -620,13 +622,11 @@ impl Workspace {
                             .border_color(theme.border)
                             .text_size(px(12.0))
                             .text_color(theme.text_secondary)
-                            .child(
-                                if release.body.trim().is_empty() {
-                                    "No release notes provided for this version.".to_string()
-                                } else {
-                                    release.body.clone()
-                                },
-                            ),
+                            .child(if release.body.trim().is_empty() {
+                                "No release notes provided for this version.".to_string()
+                            } else {
+                                release.body.clone()
+                            }),
                     ),
             )
             // Download progress or matching package info
@@ -1010,57 +1010,51 @@ impl Workspace {
                         .into_any_element()
                 }
             }
-            DownloadUiState::Downloading { .. } => {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .px_4()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(theme.bg_surface_hover)
-                    .text_color(theme.text_muted)
-                    .text_size(px(12.0))
-                    .child(div().child("⏳"))
-                    .child("Downloading...")
-                    .into_any_element()
-            }
-            DownloadUiState::Installing => {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .px_4()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(theme.bg_surface_hover)
-                    .text_color(theme.text_muted)
-                    .text_size(px(12.0))
-                    .child(div().child("⚙️"))
-                    .child("Installing...")
-                    .into_any_element()
-            }
-            DownloadUiState::Complete { .. } => {
-                div()
-                    .id("btn-restart-app")
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .px_4()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(rgb(0x238636))
-                    .text_color(rgb(0xffffff))
-                    .font_weight(FontWeight::BOLD)
-                    .text_size(px(12.0))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|_, _, _, _| {
-                        restart_application();
-                    }))
-                    .child(div().child("🚀"))
-                    .child("Restart Now")
-                    .into_any_element()
-            }
+            DownloadUiState::Downloading { .. } => div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_4()
+                .py_1p5()
+                .rounded_md()
+                .bg(theme.bg_surface_hover)
+                .text_color(theme.text_muted)
+                .text_size(px(12.0))
+                .child(div().child("⏳"))
+                .child("Downloading...")
+                .into_any_element(),
+            DownloadUiState::Installing => div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_4()
+                .py_1p5()
+                .rounded_md()
+                .bg(theme.bg_surface_hover)
+                .text_color(theme.text_muted)
+                .text_size(px(12.0))
+                .child(div().child("⚙️"))
+                .child("Installing...")
+                .into_any_element(),
+            DownloadUiState::Complete { .. } => div()
+                .id("btn-restart-app")
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_4()
+                .py_1p5()
+                .rounded_md()
+                .bg(rgb(0x238636))
+                .text_color(rgb(0xffffff))
+                .font_weight(FontWeight::BOLD)
+                .text_size(px(12.0))
+                .cursor_pointer()
+                .on_click(cx.listener(|_, _, _, _| {
+                    restart_application();
+                }))
+                .child(div().child("🚀"))
+                .child("Restart Now")
+                .into_any_element(),
             DownloadUiState::Finished { path } => {
                 let p = path.clone();
                 div()
@@ -1085,24 +1079,22 @@ impl Workspace {
                     .child("Open Installer")
                     .into_any_element()
             }
-            DownloadUiState::Failed { .. } => {
-                div()
-                    .id("btn-retry-download")
-                    .px_4()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(theme.text_accent)
-                    .text_color(theme.bg_app)
-                    .font_weight(FontWeight::BOLD)
-                    .text_size(px(12.0))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.start_update_download(cx);
-                        cx.notify();
-                    }))
-                    .child("Retry Download")
-                    .into_any_element()
-            }
+            DownloadUiState::Failed { .. } => div()
+                .id("btn-retry-download")
+                .px_4()
+                .py_1p5()
+                .rounded_md()
+                .bg(theme.text_accent)
+                .text_color(theme.bg_app)
+                .font_weight(FontWeight::BOLD)
+                .text_size(px(12.0))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.start_update_download(cx);
+                    cx.notify();
+                }))
+                .child("Retry Download")
+                .into_any_element(),
         }
     }
 }

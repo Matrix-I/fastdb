@@ -11,9 +11,11 @@ impl Workspace {
         // Diagram View
         let t_name = table_name_opt.as_deref().unwrap_or("Table");
         let s_name = schema_name_opt.as_deref().unwrap_or("public");
-        let columns_opt = self.table_columns.get(&(s_name.to_string(), t_name.to_string()));
+        let columns_opt = self
+            .table_columns
+            .get(&(s_name.to_string(), t_name.to_string()));
 
-        let diag_view = div()
+        div()
             .id("diag-view-scroll")
             .flex()
             .flex_col()
@@ -41,7 +43,7 @@ impl Workspace {
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(12.0))
                             .child(img("icons/table.svg").w(px(14.0)).h(px(14.0)))
-                            .child(format!("{}.{}", s_name, t_name))
+                            .child(format!("{}.{}", s_name, t_name)),
                     )
                     .child({
                         let mut col_list = div().flex().flex_col().p_2().gap_1();
@@ -58,27 +60,35 @@ impl Workspace {
                                                 .flex()
                                                 .items_center()
                                                 .gap_1()
-                                                .child(if c.is_primary_key { "🗝" } else { "•" })
-                                                .child(div().text_color(theme.text_primary).child(c.name.clone()))
+                                                .child(if c.is_primary_key {
+                                                    "🗝"
+                                                } else {
+                                                    "•"
+                                                })
+                                                .child(
+                                                    div()
+                                                        .text_color(theme.text_primary)
+                                                        .child(c.name.clone()),
+                                                ),
                                         )
                                         .child(
                                             div()
                                                 .text_color(theme.text_muted)
                                                 .text_size(px(9.5))
-                                                .child(c.data_type.to_string())
-                                        )
+                                                .child(c.data_type.to_string()),
+                                        ),
                                 );
                             }
                         } else {
                             col_list = col_list.child(
-                                div().text_size(px(11.0)).text_color(theme.text_muted).child("Expand table in navigator to display diagram columns.")
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme.text_muted)
+                                    .child("Expand table in navigator to display diagram columns."),
                             );
                         }
                         col_list
-                    })
-            );
-
-
-        diag_view
+                    }),
+            )
     }
 }

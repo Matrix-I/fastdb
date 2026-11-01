@@ -8,7 +8,12 @@ use super::*;
 
 impl Workspace {
     /// Script tab: Execute toolbar, editor on top, error banner, result grid and its footer
-    pub(super) fn render_script_view(&mut self, tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_script_view(
+        &mut self,
+        tab_idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let is_running_query = self.is_running_query;
@@ -39,8 +44,18 @@ impl Workspace {
                     .h(px(24.0))
                     .px_2()
                     .rounded_xs()
-                    .bg(if is_running_query { rgb(0xda3633) } else { rgb(0x238636) })
-                    .hover(move |s| s.bg(if is_running_query { rgb(0xf85149) } else { rgb(0x2ea043) }))
+                    .bg(if is_running_query {
+                        rgb(0xda3633)
+                    } else {
+                        rgb(0x238636)
+                    })
+                    .hover(move |s| {
+                        s.bg(if is_running_query {
+                            rgb(0xf85149)
+                        } else {
+                            rgb(0x2ea043)
+                        })
+                    })
                     .cursor_pointer()
                     .text_size(px(11.5))
                     .text_color(rgb(0xffffff))
@@ -56,9 +71,16 @@ impl Workspace {
                     .child(if is_running_query {
                         div().child("⏹").into_any_element()
                     } else {
-                        img("icons/sql_exec.svg").w(px(13.0)).h(px(13.0)).into_any_element()
+                        img("icons/sql_exec.svg")
+                            .w(px(13.0))
+                            .h(px(13.0))
+                            .into_any_element()
                     })
-                    .child(if is_running_query { "Cancel" } else { "Execute (⌘↵)" }),
+                    .child(if is_running_query {
+                        "Cancel"
+                    } else {
+                        "Execute (⌘↵)"
+                    }),
             )
             .child(
                 div()
@@ -89,12 +111,18 @@ impl Workspace {
             .border_b_1()
             .border_color(theme.border)
             .cursor_text()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                this.focus_script_editor(true);
-                window.focus(&this.focus_handle);
-                cx.notify();
-            }))
-            .child(tab.editor.render_editor(editor_focused, caret_visible, pick));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.focus_script_editor(true);
+                    window.focus(&this.focus_handle);
+                    cx.notify();
+                }),
+            )
+            .child(
+                tab.editor
+                    .render_editor(editor_focused, caret_visible, pick),
+            );
 
         let last_error = tab.last_error.clone();
         let no_result_set = tab.grid.pager.as_ref().is_some_and(|p| p.num_cols() == 0);
@@ -124,7 +152,9 @@ impl Workspace {
                 cx.notify();
             }));
         result = if no_result_set {
-            let detail = elapsed.map(|e| format!(" ({:.3}s)", e.as_secs_f64())).unwrap_or_default();
+            let detail = elapsed
+                .map(|e| format!(" ({:.3}s)", e.as_secs_f64()))
+                .unwrap_or_default();
             result.child(
                 div()
                     .flex()

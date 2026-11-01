@@ -7,10 +7,17 @@ impl Workspace {
             return div().into_any_element();
         }
         let theme = &self.theme;
-        let accepts_ca = !self.selected_driver_kind.uses_odbc() || self.selected_driver_kind == DbDriverKind::Db2;
-        div().flex().flex_col().gap_2()
+        let accepts_ca = !self.selected_driver_kind.uses_odbc()
+            || self.selected_driver_kind == DbDriverKind::Db2;
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
             .child(
-                div().id("toggle-tls").cursor_pointer().text_size(px(12.0))
+                div()
+                    .id("toggle-tls")
+                    .cursor_pointer()
+                    .text_size(px(12.0))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.form_tls_enabled = !this.form_tls_enabled;
                         this.test_result = None;
@@ -19,33 +26,66 @@ impl Workspace {
                         }
                         cx.notify();
                     }))
-                    .child(if self.form_tls_enabled { "☑ TLS — verify certificate and hostname (TCP)" } else { "☐ TLS — verify certificate and hostname (TCP)" })
+                    .child(if self.form_tls_enabled {
+                        "☑ TLS — verify certificate and hostname (TCP)"
+                    } else {
+                        "☐ TLS — verify certificate and hostname (TCP)"
+                    }),
             )
-            .when(self.form_tls_enabled && !accepts_ca, |tls| tls.child(
-                div().text_size(px(11.0)).text_color(theme.text_secondary).child("Uses the system/vendor certificate trust store.")
-            ))
-            .when(self.form_tls_enabled && accepts_ca, |tls| tls.child(
-                div().flex().flex_col().gap_1()
-                    .child(div().text_size(px(11.0)).text_color(theme.text_secondary).child("Root CA certificate (optional; system trust when empty)"))
-                    .child(
-                        div().id("tls-ca-path").px_3().py_2().rounded_md()
-                            .bg(theme.bg_app).border_1()
-                            .border_color(if self.active_field == Some(FormField::TlsCa) { theme.border_focused } else { theme.border })
-                            .text_size(px(12.0)).cursor_text()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.active_field = Some(FormField::TlsCa);
-                                this.field_cursor = usize::MAX;
-                                this.field_anchor = None;
-                                cx.notify();
-                            }))
-                            .child(render_field_content(
-                                &self.form_tls_ca_cert, "/path/to/ca.pem or ca.der",
-                                self.active_field == Some(FormField::TlsCa),
-                                self.field_anchor, self.field_cursor, self.cursor_visible,
-                                theme, &self.field_caret_pick(FormField::TlsCa, cx),
-                            ))
-                    )
-            ))
+            .when(self.form_tls_enabled && !accepts_ca, |tls| {
+                tls.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_secondary)
+                        .child("Uses the system/vendor certificate trust store."),
+                )
+            })
+            .when(self.form_tls_enabled && accepts_ca, |tls| {
+                tls.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme.text_secondary)
+                                .child("Root CA certificate (optional; system trust when empty)"),
+                        )
+                        .child(
+                            div()
+                                .id("tls-ca-path")
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .bg(theme.bg_app)
+                                .border_1()
+                                .border_color(if self.active_field == Some(FormField::TlsCa) {
+                                    theme.border_focused
+                                } else {
+                                    theme.border
+                                })
+                                .text_size(px(12.0))
+                                .cursor_text()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.active_field = Some(FormField::TlsCa);
+                                    this.field_cursor = usize::MAX;
+                                    this.field_anchor = None;
+                                    cx.notify();
+                                }))
+                                .child(render_field_content(
+                                    &self.form_tls_ca_cert,
+                                    "/path/to/ca.pem or ca.der",
+                                    self.active_field == Some(FormField::TlsCa),
+                                    self.field_anchor,
+                                    self.field_cursor,
+                                    self.cursor_visible,
+                                    theme,
+                                    &self.field_caret_pick(FormField::TlsCa, cx),
+                                )),
+                        ),
+                )
+            })
             .into_any_element()
     }
 
@@ -62,23 +102,47 @@ impl Workspace {
             ("SQLite", "icons/sqlite.png", DbDriverKind::Sqlite),
         ] {
             let selected = kind == self.selected_driver_kind;
-            let tile = div().id(label).flex().items_center().gap_2()
-                .w(px(150.0)).px_3().py_2().rounded_md().border_1()
-                .bg(if selected { theme.bg_surface_selected } else { theme.bg_app })
-                .border_color(if selected { theme.text_accent } else { theme.border })
+            let tile = div()
+                .id(label)
+                .flex()
+                .items_center()
+                .gap_2()
+                .w(px(150.0))
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .border_1()
+                .bg(if selected {
+                    theme.bg_surface_selected
+                } else {
+                    theme.bg_app
+                })
+                .border_color(if selected {
+                    theme.text_accent
+                } else {
+                    theme.border
+                })
                 .text_color(theme.text_primary)
                 .child(img(icon).w(px(24.0)).h(px(24.0)))
                 .child(
-                    div().flex().flex_col().gap_0p5().text_size(px(12.0))
-                        .child(label)
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .text_size(px(12.0))
+                        .child(label),
                 );
-            let tile = tile.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+            let tile = tile
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
                     match kind {
                         DbDriverKind::Postgres => this.select_preset_postgres(),
                         DbDriverKind::MySql => this.select_preset_mysql(),
                         DbDriverKind::MariaDb => this.select_preset_mariadb(),
                         DbDriverKind::Sqlite => this.select_preset_sqlite(),
-                        DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => this.select_preset_odbc(kind),
+                        DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => {
+                            this.select_preset_odbc(kind)
+                        }
                     }
                     cx.notify();
                 }));
@@ -88,7 +152,10 @@ impl Workspace {
     }
 
     /// Modal dialog for creating, editing and testing a database connection
-    pub(super) fn render_connection_dialog(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_connection_dialog(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let is_sqlite = self.selected_driver_kind == DbDriverKind::Sqlite;
@@ -100,7 +167,7 @@ impl Workspace {
         let is_user_active = self.active_field == Some(FormField::User);
         let is_pass_active = self.active_field == Some(FormField::Password);
 
-        let modal_overlay = div()
+        div()
             .absolute()
             .inset_0()
             .bg(rgba(0x00000088))
@@ -581,9 +648,6 @@ impl Workspace {
                                     )
                             )
                     )
-            );
-
-
-        modal_overlay
+            )
     }
 }

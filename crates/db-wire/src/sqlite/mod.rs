@@ -1,14 +1,14 @@
-use std::sync::Arc;
-use std::time::Instant;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use mem_engine::{ColumnMeta, DataType};
 use parking_lot::Mutex;
-use rusqlite::types::ValueRef;
 use rusqlite::Connection;
+use rusqlite::types::ValueRef;
+use std::sync::Arc;
+use std::time::Instant;
 
-use crate::stream::{report_error, RowSink};
-use crate::traits::{row_count_error, ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
+use crate::stream::{RowSink, report_error};
+use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary, row_count_error};
 
 pub struct SqliteDriver {
     pub config: ConnectionConfig,
@@ -35,12 +35,18 @@ impl SqliteDriver {
     }
 
     pub fn new_memory() -> Self {
-        let mut config = ConnectionConfig::default();
-        config.database = ":memory:".to_string();
+        let config = ConnectionConfig {
+            database: ":memory:".to_string(),
+            ..ConnectionConfig::default()
+        };
         Self::new(config).expect("Failed to initialize in-memory SQLite database")
     }
 
-    fn stream_blocking(conn: &Mutex<Connection>, sql: &str, event_tx: &flume::Sender<StreamEvent>) -> Result<()> {
+    fn stream_blocking(
+        conn: &Mutex<Connection>,
+        sql: &str,
+        event_tx: &flume::Sender<StreamEvent>,
+    ) -> Result<()> {
         let start_time = Instant::now();
         let conn = conn.lock();
         let mut stmt = conn
@@ -50,7 +56,14 @@ impl SqliteDriver {
         let columns: Vec<ColumnMeta> = stmt
             .columns()
             .iter()
-            .map(|c| ColumnMeta::new(c.name(), c.decl_type().map(sqlite_decl_data_type).unwrap_or(DataType::Text)))
+            .map(|c| {
+                ColumnMeta::new(
+                    c.name(),
+                    c.decl_type()
+                        .map(sqlite_decl_data_type)
+                        .unwrap_or(DataType::Text),
+                )
+            })
             .collect();
         let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
 
@@ -58,9 +71,14 @@ impl SqliteDriver {
             .query([])
             .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?;
 
-        while let Some(row) = rows.next().map_err(|e| sink.fail(format!("SQLite query error: {e}")))? {
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?
+        {
             for i in 0..sink.cells_mut().len() {
-                let value = row.get_ref(i).map_err(|e| sink.fail(format!("SQLite read error: {e}")))?;
+                let value = row
+                    .get_ref(i)
+                    .map_err(|e| sink.fail(format!("SQLite read error: {e}")))?;
                 sink.cells_mut()[i] = match value {
                     ValueRef::Null => None,
                     ValueRef::Integer(v) => Some(v.to_string().into_bytes()),
@@ -97,7 +115,11 @@ impl DatabaseDriver for SqliteDriver {
         Ok(())
     }
 
-    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()> {
+    async fn execute_streaming(
+        &self,
+        sql: &str,
+        event_tx: flume::Sender<StreamEvent>,
+    ) -> Result<()> {
         let conn = Arc::clone(&self.conn);
         let sql = sql.to_string();
         // rusqlite is synchronous; keep it off the async workers so cancel_active_query can interrupt it

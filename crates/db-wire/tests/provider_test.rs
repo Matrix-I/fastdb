@@ -32,7 +32,7 @@ fn config(kind: DbDriverKind, prefix: &str) -> Option<ConnectionConfig> {
 async fn check_writes(driver: &dyn DatabaseDriver, kind: DbDriverKind) -> anyhow::Result<()> {
     let table = format!(
         "\"FASTDB_T_{}\"",
-        &uuid::Uuid::new_v4().simple().to_string()[..12].to_uppercase()
+        uuid::Uuid::new_v4().simple().to_string()[..12].to_uppercase()
     );
     let text_type = if kind == DbDriverKind::Oracle {
         "VARCHAR2(40)"

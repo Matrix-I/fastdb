@@ -1,4 +1,4 @@
-use gpui::{hsla, Rgba};
+use gpui::{Rgba, hsla};
 
 #[derive(Debug, Clone)]
 pub struct Theme {

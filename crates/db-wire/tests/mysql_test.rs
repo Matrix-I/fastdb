@@ -1,9 +1,9 @@
 //! Integration tests against a live MySQL server.
 //! Set FASTDB_TEST_MYSQL_PORT (and optionally FASTDB_TEST_MYSQL_HOST / _USER / _PASSWORD / _DATABASE).
 
+use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, MySqlDriver, StreamEvent};
 use std::sync::Arc;
 use std::time::Duration;
-use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, MySqlDriver, StreamEvent};
 
 fn test_config() -> Option<ConnectionConfig> {
     let Ok(port) = std::env::var("FASTDB_TEST_MYSQL_PORT") else {
@@ -14,7 +14,9 @@ fn test_config() -> Option<ConnectionConfig> {
         );
         return None;
     };
-    let port = port.parse().expect("FASTDB_TEST_MYSQL_PORT must be a port number");
+    let port = port
+        .parse()
+        .expect("FASTDB_TEST_MYSQL_PORT must be a port number");
     let env = |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_string());
     Some(ConnectionConfig {
         driver: DbDriverKind::MySql,
@@ -29,7 +31,9 @@ fn test_config() -> Option<ConnectionConfig> {
 }
 
 fn cell_text(pager: &db_wire::QueryResultPager, row: u64, col: usize) -> Option<String> {
-    pager.get_cell(row, col).map(|b| String::from_utf8(b).unwrap())
+    pager
+        .get_cell(row, col)
+        .map(|b| String::from_utf8(b).unwrap())
 }
 
 #[test]
@@ -61,13 +65,21 @@ fn test_mysql_streams_rows_and_survives_short_lived_caller_runtime() {
     let StreamEvent::SchemaReady(pager) = &events[0] else {
         panic!("first event must be SchemaReady, got {:?}", events[0]);
     };
-    assert!(matches!(events.last(), Some(StreamEvent::Completed { total_rows: 500, .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::Completed {
+            total_rows: 500,
+            ..
+        })
+    ));
     assert_eq!(cell_text(pager, 499, 0).as_deref(), Some("500"));
     assert_eq!(cell_text(pager, 0, 1), None);
     assert_eq!(cell_text(pager, 1, 2).as_deref(), Some("3.00"));
 
     // Connections returned to the pool after the temporary runtime died must still work
-    let (pager, rows, _) = db_wire::get_runtime().block_on(driver.execute_query("SELECT 1")).unwrap();
+    let (pager, rows, _) = db_wire::get_runtime()
+        .block_on(driver.execute_query("SELECT 1"))
+        .unwrap();
     assert_eq!(rows, 1);
     assert_eq!(cell_text(&pager, 0, 0).as_deref(), Some("1"));
 }

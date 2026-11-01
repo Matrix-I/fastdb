@@ -1,18 +1,18 @@
 pub mod binary_decoder;
 
-use std::sync::Arc;
-use std::time::Instant;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
 use mem_engine::ColumnMeta;
 use parking_lot::Mutex;
-use platform_hal::socket::{detect_local_unix_socket, DbKind};
+use platform_hal::socket::{DbKind, detect_local_unix_socket};
+use std::sync::Arc;
+use std::time::Instant;
 use tokio_postgres::{CancelToken, Client, NoTls};
 use tracing::{debug, info, warn};
 
-use crate::stream::{report_error, RowSink};
-use crate::traits::{row_count_error, ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary};
+use crate::stream::{RowSink, report_error};
+use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary, row_count_error};
 use binary_decoder::{decode_pg_cell, pg_type_to_data_type};
 
 pub struct PostgresDriver {
@@ -82,7 +82,8 @@ fn tls_connector(config: &ConnectionConfig) -> Result<postgres_native_tls::MakeT
     let mut builder = native_tls::TlsConnector::builder();
     builder.min_protocol_version(Some(native_tls::Protocol::Tlsv12));
     if let Some(path) = &config.tls_ca_cert {
-        let bytes = std::fs::read(path).with_context(|| format!("Failed to read TLS CA certificate: {path}"))?;
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("Failed to read TLS CA certificate: {path}"))?;
         let cert = native_tls::Certificate::from_pem(&bytes)
             .or_else(|_| native_tls::Certificate::from_der(&bytes))
             .with_context(|| format!("Invalid TLS CA certificate: {path}"))?;
@@ -102,14 +103,15 @@ impl PostgresDriver {
 
     async fn get_or_connect(&self) -> Result<Arc<Client>> {
         let mut guard = self.client.lock().await;
-        if let Some(ref client) = *guard {
-            if !client.is_closed() {
-                return Ok(Arc::clone(client));
-            }
+        if let Some(ref client) = *guard
+            && !client.is_closed()
+        {
+            return Ok(Arc::clone(client));
         }
 
         // Connect on the shared runtime so the socket outlives the caller's runtime
-        let client = Arc::new(crate::run_on_shared_runtime(Self::connect_raw(self.config.clone())).await?);
+        let client =
+            Arc::new(crate::run_on_shared_runtime(Self::connect_raw(self.config.clone())).await?);
         *self.cancel_token.lock() = Some(client.cancel_token());
         *guard = Some(Arc::clone(&client));
         Ok(client)
@@ -132,18 +134,31 @@ impl PostgresDriver {
         };
 
         if let Some(socket_path) = unix_socket {
-            info!("Connecting to PostgreSQL via Unix Domain Socket: {}", socket_path.display());
+            info!(
+                "Connecting to PostgreSQL via Unix Domain Socket: {}",
+                socket_path.display()
+            );
             pg_config.host_path(socket_path);
         } else {
-            info!("Connecting to PostgreSQL via TCP {}:{}", config.host, config.port);
+            info!(
+                "Connecting to PostgreSQL via TCP {}:{}",
+                config.host, config.port
+            );
             pg_config.host(&config.host);
             pg_config.port(config.port);
         }
 
         let client = if config.tls_enabled {
             pg_config.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let (client, connection) = pg_config.connect(tls_connector(&config)?).await
-                .with_context(|| format!("Failed to connect to PostgreSQL with TLS ({}:{})", config.host, config.port))?;
+            let (client, connection) = pg_config
+                .connect(tls_connector(&config)?)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to PostgreSQL with TLS ({}:{})",
+                        config.host, config.port
+                    )
+                })?;
             crate::get_runtime().spawn(async move {
                 if let Err(e) = connection.await {
                     warn!("PostgreSQL connection error: {}", e);
@@ -152,8 +167,12 @@ impl PostgresDriver {
             client
         } else {
             pg_config.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            let (client, connection) = pg_config.connect(NoTls).await
-                .with_context(|| format!("Failed to connect to PostgreSQL ({}:{})", config.host, config.port))?;
+            let (client, connection) = pg_config.connect(NoTls).await.with_context(|| {
+                format!(
+                    "Failed to connect to PostgreSQL ({}:{})",
+                    config.host, config.port
+                )
+            })?;
             crate::get_runtime().spawn(async move {
                 if let Err(e) = connection.await {
                     warn!("PostgreSQL connection error: {}", e);
@@ -174,7 +193,11 @@ impl DatabaseDriver for PostgresDriver {
         Ok(())
     }
 
-    async fn execute_streaming(&self, sql: &str, event_tx: flume::Sender<StreamEvent>) -> Result<()> {
+    async fn execute_streaming(
+        &self,
+        sql: &str,
+        event_tx: flume::Sender<StreamEvent>,
+    ) -> Result<()> {
         let start_time = Instant::now();
         let client = self
             .get_or_connect()
@@ -184,10 +207,12 @@ impl DatabaseDriver for PostgresDriver {
         // Update cancel token for this connection
         *self.cancel_token.lock() = Some(client.cancel_token());
 
-        let statement = client
-            .prepare(sql)
-            .await
-            .map_err(|e| report_error(&event_tx, format!("SQL Preparation Error: {}", pg_error_message(&e))))?;
+        let statement = client.prepare(sql).await.map_err(|e| {
+            report_error(
+                &event_tx,
+                format!("SQL Preparation Error: {}", pg_error_message(&e)),
+            )
+        })?;
 
         let columns: Vec<ColumnMeta> = statement
             .columns()
@@ -203,7 +228,8 @@ impl DatabaseDriver for PostgresDriver {
         futures::pin_mut!(row_stream);
 
         while let Some(row_res) = row_stream.next().await {
-            let row = row_res.map_err(|e| sink.fail(format!("Row stream error: {}", pg_error_message(&e))))?;
+            let row = row_res
+                .map_err(|e| sink.fail(format!("Row stream error: {}", pg_error_message(&e))))?;
             for (col_idx, cell) in sink.cells_mut().iter_mut().enumerate() {
                 *cell = decode_pg_cell(&row, col_idx);
             }
@@ -211,13 +237,20 @@ impl DatabaseDriver for PostgresDriver {
         }
 
         let total_rows = sink.finish();
-        debug!("Postgres query streaming completed: {} rows in {}ms", total_rows, start_time.elapsed().as_millis());
+        debug!(
+            "Postgres query streaming completed: {} rows in {}ms",
+            total_rows,
+            start_time.elapsed().as_millis()
+        );
         Ok(())
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
         let client = self.get_or_connect().await?;
-        client.batch_execute("BEGIN").await.map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+        client
+            .batch_execute("BEGIN")
+            .await
+            .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
         for sql in statements {
             let outcome = match client.execute(sql.as_str(), &[]).await {
                 Ok(1) => Ok(()),
@@ -231,7 +264,10 @@ impl DatabaseDriver for PostgresDriver {
                 return Err(e);
             }
         }
-        client.batch_execute("COMMIT").await.map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+        client
+            .batch_execute("COMMIT")
+            .await
+            .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
         Ok(statements.len() as u64)
     }
 
@@ -269,7 +305,8 @@ impl DatabaseDriver for PostgresDriver {
                     schema: r.get(0),
                     name: r.get(1),
                     table_type: r.get(2),
-                    estimated_rows: est_rows.and_then(|x| if x >= 0 { Some(x as u64) } else { None }),
+                    estimated_rows: est_rows
+                        .and_then(|x| if x >= 0 { Some(x as u64) } else { None }),
                 }
             })
             .collect();
@@ -325,7 +362,8 @@ impl DatabaseDriver for PostgresDriver {
         "#;
 
         let rows = client.query(sql, &[]).await?;
-        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> = std::collections::BTreeMap::new();
+        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> =
+            std::collections::BTreeMap::new();
         for r in rows {
             let schema: String = r.get(0);
             let table: String = r.get(1);
@@ -335,7 +373,8 @@ impl DatabaseDriver for PostgresDriver {
             let is_pk: i32 = r.get(5);
             let default_val: Option<String> = r.get(6);
             let collation: Option<String> = r.get(7);
-            let col = info_schema_column(name, &dtype_str, &is_null_str, default_val, collation).with_pk(is_pk > 0);
+            let col = info_schema_column(name, &dtype_str, &is_null_str, default_val, collation)
+                .with_pk(is_pk > 0);
             map.entry((schema, table)).or_default().push(col);
         }
 
@@ -351,7 +390,10 @@ impl DatabaseDriver for PostgresDriver {
             ORDER BY table_schema, table_name, constraint_name;
         "#;
         let rows = client.query(sql, &[]).await?;
-        Ok(rows.into_iter().map(|r| (r.get(0), r.get(1), r.get(2), r.get(3))).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
+            .collect())
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
@@ -363,7 +405,10 @@ impl DatabaseDriver for PostgresDriver {
             ORDER BY schemaname, tablename, indexname;
         "#;
         let rows = client.query(sql, &[]).await?;
-        Ok(rows.into_iter().map(|r| (r.get(0), r.get(1), r.get(2))).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get(0), r.get(1), r.get(2)))
+            .collect())
     }
 }
 
@@ -387,7 +432,10 @@ mod tests {
         assert_eq!(col.default_val.as_deref(), Some("''::character varying"));
         assert_eq!(col.collation.as_deref(), Some("C"));
 
-        assert_eq!(info_schema_data_type("timestamp with time zone"), DataType::TimestampTz);
+        assert_eq!(
+            info_schema_data_type("timestamp with time zone"),
+            DataType::TimestampTz
+        );
         assert_eq!(info_schema_data_type("BIGINT"), DataType::Int8);
         assert_eq!(info_schema_data_type("tsvector"), DataType::Text);
     }

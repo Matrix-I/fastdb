@@ -14,21 +14,44 @@ pub(super) fn render_field_content(
     theme: &Theme,
     on_pick: &CaretPick,
 ) -> Div {
-    let row = div().flex().items_center().h(px(18.0)).w_full().overflow_hidden();
+    let row = div()
+        .flex()
+        .items_center()
+        .h(px(18.0))
+        .w_full()
+        .overflow_hidden();
 
     if value.is_empty() {
-        let placeholder_el = div().text_color(theme.text_muted).child(placeholder.to_string());
+        let placeholder_el = div()
+            .text_color(theme.text_muted)
+            .child(placeholder.to_string());
         if is_active {
-            row.children(render_caret_text("", Some(0), cursor_visible, None, on_pick))
-                .child(placeholder_el.pl_1())
+            row.children(render_caret_text(
+                "",
+                Some(0),
+                cursor_visible,
+                None,
+                on_pick,
+            ))
+            .child(placeholder_el.pl_1())
         } else {
             row.child(placeholder_el)
         }
     } else {
-        let selection = if is_active { selection_range(anchor, caret, value.chars().count()) } else { None };
+        let selection = if is_active {
+            selection_range(anchor, caret, value.chars().count())
+        } else {
+            None
+        };
         let caret = is_active.then_some(caret);
         row.text_color(theme.text_primary)
-            .children(render_caret_text(value, caret, cursor_visible, selection, on_pick))
+            .children(render_caret_text(
+                value,
+                caret,
+                cursor_visible,
+                selection,
+                on_pick,
+            ))
     }
 }
 
@@ -46,27 +69,17 @@ pub(super) fn dbeaver_driver_icon(driver: &str, is_connected: bool) -> Div {
         .w(px(16.0))
         .h(px(16.0))
         .flex_shrink_0()
-        .child(
-            img(icon_path)
-                .w(px(16.0))
-                .h(px(16.0))
-        )
-        .child(
-            if is_connected {
-                div()
-                    .absolute()
-                    .bottom(px(-1.0))
-                    .left(px(-1.0))
-                    .w(px(7.0))
-                    .h(px(8.0))
-                    .child(
-                        img("icons/success_ovr.png")
-                            .w(px(7.0))
-                            .h(px(8.0))
-                    )
-                    .into_any_element()
-            } else {
-                div().into_any_element()
-            }
-        )
+        .child(img(icon_path).w(px(16.0)).h(px(16.0)))
+        .child(if is_connected {
+            div()
+                .absolute()
+                .bottom(px(-1.0))
+                .left(px(-1.0))
+                .w(px(7.0))
+                .h(px(8.0))
+                .child(img("icons/success_ovr.png").w(px(7.0)).h(px(8.0)))
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        })
 }

@@ -2,18 +2,18 @@ use super::*;
 
 impl Workspace {
     /// Data sub-tab: result grid or text view, with the optional record side panel
-    pub(super) fn render_data_panel(&mut self, active_tab_idx: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_data_panel(
+        &mut self,
+        active_tab_idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
         let view_mode = tab.view_mode;
         let show_right_panels = self.show_right_panels;
-        let mut data_row = div()
-            .flex()
-            .flex_row()
-            .flex_1()
-            .w_full()
-            .overflow_hidden();
+        let mut data_row = div().flex().flex_row().flex_1().w_full().overflow_hidden();
 
         // Left vertical toolstrip (Grid / Text)
         data_row = data_row.child(
@@ -39,9 +39,17 @@ impl Workspace {
                         .w(px(22.0))
                         .py_2()
                         .rounded_xs()
-                        .bg(if is_grid { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                        .bg(if is_grid {
+                            theme.bg_surface_selected
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0).into()
+                        })
                         .border_l_2()
-                        .border_color(if is_grid { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                        .border_color(if is_grid {
+                            rgb(0x388bfd)
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0).into()
+                        })
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
@@ -62,9 +70,17 @@ impl Workspace {
                         .w(px(22.0))
                         .py_2()
                         .rounded_xs()
-                        .bg(if is_text { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                        .bg(if is_text {
+                            theme.bg_surface_selected
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0).into()
+                        })
                         .border_l_2()
-                        .border_color(if is_text { rgb(0x388bfd) } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
+                        .border_color(if is_text {
+                            rgb(0x388bfd)
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0).into()
+                        })
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
@@ -73,7 +89,7 @@ impl Workspace {
                             }
                         }))
                         .child(img("icons/sql_script.svg").w(px(14.0)).h(px(14.0)))
-                })
+                }),
         );
 
         // Center Grid / Text
@@ -261,12 +277,54 @@ impl Workspace {
                     this.show_right_panels = !this.show_right_panels;
                     cx.notify();
                 }))
-                .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("P"))
-                .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("A"))
-                .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("N"))
-                .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("E"))
-                .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("L"))
-                .child(div().text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(theme.text_muted).hover(|s| s.text_color(theme.text_primary)).child("S"))
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.text_color(theme.text_primary))
+                        .child("P"),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.text_color(theme.text_primary))
+                        .child("A"),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.text_color(theme.text_primary))
+                        .child("N"),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.text_color(theme.text_primary))
+                        .child("E"),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.text_color(theme.text_primary))
+                        .child("L"),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.text_color(theme.text_primary))
+                        .child("S"),
+                ),
         );
 
         if show_right_panels {

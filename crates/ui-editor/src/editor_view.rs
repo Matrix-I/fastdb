@@ -1,7 +1,10 @@
+use gpui::*;
+use sql_intel::{
+    CompletionItem, CompletionKind, SchemaCache, SqlParser, expects_table_alias, get_completions,
+    pick_table_alias,
+};
 use std::rc::Rc;
 use std::sync::Arc;
-use gpui::*;
-use sql_intel::{expects_table_alias, get_completions, pick_table_alias, CompletionItem, CompletionKind, SchemaCache, SqlParser};
 use ui_core::theme::Theme;
 
 use crate::buffer::RopeyBuffer;
@@ -57,12 +60,12 @@ impl SqlEditorView {
         let text = self.buffer.text();
         let offset = self.buffer.cursor_offset();
 
-        if let Some(ref mut parser) = self.parser {
-            if let Some((_, _, stmt)) = parser.statement_at_offset(&text, offset) {
-                let trimmed = stmt.trim();
-                if !trimmed.trim_matches(';').trim().is_empty() {
-                    return trimmed.to_string();
-                }
+        if let Some(ref mut parser) = self.parser
+            && let Some((_, _, stmt)) = parser.statement_at_offset(&text, offset)
+        {
+            let trimmed = stmt.trim();
+            if !trimmed.trim_matches(';').trim().is_empty() {
+                return trimmed.to_string();
             }
         }
 
@@ -254,7 +257,10 @@ impl SqlEditorView {
             "space" => self.insert_text(" "),
             "escape" => self.hide_completions(),
             _ => {
-                let typed = keystroke.key_char.as_deref().or((key.chars().count() == 1).then_some(key));
+                let typed = keystroke
+                    .key_char
+                    .as_deref()
+                    .or((key.chars().count() == 1).then_some(key));
                 match typed {
                     Some(s) if s.chars().count() == 1 => self.insert_text(s),
                     _ => return false,
@@ -264,7 +270,12 @@ impl SqlEditorView {
         true
     }
 
-    pub fn render_editor(&mut self, focused: bool, caret_visible: bool, on_pick: EditorPick) -> impl IntoElement + use<> {
+    pub fn render_editor(
+        &mut self,
+        focused: bool,
+        caret_visible: bool,
+        on_pick: EditorPick,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
         if std::mem::take(&mut self.caret_moved) {
@@ -284,7 +295,14 @@ impl SqlEditorView {
             let content = self.buffer.line(l).unwrap_or_default();
             let content = content.trim_end_matches(['\n', '\r']);
             let caret_col = (focused && l == cursor_line).then_some(cursor_col);
-            lines = lines.child(render_line(l, content, caret_col, caret_visible, &on_pick, &theme));
+            lines = lines.child(render_line(
+                l,
+                content,
+                caret_col,
+                caret_visible,
+                &on_pick,
+                &theme,
+            ));
         }
 
         let mut root = div()
@@ -308,7 +326,12 @@ impl SqlEditorView {
         root
     }
 
-    fn render_completion_popup(&self, top: f32, left: f32, theme: &Theme) -> impl IntoElement + use<> {
+    fn render_completion_popup(
+        &self,
+        top: f32,
+        left: f32,
+        theme: &Theme,
+    ) -> impl IntoElement + use<> {
         let mut popup = div()
             .occlude()
             .w(px(280.0))
@@ -322,9 +345,18 @@ impl SqlEditorView {
             .flex_col()
             .gap_1();
 
-        for (idx, item) in self.completion_items.iter().take(MAX_VISIBLE_COMPLETIONS).enumerate() {
+        for (idx, item) in self
+            .completion_items
+            .iter()
+            .take(MAX_VISIBLE_COMPLETIONS)
+            .enumerate()
+        {
             let is_sel = idx == self.selected_completion;
-            let bg = if is_sel { theme.bg_surface_selected } else { theme.bg_surface };
+            let bg = if is_sel {
+                theme.bg_surface_selected
+            } else {
+                theme.bg_surface
+            };
 
             let icon_path = match item.kind {
                 CompletionKind::Keyword => "icons/sql.svg",
@@ -351,16 +383,20 @@ impl SqlEditorView {
                             .child(img(icon_path).w(px(14.0)).h(px(14.0)))
                             .child(
                                 div()
-                                    .font_weight(if is_sel { FontWeight::BOLD } else { FontWeight::NORMAL })
-                                    .child(item.label.clone())
-                            )
+                                    .font_weight(if is_sel {
+                                        FontWeight::BOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .child(item.label.clone()),
+                            ),
                     )
                     .child(
                         div()
                             .text_size(px(10.0))
                             .text_color(theme.text_muted)
-                            .child(item.detail.clone())
-                    )
+                            .child(item.detail.clone()),
+                    ),
             );
         }
         // Painted after everything else (like the filter bar's list), so the rest of the
@@ -377,7 +413,9 @@ impl SqlEditorView {
 /// anything but a lowercase letter or `_` followed by lowercase letters, digits and `_`
 fn needs_quotes(name: &str) -> bool {
     let mut chars = name.chars();
-    let starts_plain = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c == '_');
+    let starts_plain = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_');
     !(starts_plain && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
 }
 
@@ -385,14 +423,19 @@ fn needs_quotes(name: &str) -> bool {
 fn word_color(word: &str, theme: &Theme) -> Hsla {
     let trimmed = word.trim().to_uppercase();
     match trimmed.as_str() {
-        "SELECT" | "FROM" | "WHERE" | "JOIN" | "INNER" | "LEFT" | "RIGHT"
-        | "ON" | "GROUP" | "BY" | "ORDER" | "LIMIT" | "OFFSET" | "INSERT"
-        | "INTO" | "VALUES" | "UPDATE" | "SET" | "DELETE" | "AS" | "AND"
-        | "OR" | "NOT" | "IN" | "IS" | "NULL" | "WITH" | "CREATE" | "TABLE"
-        | "DROP" | "ALTER" | "HAVING" | "DISTINCT" | "UNION" | "CASE" | "WHEN"
+        "SELECT" | "FROM" | "WHERE" | "JOIN" | "INNER" | "LEFT" | "RIGHT" | "ON" | "GROUP"
+        | "BY" | "ORDER" | "LIMIT" | "OFFSET" | "INSERT" | "INTO" | "VALUES" | "UPDATE" | "SET"
+        | "DELETE" | "AS" | "AND" | "OR" | "NOT" | "IN" | "IS" | "NULL" | "WITH" | "CREATE"
+        | "TABLE" | "DROP" | "ALTER" | "HAVING" | "DISTINCT" | "UNION" | "CASE" | "WHEN"
         | "THEN" | "ELSE" | "END" => theme.text_accent.into(),
         _ if word.starts_with('\'') || word.ends_with('\'') => theme.text_success.into(),
-        _ if trimmed.trim_end_matches([',', ';', ')']).parse::<f64>().is_ok() => theme.text_warning.into(),
+        _ if trimmed
+            .trim_end_matches([',', ';', ')'])
+            .parse::<f64>()
+            .is_ok() =>
+        {
+            theme.text_warning.into()
+        }
         _ if word.trim_start().starts_with("--") => theme.text_muted.into(),
         _ => theme.text_primary.into(),
     }
@@ -412,7 +455,11 @@ fn caret_bar(visible: bool) -> AnyElement {
                 .w(px(1.5))
                 .h_full()
                 .rounded_xs()
-                .bg(if visible { rgb(0x58a6ff) } else { hsla(0.0, 0.0, 0.0, 0.0).into() }),
+                .bg(if visible {
+                    rgb(0x58a6ff)
+                } else {
+                    hsla(0.0, 0.0, 0.0, 0.0).into()
+                }),
         )
         .into_any_element()
 }
@@ -437,7 +484,13 @@ fn render_line(
         })
     };
 
-    let mut code = div().flex().flex_1().h_full().items_center().pl_3().overflow_hidden();
+    let mut code = div()
+        .flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .pl_3()
+        .overflow_hidden();
     if caret_col.is_some() {
         code = code.bg(theme.bg_surface_hover);
     }
@@ -447,7 +500,11 @@ fn render_line(
     let mut in_comment = false;
     for word in content.split_inclusive(' ') {
         in_comment = in_comment || word.trim_start().starts_with("--");
-        let color: Hsla = if in_comment { theme.text_muted.into() } else { word_color(word, theme) };
+        let color: Hsla = if in_comment {
+            theme.text_muted.into()
+        } else {
+            word_color(word, theme)
+        };
         for ch in word.chars() {
             if caret_col == Some(col) {
                 code = code.child(caret_bar(caret_visible));
@@ -471,10 +528,13 @@ fn render_line(
     }
     // Clicking right of the text puts the caret at the end of the line
     let pick = on_pick.clone();
-    code = code.child(div().flex_1().h_full().on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
-        cx.stop_propagation();
-        pick(line, usize::MAX, window, cx);
-    }));
+    code = code.child(div().flex_1().h_full().on_mouse_down(
+        MouseButton::Left,
+        move |_: &MouseDownEvent, window, cx| {
+            cx.stop_propagation();
+            pick(line, usize::MAX, window, cx);
+        },
+    ));
 
     div()
         .flex()
@@ -494,7 +554,11 @@ fn render_line(
                 .border_r_1()
                 .border_color(theme.border)
                 .text_size(px(12.0))
-                .text_color(if caret_col.is_some() { theme.text_accent } else { theme.text_muted })
+                .text_color(if caret_col.is_some() {
+                    theme.text_accent
+                } else {
+                    theme.text_muted
+                })
                 .child(format!("{}", line + 1)),
         )
         .child(code)
@@ -510,34 +574,57 @@ impl Render for SqlEditorView {
 #[cfg(test)]
 mod tests {
     // Not a glob: `super::*` brings in `gpui::test`, which shadows the built-in `#[test]`.
-    use super::{SqlEditorView, MAX_VISIBLE_COMPLETIONS};
+    use super::{MAX_VISIBLE_COMPLETIONS, SqlEditorView};
     use gpui::{Keystroke, Modifiers};
     use sql_intel::SchemaCache;
     use std::sync::Arc;
     use ui_core::theme::Theme;
 
     fn key(key: &str) -> Keystroke {
-        Keystroke { modifiers: Modifiers::default(), key: key.into(), key_char: None }
+        Keystroke {
+            modifiers: Modifiers::default(),
+            key: key.into(),
+            key_char: None,
+        }
     }
 
     fn typed(ch: &str) -> Keystroke {
-        Keystroke { modifiers: Modifiers::default(), key: ch.into(), key_char: Some(ch.into()) }
+        Keystroke {
+            modifiers: Modifiers::default(),
+            key: ch.into(),
+            key_char: Some(ch.into()),
+        }
     }
 
     fn cmd(k: &str) -> Keystroke {
-        Keystroke { modifiers: Modifiers { platform: true, ..Default::default() }, key: k.into(), key_char: None }
+        Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Default::default()
+            },
+            key: k.into(),
+            key_char: None,
+        }
     }
 
     fn editor(text: &str) -> SqlEditorView {
         let cache = SchemaCache::new().unwrap();
-        cache.add_table("public", "customers", "BASE TABLE").unwrap();
-        cache.add_column("public", "customers", "email", "varchar", false).unwrap();
+        cache
+            .add_table("public", "customers", "BASE TABLE")
+            .unwrap();
+        cache
+            .add_column("public", "customers", "email", "varchar", false)
+            .unwrap();
         SqlEditorView::new(text, Theme::dark(), Some(Arc::new(cache)))
     }
 
     fn type_str(ed: &mut SqlEditorView, s: &str) {
         for ch in s.chars() {
-            let k = if ch == ' ' { key("space") } else { typed(&ch.to_string()) };
+            let k = if ch == ' ' {
+                key("space")
+            } else {
+                typed(&ch.to_string())
+            };
             assert!(ed.handle_key(&k));
         }
     }
@@ -547,7 +634,11 @@ mod tests {
         let mut ed = editor("");
         type_str(&mut ed, "SELECT * FROM cust");
         assert!(ed.show_completions);
-        let idx = ed.completion_items.iter().position(|i| i.label == "customers").unwrap();
+        let idx = ed
+            .completion_items
+            .iter()
+            .position(|i| i.label == "customers")
+            .unwrap();
         ed.selected_completion = idx;
         assert!(ed.handle_key(&key("tab")));
         assert_eq!(ed.buffer.text(), "SELECT * FROM customers c");
@@ -569,7 +660,11 @@ mod tests {
         let mut ed = editor("");
         type_str(&mut ed, "SELECT customers.");
         assert!(ed.show_completions);
-        ed.selected_completion = ed.completion_items.iter().position(|i| i.label == "email").unwrap();
+        ed.selected_completion = ed
+            .completion_items
+            .iter()
+            .position(|i| i.label == "email")
+            .unwrap();
         assert!(ed.handle_key(&key("enter")));
         assert_eq!(ed.buffer.text(), "SELECT customers.email");
     }
@@ -612,14 +707,22 @@ mod tests {
 
     fn mixed_case_editor() -> SqlEditorView {
         let cache = SchemaCache::new().unwrap();
-        cache.add_table("public", "apiClient", "BASE TABLE").unwrap();
+        cache
+            .add_table("public", "apiClient", "BASE TABLE")
+            .unwrap();
         cache.add_table("public", "users", "BASE TABLE").unwrap();
-        cache.add_column("public", "apiClient", "clientId", "varchar", false).unwrap();
+        cache
+            .add_column("public", "apiClient", "clientId", "varchar", false)
+            .unwrap();
         SqlEditorView::new("", Theme::dark(), Some(Arc::new(cache)))
     }
 
     fn accept(ed: &mut SqlEditorView, label: &str) {
-        ed.selected_completion = ed.completion_items.iter().position(|i| i.label == label).unwrap();
+        ed.selected_completion = ed
+            .completion_items
+            .iter()
+            .position(|i| i.label == label)
+            .unwrap();
         assert!(ed.handle_key(&key("tab")));
     }
 
@@ -644,11 +747,17 @@ mod tests {
 
         type_str(&mut ed, " JOIN us");
         accept(&mut ed, "users");
-        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\" a JOIN users u");
+        assert_eq!(
+            ed.buffer.text(),
+            "SELECT * FROM \"apiClient\" a JOIN users u"
+        );
 
         type_str(&mut ed, " WHERE a.");
         accept(&mut ed, "clientId");
-        assert_eq!(ed.buffer.text(), "SELECT * FROM \"apiClient\" a JOIN users u WHERE a.\"clientId\"");
+        assert_eq!(
+            ed.buffer.text(),
+            "SELECT * FROM \"apiClient\" a JOIN users u WHERE a.\"clientId\""
+        );
     }
 
     #[test]

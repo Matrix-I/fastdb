@@ -3,9 +3,30 @@
 
 /// Words that end a table reference, so they are never taken for its alias
 const CLAUSE_WORDS: &[&str] = &[
-    "WHERE", "ON", "USING", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "NATURAL",
-    "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "UNION", "EXCEPT", "INTERSECT", "WINDOW", "FOR",
-    "SET", "VALUES", "RETURNING",
+    "WHERE",
+    "ON",
+    "USING",
+    "JOIN",
+    "INNER",
+    "LEFT",
+    "RIGHT",
+    "FULL",
+    "OUTER",
+    "CROSS",
+    "NATURAL",
+    "GROUP",
+    "ORDER",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "UNION",
+    "EXCEPT",
+    "INTERSECT",
+    "WINDOW",
+    "FOR",
+    "SET",
+    "VALUES",
+    "RETURNING",
 ];
 
 /// A name in SQL text: a bare word or a quoted identifier, reduced to its last part
@@ -21,7 +42,10 @@ impl Item {
     /// The keyword this item spells, uppercased, if it is a bare word
     fn bare_upper(&self) -> Option<String> {
         match self {
-            Item::Name { text, quoted: false } => Some(text.to_uppercase()),
+            Item::Name {
+                text,
+                quoted: false,
+            } => Some(text.to_uppercase()),
             _ => None,
         }
     }
@@ -41,15 +65,22 @@ fn items(query: &str) -> Vec<Item> {
     while i < chars.len() {
         let c = chars[i];
         let name = if c == '"' || c == '`' {
-            let close = (i + 1..chars.len()).find(|&j| chars[j] == c).unwrap_or(chars.len());
+            let close = (i + 1..chars.len())
+                .find(|&j| chars[j] == c)
+                .unwrap_or(chars.len());
             let text: String = chars[i + 1..close].iter().collect();
             i = close + 1;
             Some(Item::Name { text, quoted: true })
         } else if is_word_char(c) {
-            let end = (i..chars.len()).find(|&j| !is_word_char(chars[j])).unwrap_or(chars.len());
+            let end = (i..chars.len())
+                .find(|&j| !is_word_char(chars[j]))
+                .unwrap_or(chars.len());
             let text: String = chars[i..end].iter().collect();
             i = end;
-            Some(Item::Name { text, quoted: false })
+            Some(Item::Name {
+                text,
+                quoted: false,
+            })
         } else {
             None
         };
@@ -68,12 +99,16 @@ fn items(query: &str) -> Vec<Item> {
                 after_dot = false;
             }
             '\'' => {
-                i = (i + 1..chars.len()).find(|&j| chars[j] == '\'').unwrap_or(chars.len());
+                i = (i + 1..chars.len())
+                    .find(|&j| chars[j] == '\'')
+                    .unwrap_or(chars.len());
                 out.push(Item::Other);
                 after_dot = false;
             }
             '-' if chars.get(i + 1) == Some(&'-') => {
-                i = (i..chars.len()).find(|&j| chars[j] == '\n').unwrap_or(chars.len());
+                i = (i..chars.len())
+                    .find(|&j| chars[j] == '\n')
+                    .unwrap_or(chars.len());
             }
             c if c.is_whitespace() => {}
             _ => {
@@ -91,14 +126,19 @@ fn table_aliases(query: &str) -> Vec<(String, Item)> {
     let items = items(query);
     let mut out = Vec::new();
     for (i, item) in items.iter().enumerate() {
-        let starts_table = *item == Item::Comma || matches!(item.bare_upper().as_deref(), Some("FROM" | "JOIN"));
-        let Some(Item::Name { text: table, .. }) = items.get(i + 1).filter(|_| starts_table) else { continue };
+        let starts_table =
+            *item == Item::Comma || matches!(item.bare_upper().as_deref(), Some("FROM" | "JOIN"));
+        let Some(Item::Name { text: table, .. }) = items.get(i + 1).filter(|_| starts_table) else {
+            continue;
+        };
         let mut k = i + 2;
         if items.get(k).and_then(Item::bare_upper).as_deref() == Some("AS") {
             k += 1;
         }
         if let Some(alias @ Item::Name { .. }) = items.get(k) {
-            let is_clause = alias.bare_upper().is_some_and(|w| CLAUSE_WORDS.contains(&w.as_str()));
+            let is_clause = alias
+                .bare_upper()
+                .is_some_and(|w| CLAUSE_WORDS.contains(&w.as_str()));
             if !is_clause {
                 out.push((table.clone(), alias.clone()));
             }
@@ -112,7 +152,14 @@ fn table_aliases(query: &str) -> Vec<(String, Item)> {
 pub fn expects_table_alias(query: &str, word_start: usize) -> bool {
     let before = query[..word_start.min(query.len())].trim_end();
     let before = before.strip_suffix(['"', '`']).unwrap_or(before).trim_end();
-    let word: String = before.chars().rev().take_while(|&c| is_word_char(c)).collect::<Vec<_>>().into_iter().rev().collect();
+    let word: String = before
+        .chars()
+        .rev()
+        .take_while(|&c| is_word_char(c))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     matches!(word.to_uppercase().as_str(), "FROM" | "JOIN")
 }
 
@@ -141,11 +188,16 @@ pub fn pick_table_alias(query: &str, table: &str) -> String {
 /// Table that `alias` stands for in `query` (`FROM "featureFlag" f`, `JOIN users AS u`),
 /// without schema or quotes
 pub fn resolve_alias(query: &str, alias: &str) -> Option<String> {
-    table_aliases(query).into_iter().find_map(|(table, item)| match item {
-        Item::Name { text, quoted: true } if text == alias => Some(table),
-        Item::Name { text, quoted: false } if text.eq_ignore_ascii_case(alias) => Some(table),
-        _ => None,
-    })
+    table_aliases(query)
+        .into_iter()
+        .find_map(|(table, item)| match item {
+            Item::Name { text, quoted: true } if text == alias => Some(table),
+            Item::Name {
+                text,
+                quoted: false,
+            } if text.eq_ignore_ascii_case(alias) => Some(table),
+            _ => None,
+        })
 }
 
 #[cfg(test)]
@@ -171,8 +223,14 @@ mod tests {
     #[test]
     fn alias_is_the_first_letter_numbered_when_taken() {
         assert_eq!(pick_table_alias("SELECT * FROM ", "featureFlag"), "f");
-        assert_eq!(pick_table_alias("SELECT * FROM \"featureFlag\" f JOIN ", "feature"), "f1");
-        assert_eq!(pick_table_alias("SELECT * FROM a f JOIN b f1 JOIN ", "flags"), "f2");
+        assert_eq!(
+            pick_table_alias("SELECT * FROM \"featureFlag\" f JOIN ", "feature"),
+            "f1"
+        );
+        assert_eq!(
+            pick_table_alias("SELECT * FROM a f JOIN b f1 JOIN ", "flags"),
+            "f2"
+        );
         assert_eq!(pick_table_alias("SELECT * FROM ", "_audit"), "t");
         assert_eq!(pick_table_alias("SELECT * FROM ", "Users"), "u");
     }
@@ -185,7 +243,10 @@ mod tests {
         assert_eq!(resolve_alias(sql, "u").as_deref(), Some("users"));
         assert_eq!(resolve_alias(sql, "x"), None);
         // A table without an alias is not mistaken for one
-        assert_eq!(resolve_alias("SELECT * FROM users WHERE users.", "users"), None);
+        assert_eq!(
+            resolve_alias("SELECT * FROM users WHERE users.", "users"),
+            None
+        );
         assert_eq!(resolve_alias("SELECT * FROM users WHERE u.", "u"), None);
     }
 }

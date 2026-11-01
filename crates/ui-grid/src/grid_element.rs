@@ -1,8 +1,8 @@
+use gpui::*;
+use mem_engine::QueryResultPager;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
-use gpui::*;
-use mem_engine::QueryResultPager;
 use ui_core::history::{EditKind, History};
 use ui_core::theme::Theme;
 
@@ -70,12 +70,22 @@ pub struct CellEdit {
 pub type CellEditorRenderer = Rc<dyn Fn() -> AnyElement>;
 
 /// Text of the cell at grid row `row`, staged edits and new rows included; `None` for SQL NULL
-pub fn resolve_cell(pager: &QueryResultPager, changeset: &Changeset, row: u64, col: usize) -> Option<String> {
+pub fn resolve_cell(
+    pager: &QueryResultPager,
+    changeset: &Changeset,
+    row: u64,
+    col: usize,
+) -> Option<String> {
     match changeset.resolve_row(row) {
-        RowRef::New(i) => changeset.inserted_rows.get(i).and_then(|r| r.values.get(col).cloned().flatten()),
+        RowRef::New(i) => changeset
+            .inserted_rows
+            .get(i)
+            .and_then(|r| r.values.get(col).cloned().flatten()),
         RowRef::Fetched(f) => match changeset.edited_value(f, col) {
             Some(v) => v.map(str::to_string),
-            None => pager.get_cell(f, col).map(|b| String::from_utf8_lossy(&b).into_owned()),
+            None => pager
+                .get_cell(f, col)
+                .map(|b| String::from_utf8_lossy(&b).into_owned()),
         },
     }
 }
@@ -83,8 +93,15 @@ pub fn resolve_cell(pager: &QueryResultPager, changeset: &Changeset, row: u64, c
 /// Columns of a row that intersect the horizontally scrolled viewport, plus one on each
 /// side, and the x offset (after the gutter) where the first of them starts. Rows only
 /// build these cells, so a wide table costs no more per frame than a narrow one.
-pub fn visible_columns(widths: &[f32], scroll_x: f32, viewport_width: f32) -> (std::ops::Range<usize>, f32) {
-    let (view_start, view_end) = (scroll_x - GUTTER_WIDTH, scroll_x + viewport_width - GUTTER_WIDTH);
+pub fn visible_columns(
+    widths: &[f32],
+    scroll_x: f32,
+    viewport_width: f32,
+) -> (std::ops::Range<usize>, f32) {
+    let (view_start, view_end) = (
+        scroll_x - GUTTER_WIDTH,
+        scroll_x + viewport_width - GUTTER_WIDTH,
+    );
     let mut x = 0.0;
     let mut first = None;
     let mut end = widths.len();
@@ -240,7 +257,11 @@ impl VirtualDataGrid {
     pub fn refill_pager(&mut self, pager: Arc<QueryResultPager>) {
         let same_columns = self.pager.as_ref().is_some_and(|old| {
             old.columns.len() == pager.columns.len()
-                && old.columns.iter().zip(&pager.columns).all(|(a, b)| a.name == b.name && a.data_type == b.data_type)
+                && old
+                    .columns
+                    .iter()
+                    .zip(&pager.columns)
+                    .all(|(a, b)| a.name == b.name && a.data_type == b.data_type)
         });
         if !same_columns {
             self.set_pager(pager);
@@ -275,8 +296,14 @@ impl VirtualDataGrid {
     /// Returns `false` when there is no step to take.
     pub fn step_staged_edits(&mut self, redo: bool) -> bool {
         let current = self.changeset.clone();
-        let restored = if redo { self.changeset_history.redo(current) } else { self.changeset_history.undo(current) };
-        let Some(restored) = restored else { return false };
+        let restored = if redo {
+            self.changeset_history.redo(current)
+        } else {
+            self.changeset_history.undo(current)
+        };
+        let Some(restored) = restored else {
+            return false;
+        };
         let rows_moved = restored.inserted_rows.len() != self.changeset.inserted_rows.len();
         self.changeset = restored;
         self.editing_cell = None;
@@ -289,7 +316,8 @@ impl VirtualDataGrid {
 
     /// Rows shown in the grid: the fetched rows and the rows added between them
     pub fn row_count(&self) -> u64 {
-        self.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0) + self.changeset.inserted_rows.len() as u64
+        self.pager.as_ref().map(|p| p.total_rows()).unwrap_or(0)
+            + self.changeset.inserted_rows.len() as u64
     }
 
     /// Text of a cell as shown, staged edits included; `None` for NULL or out of range
@@ -336,7 +364,8 @@ impl VirtualDataGrid {
         for ch in text.chars() {
             let char_w = match ch {
                 '.' | ':' | ',' | ';' | '\'' | '"' | '!' | '|' | 'i' | 'l' | 'j' | '1' | '`' => 3.8,
-                'r' | 't' | 'f' | 'I' | ' ' | '-' | '(' | ')' | '[' | ']' | '{' | '}' | '/' | '\\' => 5.2,
+                'r' | 't' | 'f' | 'I' | ' ' | '-' | '(' | ')' | '[' | ']' | '{' | '}' | '/'
+                | '\\' => 5.2,
                 'm' | 'w' | 'M' | 'W' | '@' | '%' | '&' => 9.5,
                 'A'..='Z' => 7.8,
                 '0'..='9' => 6.8,
@@ -364,7 +393,8 @@ impl VirtualDataGrid {
                 // Name and badge render heavier than the estimator assumes, hence the 10% margin.
                 let header_w = self.header_widths.get(col_idx).copied().unwrap_or_else(|| {
                     let name_w = Self::estimate_text_width(&col.name, 12.0) * 1.1;
-                    let badge_w = Self::estimate_text_width(dbeaver_type_badge(col.data_type), 10.0) * 1.1;
+                    let badge_w =
+                        Self::estimate_text_width(dbeaver_type_badge(col.data_type), 10.0) * 1.1;
                     let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
                     let is_sorted = self.ordering.as_ref().is_some_and(|o| o.column == col.name);
                     header_cell_width(badge_w, name_w, is_pk, is_sorted.then_some(9.0))
@@ -376,13 +406,18 @@ impl VirtualDataGrid {
                     None => (0.0f32, 0),
                 };
                 for r in first_estimated..sample_rows {
-                    let cell_str = resolve_cell(pager, &self.changeset, r, col_idx).unwrap_or_else(|| "NULL".to_string());
+                    let cell_str = resolve_cell(pager, &self.changeset, r, col_idx)
+                        .unwrap_or_else(|| "NULL".to_string());
                     // The estimate runs a little narrow on most fonts, hence the 10% margin
-                    let cell_w = data_cell_width(Self::estimate_text_width(cell_measure_sample(&cell_str), 12.0) * 1.1);
+                    let cell_w = data_cell_width(
+                        Self::estimate_text_width(cell_measure_sample(&cell_str), 12.0) * 1.1,
+                    );
                     max_cell_w = max_cell_w.max(cell_w);
                 }
 
-                header_w.max(max_cell_w).clamp(MIN_COL_WIDTH, MAX_AUTO_COL_WIDTH)
+                header_w
+                    .max(max_cell_w)
+                    .clamp(MIN_COL_WIDTH, MAX_AUTO_COL_WIDTH)
             })
             .collect()
     }
@@ -411,7 +446,8 @@ impl VirtualDataGrid {
             .map(|c| {
                 (0..sample_rows)
                     .map(|r| {
-                        let text = resolve_cell(&pager, &self.changeset, r, c).unwrap_or_else(|| "NULL".to_string());
+                        let text = resolve_cell(&pager, &self.changeset, r, c)
+                            .unwrap_or_else(|| "NULL".to_string());
                         let text = cell_measure_sample(&text);
                         let run = TextRun {
                             len: text.len(),
@@ -421,7 +457,12 @@ impl VirtualDataGrid {
                             underline: None,
                             strikethrough: None,
                         };
-                        let line = window.text_system().shape_line(SharedString::from(text.to_string()), px(12.0), &[run], None);
+                        let line = window.text_system().shape_line(
+                            SharedString::from(text.to_string()),
+                            px(12.0),
+                            &[run],
+                            None,
+                        );
                         data_cell_width(f32::from(line.width).ceil())
                     })
                     .fold(0.0f32, f32::max)
@@ -449,13 +490,21 @@ impl VirtualDataGrid {
         let text_width = |text: &str, size: f32, weight: FontWeight| -> f32 {
             let run = TextRun {
                 len: text.len(),
-                font: Font { weight, ..base.font() },
+                font: Font {
+                    weight,
+                    ..base.font()
+                },
                 color: base.color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
             };
-            let line = window.text_system().shape_line(SharedString::from(text.to_string()), px(size), &[run], None);
+            let line = window.text_system().shape_line(
+                SharedString::from(text.to_string()),
+                px(size),
+                &[run],
+                None,
+            );
             f32::from(line.width).ceil()
         };
 
@@ -518,7 +567,11 @@ impl VirtualDataGrid {
     /// Lays the columns out: each fits its content (up to `MAX_AUTO_COL_WIDTH`) unless the user
     /// resized it, in which case it keeps that width. Free room in the viewport stays empty.
     pub fn apply_viewport_distribution(&mut self) {
-        let num_cols = self.pager.as_ref().map(|p| p.num_cols() as usize).unwrap_or(0);
+        let num_cols = self
+            .pager
+            .as_ref()
+            .map(|p| p.num_cols() as usize)
+            .unwrap_or(0);
         if num_cols == 0 {
             self.column_widths.clear();
             self.content_widths.clear();
@@ -532,7 +585,11 @@ impl VirtualDataGrid {
         self.column_widths = (0..num_cols)
             .map(|c| {
                 if self.manual_column_widths.contains(&c) {
-                    self.column_widths.get(c).copied().unwrap_or(MIN_COL_WIDTH).max(MIN_COL_WIDTH)
+                    self.column_widths
+                        .get(c)
+                        .copied()
+                        .unwrap_or(MIN_COL_WIDTH)
+                        .max(MIN_COL_WIDTH)
                 } else {
                     self.content_widths[c]
                 }
@@ -559,7 +616,8 @@ impl VirtualDataGrid {
 
     pub fn scroll_by(&mut self, delta_y: f32, delta_x: f32) {
         let total_rows = self.row_count();
-        let max_scroll_y = (total_rows as f32 * self.theme.row_height - self.viewport_height).max(0.0);
+        let max_scroll_y =
+            (total_rows as f32 * self.theme.row_height - self.viewport_height).max(0.0);
 
         self.scroll_top = (self.scroll_top + delta_y).clamp(0.0, max_scroll_y);
         self.scroll_left = (self.scroll_left + delta_x).max(0.0);
@@ -643,12 +701,16 @@ impl VirtualDataGrid {
                     .border_color(theme.border)
                     .text_size(px(11.0))
                     .text_color(theme.text_muted)
-                    .child("#")
+                    .child("#"),
             );
 
         if let Some(ref pager) = self.pager {
             for (col_idx, col) in pager.columns.iter().enumerate() {
-                let width = self.column_widths.get(col_idx).copied().unwrap_or(MIN_COL_WIDTH);
+                let width = self
+                    .column_widths
+                    .get(col_idx)
+                    .copied()
+                    .unwrap_or(MIN_COL_WIDTH);
                 let is_resizing = resizing_col == Some(col_idx);
                 let resizer = make_resizer(col_idx, width);
                 let badge_str = dbeaver_type_badge(col.data_type);
@@ -690,7 +752,11 @@ impl VirtualDataGrid {
                         .w(px(width))
                         .h_full()
                         .border_r_1()
-                        .border_color(if is_resizing { theme.border_focused } else { theme.border })
+                        .border_color(if is_resizing {
+                            theme.border_focused
+                        } else {
+                            theme.border
+                        })
                         .child(
                             // Badge, key and arrow keep their size; only the name shrinks,
                             // ending in an ellipsis once the column is too narrow for it.
@@ -710,9 +776,14 @@ impl VirtualDataGrid {
                                         .font_weight(FontWeight::BOLD)
                                         .text_size(px(10.0))
                                         .text_color(rgb(0x58a6ff))
-                                        .child(badge_str)
+                                        .child(badge_str),
                                 )
-                                .children(is_pk.then(|| img("icons/key.svg").flex_none().w(px(HEADER_KEY_WIDTH)).h(px(11.0))))
+                                .children(is_pk.then(|| {
+                                    img("icons/key.svg")
+                                        .flex_none()
+                                        .w(px(HEADER_KEY_WIDTH))
+                                        .h(px(11.0))
+                                }))
                                 .child(
                                     div()
                                         .flex_1()
@@ -721,7 +792,7 @@ impl VirtualDataGrid {
                                         .text_size(px(12.0))
                                         .text_color(theme.text_primary)
                                         .truncate()
-                                        .child(col.name.clone())
+                                        .child(col.name.clone()),
                                 )
                                 .children(sort_glyph.map(|g| {
                                     div()
@@ -731,9 +802,9 @@ impl VirtualDataGrid {
                                         .text_color(rgb(0x58a6ff))
                                         .child(g)
                                 }))
-                                .child(arrow)
+                                .child(arrow),
                         )
-                        .child(resizer)
+                        .child(resizer),
                 );
             }
         }
@@ -759,7 +830,8 @@ impl VirtualDataGrid {
         let theme_text_success = theme.text_success;
         let theme_text_error = theme.text_error;
         let scroll_x = -f32::from(self.horizontal_scroll_handle.offset().x);
-        let (visible_cols, cols_offset) = visible_columns(&self.column_widths, scroll_x, self.viewport_width);
+        let (visible_cols, cols_offset) =
+            visible_columns(&self.column_widths, scroll_x, self.viewport_width);
 
         let body = div()
             .id("grid-data-body-container")
@@ -911,12 +983,18 @@ impl VirtualDataGrid {
                     if dx.abs() > dy.abs() {
                         let max_x = f32::from(h_handle.max_offset().width);
                         let cur = h_handle.offset();
-                        h_handle.set_offset(point(px((f32::from(cur.x) + dx).clamp(-max_x, 0.0)), cur.y));
+                        h_handle.set_offset(point(
+                            px((f32::from(cur.x) + dx).clamp(-max_x, 0.0)),
+                            cur.y,
+                        ));
                     } else if dy != 0.0 {
                         let state = v_handle.0.borrow();
                         let max_y = f32::from(state.base_handle.max_offset().height);
                         let cur = state.base_handle.offset();
-                        state.base_handle.set_offset(point(cur.x, px((f32::from(cur.y) + dy).clamp(-max_y, 0.0))));
+                        state.base_handle.set_offset(point(
+                            cur.x,
+                            px((f32::from(cur.y) + dy).clamp(-max_y, 0.0)),
+                        ));
                     }
                     cx.stop_propagation();
                     cx.notify(view);
@@ -940,10 +1018,29 @@ impl VirtualDataGrid {
 
         // Vertical scrollbar indicator when content exceeds viewport
         if has_vertical_overflow {
-            let scroll_y = (-f32::from(self.vertical_scroll_handle.0.borrow().base_handle.offset().y)).max(0.0);
+            let scroll_y = (-f32::from(
+                self.vertical_scroll_handle
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+            ))
+            .max(0.0);
             let max_scroll_y = (total_content_height - self.viewport_height).max(1.0);
-            let laid_out_max_y = f32::from(self.vertical_scroll_handle.0.borrow().base_handle.max_offset().height);
-            let ratio_max_y = if laid_out_max_y > 0.0 { laid_out_max_y } else { max_scroll_y };
+            let laid_out_max_y = f32::from(
+                self.vertical_scroll_handle
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .height,
+            );
+            let ratio_max_y = if laid_out_max_y > 0.0 {
+                laid_out_max_y
+            } else {
+                max_scroll_y
+            };
             let scroll_ratio = (scroll_y / ratio_max_y).clamp(0.0, 1.0);
 
             let scrollbar_w = 14.0f32;
@@ -957,8 +1054,14 @@ impl VirtualDataGrid {
             let theme_border = theme.border;
             let theme_bg_header = theme.bg_grid_header;
             let theme_text_muted = theme.text_muted;
-            let thumb_bg = Rgba { a: 0.4, ..theme_text_muted };
-            let thumb_hover = Rgba { a: 0.8, ..theme_text_muted };
+            let thumb_bg = Rgba {
+                a: 0.4,
+                ..theme_text_muted
+            };
+            let thumb_hover = Rgba {
+                a: 0.8,
+                ..theme_text_muted
+            };
 
             let handle_up = self.vertical_scroll_handle.clone();
             let handle_down = self.vertical_scroll_handle.clone();
@@ -986,15 +1089,24 @@ impl VirtualDataGrid {
                         .cursor_pointer()
                         .text_size(px(8.0))
                         .text_color(theme_text_muted)
-                        .hover(|s| s.bg(Rgba { a: 0.15, ..theme_text_muted }))
+                        .hover(|s| {
+                            s.bg(Rgba {
+                                a: 0.15,
+                                ..theme_text_muted
+                            })
+                        })
                         .child("▲")
                         .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
                             let cur_offset = handle_up.0.borrow().base_handle.offset();
                             let cur_y = f32::from(cur_offset.y);
                             let new_y = (cur_y + 100.0).min(0.0);
-                            handle_up.0.borrow().base_handle.set_offset(point(cur_offset.x, px(new_y)));
+                            handle_up
+                                .0
+                                .borrow()
+                                .base_handle
+                                .set_offset(point(cur_offset.x, px(new_y)));
                             window.refresh();
-                        })
+                        }),
                 )
                 .child(
                     div()
@@ -1004,13 +1116,17 @@ impl VirtualDataGrid {
                         .w_full()
                         .relative()
                         .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, _app| {
-                            let click_y = f32::from(event.position.y) - btn_h;
-                            let target_ratio = (click_y / track_h).clamp(0.0, 1.0);
-                            let target_row = (target_ratio * total_rows as f32) as usize;
-                            handle_track.scroll_to_item_strict(target_row, ScrollStrategy::Center);
-                            window.refresh();
-                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            move |event: &MouseDownEvent, window, _app| {
+                                let click_y = f32::from(event.position.y) - btn_h;
+                                let target_ratio = (click_y / track_h).clamp(0.0, 1.0);
+                                let target_row = (target_ratio * total_rows as f32) as usize;
+                                handle_track
+                                    .scroll_to_item_strict(target_row, ScrollStrategy::Center);
+                                window.refresh();
+                            },
+                        )
                         .child(
                             div()
                                 .id("scroll-thumb-v")
@@ -1021,8 +1137,8 @@ impl VirtualDataGrid {
                                 .h(px(thumb_height))
                                 .rounded_xs()
                                 .bg(thumb_bg)
-                                .hover(move |s| s.bg(thumb_hover))
-                        )
+                                .hover(move |s| s.bg(thumb_hover)),
+                        ),
                 )
                 .child(
                     div()
@@ -1035,15 +1151,24 @@ impl VirtualDataGrid {
                         .cursor_pointer()
                         .text_size(px(8.0))
                         .text_color(theme_text_muted)
-                        .hover(|s| s.bg(Rgba { a: 0.15, ..theme_text_muted }))
+                        .hover(|s| {
+                            s.bg(Rgba {
+                                a: 0.15,
+                                ..theme_text_muted
+                            })
+                        })
                         .child("▼")
                         .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
                             let cur_offset = handle_down.0.borrow().base_handle.offset();
                             let cur_y = f32::from(cur_offset.y);
                             let new_y = (cur_y - 100.0).max(-max_scroll_y);
-                            handle_down.0.borrow().base_handle.set_offset(point(cur_offset.x, px(new_y)));
+                            handle_down
+                                .0
+                                .borrow()
+                                .base_handle
+                                .set_offset(point(cur_offset.x, px(new_y)));
                             window.refresh();
-                        })
+                        }),
                 );
 
             main_area = main_area.child(v_scrollbar);
@@ -1056,7 +1181,11 @@ impl VirtualDataGrid {
             let scroll_x = (-f32::from(self.horizontal_scroll_handle.offset().x)).max(0.0);
             let max_scroll_x = (content_total_width - self.viewport_width).max(1.0);
             let laid_out_max_x = f32::from(self.horizontal_scroll_handle.max_offset().width);
-            let ratio_max_x = if laid_out_max_x > 0.0 { laid_out_max_x } else { max_scroll_x };
+            let ratio_max_x = if laid_out_max_x > 0.0 {
+                laid_out_max_x
+            } else {
+                max_scroll_x
+            };
             let scroll_ratio = (scroll_x / ratio_max_x).clamp(0.0, 1.0);
 
             let scrollbar_h = 14.0f32;
@@ -1070,8 +1199,14 @@ impl VirtualDataGrid {
             let theme_border = theme.border;
             let theme_bg_header = theme.bg_grid_header;
             let theme_text_muted = theme.text_muted;
-            let thumb_bg = Rgba { a: 0.4, ..theme_text_muted };
-            let thumb_hover = Rgba { a: 0.8, ..theme_text_muted };
+            let thumb_bg = Rgba {
+                a: 0.4,
+                ..theme_text_muted
+            };
+            let thumb_hover = Rgba {
+                a: 0.8,
+                ..theme_text_muted
+            };
 
             let handle_left = self.horizontal_scroll_handle.clone();
             let handle_right = self.horizontal_scroll_handle.clone();
@@ -1099,14 +1234,19 @@ impl VirtualDataGrid {
                         .cursor_pointer()
                         .text_size(px(9.0))
                         .text_color(theme_text_muted)
-                        .hover(|s| s.bg(Rgba { a: 0.15, ..theme_text_muted }))
+                        .hover(|s| {
+                            s.bg(Rgba {
+                                a: 0.15,
+                                ..theme_text_muted
+                            })
+                        })
                         .child("◀")
                         .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
                             let cur_x = f32::from(handle_left.offset().x);
                             let new_x = (cur_x + 250.0).min(0.0);
                             handle_left.set_offset(point(px(new_x), px(0.0)));
                             window.refresh();
-                        })
+                        }),
                 )
                 .child(
                     div()
@@ -1117,13 +1257,16 @@ impl VirtualDataGrid {
                         .h_full()
                         .relative()
                         .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, _app| {
-                            let click_x = f32::from(event.position.x) - btn_w;
-                            let target_ratio = (click_x / track_w).clamp(0.0, 1.0);
-                            let new_x = -target_ratio * max_scroll_x;
-                            handle_track.set_offset(point(px(new_x), px(0.0)));
-                            window.refresh();
-                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            move |event: &MouseDownEvent, window, _app| {
+                                let click_x = f32::from(event.position.x) - btn_w;
+                                let target_ratio = (click_x / track_w).clamp(0.0, 1.0);
+                                let new_x = -target_ratio * max_scroll_x;
+                                handle_track.set_offset(point(px(new_x), px(0.0)));
+                                window.refresh();
+                            },
+                        )
                         .child(
                             div()
                                 .id("scroll-thumb")
@@ -1133,8 +1276,8 @@ impl VirtualDataGrid {
                                 .h(px(8.0))
                                 .rounded_xs()
                                 .bg(thumb_bg)
-                                .hover(move |s| s.bg(thumb_hover))
-                        )
+                                .hover(move |s| s.bg(thumb_hover)),
+                        ),
                 )
                 .child(
                     div()
@@ -1147,14 +1290,19 @@ impl VirtualDataGrid {
                         .cursor_pointer()
                         .text_size(px(9.0))
                         .text_color(theme_text_muted)
-                        .hover(|s| s.bg(Rgba { a: 0.15, ..theme_text_muted }))
+                        .hover(|s| {
+                            s.bg(Rgba {
+                                a: 0.15,
+                                ..theme_text_muted
+                            })
+                        })
                         .child("▶")
                         .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
                             let cur_x = f32::from(handle_right.offset().x);
                             let new_x = (cur_x - 250.0).max(-max_scroll_x);
                             handle_right.set_offset(point(px(new_x), px(0.0)));
                             window.refresh();
-                        })
+                        }),
                 );
 
             grid_container = grid_container.child(scrollbar_bar);
@@ -1172,7 +1320,7 @@ impl Render for VirtualDataGrid {
 
 #[cfg(test)]
 mod visible_columns_tests {
-    use super::{clip_cell_text, visible_columns, GUTTER_WIDTH};
+    use super::{GUTTER_WIDTH, clip_cell_text, visible_columns};
 
     #[test]
     fn only_columns_in_view_are_kept_with_one_extra_each_side() {
@@ -1200,14 +1348,19 @@ mod visible_columns_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mem_engine::{ColumnMeta, DataType};
     use core::prelude::v1::test;
+    use mem_engine::{ColumnMeta, DataType};
 
     #[test]
     fn test_selection_text_copies_cell_or_range() {
-        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let cols = vec![
+            ColumnMeta::new("id", DataType::Int8),
+            ColumnMeta::new("name", DataType::Text),
+        ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
-        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])])
+            .unwrap();
         pager.append_row(vec![Some(&b"2"[..]), None]).unwrap();
 
         let mut grid = VirtualDataGrid::new(None, Theme::dark());
@@ -1217,16 +1370,27 @@ mod tests {
         grid.selection = GridSelection::single(0, 1);
         assert_eq!(grid.selection_text().as_deref(), Some("Alice"));
 
-        grid.changeset.set_cell(0, 1, Some(b"Alice".to_vec()), Some("Alicia".to_string()));
-        grid.selection.set_range(crate::GridCoord { row: 0, col: 0 }, crate::GridCoord { row: 1, col: 1 });
+        grid.changeset
+            .set_cell(0, 1, Some(b"Alice".to_vec()), Some("Alicia".to_string()));
+        grid.selection.set_range(
+            crate::GridCoord { row: 0, col: 0 },
+            crate::GridCoord { row: 1, col: 1 },
+        );
         assert_eq!(grid.selection_text().as_deref(), Some("1\tAlicia\n2\t"));
     }
 
     #[test]
     fn test_refill_keeps_column_widths_of_the_same_columns() {
-        let cols = || vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let cols = || {
+            vec![
+                ColumnMeta::new("id", DataType::Int8),
+                ColumnMeta::new("name", DataType::Text),
+            ]
+        };
         let first = Arc::new(QueryResultPager::new(cols()).unwrap());
-        first.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+        first
+            .append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])])
+            .unwrap();
 
         let mut grid = VirtualDataGrid::new(None, Theme::dark());
         grid.set_pager(Arc::clone(&first));
@@ -1235,7 +1399,12 @@ mod tests {
         let widths = grid.column_widths.clone();
 
         let reordered = Arc::new(QueryResultPager::new(cols()).unwrap());
-        reordered.append_row(vec![Some(&b"2"[..]), Some(&b"a much longer name than before, by far"[..])]).unwrap();
+        reordered
+            .append_row(vec![
+                Some(&b"2"[..]),
+                Some(&b"a much longer name than before, by far"[..]),
+            ])
+            .unwrap();
         grid.refill_pager(Arc::clone(&reordered));
         grid.on_rows_appended();
         assert_eq!(grid.column_widths, widths);
@@ -1244,7 +1413,9 @@ mod tests {
         assert_eq!(grid.cell_value(0, 0).as_deref(), Some("2"));
 
         // Other columns are laid out from scratch
-        let other = Arc::new(QueryResultPager::new(vec![ColumnMeta::new("email", DataType::Text)]).unwrap());
+        let other = Arc::new(
+            QueryResultPager::new(vec![ColumnMeta::new("email", DataType::Text)]).unwrap(),
+        );
         grid.refill_pager(other);
         assert!(grid.manual_column_widths.is_empty());
         assert_eq!(grid.column_widths.len(), 1);
@@ -1252,28 +1423,47 @@ mod tests {
 
     #[test]
     fn test_staged_rows_and_edits_are_shown() {
-        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let cols = vec![
+            ColumnMeta::new("id", DataType::Int8),
+            ColumnMeta::new("name", DataType::Text),
+        ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
-        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])])
+            .unwrap();
 
         let mut grid = VirtualDataGrid::new(None, Theme::dark());
         grid.set_pager(Arc::clone(&pager));
         grid.changeset.set_cell(0, 1, Some(b"Alice".to_vec()), None);
-        grid.changeset.insert_row_at(1, vec![None, Some("Bob".to_string())]);
+        grid.changeset
+            .insert_row_at(1, vec![None, Some("Bob".to_string())]);
 
         assert_eq!(grid.row_count(), 2);
         assert_eq!(grid.cell_value(0, 0).as_deref(), Some("1"));
-        assert_eq!(grid.cell_value(0, 1), None, "a cell set to NULL shows as NULL");
-        assert_eq!(grid.cell_value(1, 0), None, "an unset cell of a new row is NULL");
+        assert_eq!(
+            grid.cell_value(0, 1),
+            None,
+            "a cell set to NULL shows as NULL"
+        );
+        assert_eq!(
+            grid.cell_value(1, 0),
+            None,
+            "an unset cell of a new row is NULL"
+        );
         assert_eq!(grid.cell_value(1, 1).as_deref(), Some("Bob"));
         assert_eq!(grid.cell_value(2, 1), None);
     }
 
     #[test]
     fn test_staged_edits_undo_and_redo() {
-        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("name", DataType::Text)];
+        let cols = vec![
+            ColumnMeta::new("id", DataType::Int8),
+            ColumnMeta::new("name", DataType::Text),
+        ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
-        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some(&b"Alice"[..])])
+            .unwrap();
 
         let mut grid = VirtualDataGrid::new(None, Theme::dark());
         grid.set_pager(Arc::clone(&pager));
@@ -1292,7 +1482,10 @@ mod tests {
         assert!(grid.step_staged_edits(true));
         assert_eq!(grid.cell_value(0, 1).as_deref(), Some("Alicia"));
         grid.set_pager(pager);
-        assert!(!grid.step_staged_edits(false), "a new result starts with no history");
+        assert!(
+            !grid.step_staged_edits(false),
+            "a new result starts with no history"
+        );
     }
 
     #[test]
@@ -1316,7 +1509,10 @@ mod tests {
 
     #[test]
     fn test_widths_follow_rows_streamed_after_schema() {
-        let cols = vec![ColumnMeta::new("id", DataType::Int8), ColumnMeta::new("note", DataType::Text)];
+        let cols = vec![
+            ColumnMeta::new("id", DataType::Int8),
+            ColumnMeta::new("note", DataType::Text),
+        ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
 
         // The grid receives the pager as soon as the schema is known, before any rows
@@ -1324,16 +1520,26 @@ mod tests {
         grid.set_pager(Arc::clone(&pager));
         let header_only_width = grid.content_widths[1];
 
-        pager.append_row(vec![
-            Some(&b"1"[..]),
-            Some(&b"A streamed note that is much wider than the column header text"[..]),
-        ]).unwrap();
+        pager
+            .append_row(vec![
+                Some(&b"1"[..]),
+                Some(&b"A streamed note that is much wider than the column header text"[..]),
+            ])
+            .unwrap();
         grid.on_rows_appended();
-        assert!(grid.content_widths[1] > header_only_width, "widths must grow with streamed rows");
+        assert!(
+            grid.content_widths[1] > header_only_width,
+            "widths must grow with streamed rows"
+        );
 
         // A column the user resized keeps its width while more rows stream in
         grid.set_column_width(1, 90.0);
-        pager.append_row(vec![Some(&b"2"[..]), Some(&b"another long streamed note value here"[..])]).unwrap();
+        pager
+            .append_row(vec![
+                Some(&b"2"[..]),
+                Some(&b"another long streamed note value here"[..]),
+            ])
+            .unwrap();
         grid.on_rows_appended();
         assert_eq!(grid.column_widths[1], 90.0);
     }
@@ -1356,8 +1562,14 @@ mod tests {
         assert_eq!(grid.content_widths.len(), 3);
 
         // id should be smallest, email medium, long_description widest
-        assert!(grid.content_widths[0] < grid.content_widths[1], "id should be narrower than email");
-        assert!(grid.content_widths[1] < grid.content_widths[2], "email should be narrower than long_description");
+        assert!(
+            grid.content_widths[0] < grid.content_widths[1],
+            "id should be narrower than email"
+        );
+        assert!(
+            grid.content_widths[1] < grid.content_widths[2],
+            "email should be narrower than long_description"
+        );
 
         // Bounds enforcement
         assert!(grid.content_widths[0] >= MIN_COL_WIDTH);
@@ -1371,10 +1583,12 @@ mod tests {
             ColumnMeta::new("key", DataType::Text),
         ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
-        pager.append_row(vec![
-            Some(&b"1"[..]),
-            Some(&b"io.ubitec.id.service.PHONE_NUMBER_VALIDATION_RULES"[..]),
-        ]).unwrap();
+        pager
+            .append_row(vec![
+                Some(&b"1"[..]),
+                Some(&b"io.ubitec.id.service.PHONE_NUMBER_VALIDATION_RULES"[..]),
+            ])
+            .unwrap();
 
         let mut grid = VirtualDataGrid::new(Some(pager), Theme::dark());
         grid.viewport_width = 1400.0;
@@ -1382,8 +1596,16 @@ mod tests {
 
         // Neither column was capped, so both should stay snug ("khít") to their content
         let key_w = grid.column_widths[1];
-        assert!(key_w >= 340.0 && key_w <= 420.0, "key width ({}) should be snug to 47 chars, not inflated to 600+", key_w);
-        assert!(grid.column_widths[0] < 120.0, "id width ({}) should be snug", grid.column_widths[0]);
+        assert!(
+            (340.0..=420.0).contains(&key_w),
+            "key width ({}) should be snug to 47 chars, not inflated to 600+",
+            key_w
+        );
+        assert!(
+            grid.column_widths[0] < 120.0,
+            "id width ({}) should be snug",
+            grid.column_widths[0]
+        );
     }
 
     #[test]
@@ -1394,10 +1616,9 @@ mod tests {
         ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
         let long_json = "{\"errorCode\":9001,\"description\":\"Invalid phone number format\",\"regex\":\"^\\\\+?[0-9]{10,14}$\",\"details\":{\"service\":\"validation\",\"version\":\"2.4.1\",\"rules\":[\"E164\",\"NANP\",\"ITU-T\"]}}";
-        pager.append_row(vec![
-            Some(&b"phone_rules"[..]),
-            Some(long_json.as_bytes()),
-        ]).unwrap();
+        pager
+            .append_row(vec![Some(&b"phone_rules"[..]), Some(long_json.as_bytes())])
+            .unwrap();
 
         let mut grid = VirtualDataGrid::new(Some(pager), Theme::dark());
         grid.viewport_width = 1600.0;
@@ -1412,9 +1633,17 @@ mod tests {
 
     #[test]
     fn test_measured_cells_replace_the_estimate() {
-        let cols = vec![ColumnMeta::new("id", DataType::Uuid), ColumnMeta::new("note", DataType::Text)];
+        let cols = vec![
+            ColumnMeta::new("id", DataType::Uuid),
+            ColumnMeta::new("note", DataType::Text),
+        ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
-        pager.append_row(vec![Some(&b"ec6401e5-514b-4450-98e2-10fb73a65dd6"[..]), Some(&b"x"[..])]).unwrap();
+        pager
+            .append_row(vec![
+                Some(&b"ec6401e5-514b-4450-98e2-10fb73a65dd6"[..]),
+                Some(&b"x"[..]),
+            ])
+            .unwrap();
         let mut grid = VirtualDataGrid::new(None, Theme::dark());
         grid.set_pager(Arc::clone(&pager));
         assert!(grid.cell_widths_stale);
@@ -1428,7 +1657,9 @@ mod tests {
         assert_eq!(grid.column_widths[0], 310.0);
 
         // Rows streamed in after the measurement are estimated until measured again
-        pager.append_row(vec![Some(&b"1"[..]), Some("w".repeat(300).as_bytes())]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some("w".repeat(300).as_bytes())])
+            .unwrap();
         grid.on_rows_appended();
         assert!(grid.cell_widths_stale);
         assert_eq!(grid.column_widths[0], 310.0);
@@ -1442,7 +1673,9 @@ mod tests {
             ColumnMeta::new("name", DataType::Text),
         ];
         let pager = Arc::new(QueryResultPager::new(cols).unwrap());
-        pager.append_row(vec![Some(&b"1"[..]), Some(&b"Bob"[..])]).unwrap();
+        pager
+            .append_row(vec![Some(&b"1"[..]), Some(&b"Bob"[..])])
+            .unwrap();
 
         let mut grid = VirtualDataGrid::new(Some(pager), Theme::dark());
         grid.viewport_width = 1000.0;

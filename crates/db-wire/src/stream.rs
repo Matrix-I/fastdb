@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use anyhow::Result;
 use mem_engine::{ColumnMeta, QueryResultPager};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::traits::StreamEvent;
 
@@ -9,7 +9,10 @@ use crate::traits::StreamEvent;
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Sends `msg` as a StreamEvent::Error and returns it as an error for the caller to propagate
-pub(crate) fn report_error(event_tx: &flume::Sender<StreamEvent>, msg: impl Into<String>) -> anyhow::Error {
+pub(crate) fn report_error(
+    event_tx: &flume::Sender<StreamEvent>,
+    msg: impl Into<String>,
+) -> anyhow::Error {
     let msg = msg.into();
     let _ = event_tx.send(StreamEvent::Error(msg.clone()));
     anyhow::anyhow!(msg)
@@ -28,7 +31,11 @@ pub(crate) struct RowSink {
 
 impl RowSink {
     /// Creates the pager for `columns` and announces it with StreamEvent::SchemaReady
-    pub fn start(columns: Vec<ColumnMeta>, event_tx: flume::Sender<StreamEvent>, started_at: Instant) -> Result<Self> {
+    pub fn start(
+        columns: Vec<ColumnMeta>,
+        event_tx: flume::Sender<StreamEvent>,
+        started_at: Instant,
+    ) -> Result<Self> {
         let num_cols = columns.len();
         let pager = match QueryResultPager::new(columns) {
             Ok(p) => Arc::new(p),
@@ -90,7 +97,10 @@ mod tests {
     #[test]
     fn test_row_sink_emits_events_in_order() {
         let (event_tx, event_rx) = flume::unbounded();
-        let columns = vec![ColumnMeta::new("id", DataType::Int4), ColumnMeta::new("note", DataType::Text)];
+        let columns = vec![
+            ColumnMeta::new("id", DataType::Int4),
+            ColumnMeta::new("note", DataType::Text),
+        ];
         let mut sink = RowSink::start(columns, event_tx, Instant::now()).unwrap();
 
         // ~20KB rows fill a 64KB page every 3-4 rows, forcing two rollovers that must be announced
@@ -98,7 +108,11 @@ mod tests {
         for i in 0..10 {
             let cells = sink.cells_mut();
             cells[0] = Some(i.to_string().into_bytes());
-            cells[1] = if i == 3 { None } else { Some(note.clone().into_bytes()) };
+            cells[1] = if i == 3 {
+                None
+            } else {
+                Some(note.clone().into_bytes())
+            };
             sink.commit_row().unwrap();
         }
         assert_eq!(sink.finish(), 10);
@@ -107,9 +121,18 @@ mod tests {
         let StreamEvent::SchemaReady(pager) = &events[0] else {
             panic!("first event must be SchemaReady, got {:?}", events[0]);
         };
-        let appended = events.iter().filter(|e| matches!(e, StreamEvent::PageAppended { .. })).count();
-        assert!(appended >= 2, "expected one notification per page rollover, got {appended}");
-        assert!(matches!(events.last(), Some(StreamEvent::Completed { total_rows: 10, .. })));
+        let appended = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::PageAppended { .. }))
+            .count();
+        assert!(
+            appended >= 2,
+            "expected one notification per page rollover, got {appended}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Completed { total_rows: 10, .. })
+        ));
         assert_eq!(pager.get_cell(9, 0), Some(b"9".to_vec()));
         assert_eq!(pager.get_cell(3, 1), None);
     }

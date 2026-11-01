@@ -20,14 +20,26 @@ enum NavMenuAction {
 
 impl Workspace {
     pub(super) fn open_nav_context_menu(&mut self, conn_id: &str, position: Point<Pixels>) {
-        self.nav_context_menu = Some(NavContextMenu { conn_id: conn_id.to_string(), position });
+        self.nav_context_menu = Some(NavContextMenu {
+            conn_id: conn_id.to_string(),
+            position,
+        });
     }
 
-    pub(super) fn render_nav_context_menu(&mut self, menu: NavContextMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_nav_context_menu(
+        &mut self,
+        menu: NavContextMenu,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let is_connected = self.is_connection_live(&menu.conn_id);
 
-        let item = |id: &'static str, icon: &'static str, label: &'static str, enabled: bool, action: NavMenuAction, cx: &mut Context<Self>| {
+        let item = |id: &'static str,
+                    icon: &'static str,
+                    label: &'static str,
+                    enabled: bool,
+                    action: NavMenuAction,
+                    cx: &mut Context<Self>| {
             let conn_id = menu.conn_id.clone();
             let mut row = div()
                 .id(id)
@@ -38,7 +50,11 @@ impl Workspace {
                 .px_2()
                 .rounded_sm()
                 .text_size(px(12.0))
-                .text_color(if enabled { theme.text_primary } else { theme.text_muted })
+                .text_color(if enabled {
+                    theme.text_primary
+                } else {
+                    theme.text_muted
+                })
                 .child(
                     div()
                         .w(px(14.0))
@@ -77,21 +93,74 @@ impl Workspace {
                 this.nav_context_menu = None;
                 cx.notify();
             }))
-            .child(item("nav-menu-sql-editor", "icons/sql_script.svg", "SQL Editor", is_connected && !self.is_connecting, NavMenuAction::OpenSqlEditor, cx))
+            .child(item(
+                "nav-menu-sql-editor",
+                "icons/sql_script.svg",
+                "SQL Editor",
+                is_connected && !self.is_connecting,
+                NavMenuAction::OpenSqlEditor,
+                cx,
+            ))
             .child(separator())
-            .child(item("nav-menu-edit", "icons/edit.svg", "Edit Connection", true, NavMenuAction::EditConnection, cx))
+            .child(item(
+                "nav-menu-edit",
+                "icons/edit.svg",
+                "Edit Connection",
+                true,
+                NavMenuAction::EditConnection,
+                cx,
+            ))
             .child(separator())
-            .child(item("nav-menu-connect", "icons/connect.svg", "Connect", !is_connected && !self.is_connecting, NavMenuAction::Connect, cx))
-            .child(item("nav-menu-disconnect", "icons/disconnect.svg", "Disconnect", is_connected, NavMenuAction::Disconnect, cx))
+            .child(item(
+                "nav-menu-connect",
+                "icons/connect.svg",
+                "Connect",
+                !is_connected && !self.is_connecting,
+                NavMenuAction::Connect,
+                cx,
+            ))
+            .child(item(
+                "nav-menu-disconnect",
+                "icons/disconnect.svg",
+                "Disconnect",
+                is_connected,
+                NavMenuAction::Disconnect,
+                cx,
+            ))
             .child(separator())
-            .child(item("nav-menu-delete", "icons/delete.svg", "Delete", true, NavMenuAction::Delete, cx))
+            .child(item(
+                "nav-menu-delete",
+                "icons/delete.svg",
+                "Delete",
+                true,
+                NavMenuAction::Delete,
+                cx,
+            ))
             .child(separator())
-            .child(item("nav-menu-refresh", "icons/refresh.svg", "Refresh", is_connected && !self.is_connecting, NavMenuAction::Refresh, cx));
+            .child(item(
+                "nav-menu-refresh",
+                "icons/refresh.svg",
+                "Refresh",
+                is_connected && !self.is_connecting,
+                NavMenuAction::Refresh,
+                cx,
+            ));
 
-        deferred(anchored().position(menu.position).snap_to_window().child(panel)).with_priority(1)
+        deferred(
+            anchored()
+                .position(menu.position)
+                .snap_to_window()
+                .child(panel),
+        )
+        .with_priority(1)
     }
 
-    fn run_nav_menu_action(&mut self, action: NavMenuAction, conn_id: &str, cx: &mut Context<Self>) {
+    fn run_nav_menu_action(
+        &mut self,
+        action: NavMenuAction,
+        conn_id: &str,
+        cx: &mut Context<Self>,
+    ) {
         match action {
             NavMenuAction::EditConnection => self.edit_saved_connection(Some(conn_id)),
             NavMenuAction::Connect => self.connect_saved_by_id(conn_id, cx),

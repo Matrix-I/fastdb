@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use russh::client::{self, Handler};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -26,14 +26,23 @@ impl SshTunnel {
         let sh = ClientHandler;
         let mut session = client::connect(russh_config, (config.host.as_str(), config.port), sh)
             .await
-            .with_context(|| format!("Failed to connect to SSH host {}:{}", config.host, config.port))?;
+            .with_context(|| {
+                format!(
+                    "Failed to connect to SSH host {}:{}",
+                    config.host, config.port
+                )
+            })?;
 
         if let Some(ref key_path) = config.key_path {
             let key = russh_keys::load_secret_key(key_path, config.password.as_deref())
                 .with_context(|| format!("Failed to load SSH private key from {key_path}"))?;
-            session.authenticate_publickey(&config.user, Arc::new(key)).await?;
+            session
+                .authenticate_publickey(&config.user, Arc::new(key))
+                .await?;
         } else if let Some(ref password) = config.password {
-            session.authenticate_password(&config.user, password).await?;
+            session
+                .authenticate_password(&config.user, password)
+                .await?;
         }
 
         info!("SSH authentication successful for {}", config.user);

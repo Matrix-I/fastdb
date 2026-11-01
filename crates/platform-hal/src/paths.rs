@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::fs;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
+use std::fs;
+use std::path::PathBuf;
 use tracing::{info, warn};
 
 pub const APP_QUALIFIER: &str = "com";
@@ -52,10 +52,10 @@ pub fn updates_dir() -> PathBuf {
 
 /// Returns the user's Downloads directory (fallback to $HOME/Downloads)
 pub fn downloads_dir() -> PathBuf {
-    if let Some(dirs) = directories::UserDirs::new() {
-        if let Some(download) = dirs.download_dir() {
-            return download.to_path_buf();
-        }
+    if let Some(dirs) = directories::UserDirs::new()
+        && let Some(download) = dirs.download_dir()
+    {
+        return download.to_path_buf();
     }
     dirs_fallback_home().join("Downloads")
 }
@@ -98,22 +98,25 @@ pub fn cleanup_old_spill_files() -> Result<usize> {
     if let Ok(entries) = fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "spill" {
-                        if let Err(e) = fs::remove_file(&path) {
-                            warn!("Failed to remove old spill file {}: {}", path.display(), e);
-                        } else {
-                            removed += 1;
-                        }
-                    }
+            if path.is_file()
+                && let Some(ext) = path.extension()
+                && ext == "spill"
+            {
+                if let Err(e) = fs::remove_file(&path) {
+                    warn!("Failed to remove old spill file {}: {}", path.display(), e);
+                } else {
+                    removed += 1;
                 }
             }
         }
     }
 
     if removed > 0 {
-        info!("Cleaned up {} old spill files from {}", removed, dir.display());
+        info!(
+            "Cleaned up {} old spill files from {}",
+            removed,
+            dir.display()
+        );
     }
 
     Ok(removed)

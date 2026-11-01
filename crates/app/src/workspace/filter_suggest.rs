@@ -55,7 +55,11 @@ fn word_at(text: &str, caret: usize) -> Option<(Range<usize>, String)> {
 
 /// Columns matching `prefix`: names starting with it first, then names containing it.
 /// Empty when the only match is the word itself, so a finished name closes the list.
-fn matching_columns(columns: &[(String, DataType)], prefix: &str, allow_empty: bool) -> Vec<(String, DataType)> {
+fn matching_columns(
+    columns: &[(String, DataType)],
+    prefix: &str,
+    allow_empty: bool,
+) -> Vec<(String, DataType)> {
     if prefix.is_empty() && !allow_empty {
         return Vec::new();
     }
@@ -79,11 +83,20 @@ fn matching_columns(columns: &[(String, DataType)], prefix: &str, allow_empty: b
 impl Workspace {
     /// Columns of the active tab: those of the loaded result, else the table's metadata
     fn filter_columns(&self) -> Vec<(String, DataType)> {
-        let Some(tab) = self.tabs.get(self.active_tab) else { return Vec::new() };
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return Vec::new();
+        };
         if let Some(pager) = tab.grid.pager.as_ref() {
-            return pager.columns.iter().map(|c| (c.name.clone(), c.data_type)).collect();
+            return pager
+                .columns
+                .iter()
+                .map(|c| (c.name.clone(), c.data_type))
+                .collect();
         }
-        let key = (tab.schema_name.clone().unwrap_or_default(), tab.table_name.clone().unwrap_or_default());
+        let key = (
+            tab.schema_name.clone().unwrap_or_default(),
+            tab.table_name.clone().unwrap_or_default(),
+        );
         self.table_columns
             .get(&key)
             .map(|cols| cols.iter().map(|c| (c.name.clone(), c.data_type)).collect())
@@ -93,8 +106,15 @@ impl Workspace {
     /// Reopens or closes the list for the word at the filter caret. `force` (Ctrl+Space)
     /// lists every column even before anything is typed.
     pub(super) fn refresh_filter_suggest(&mut self, force: bool) {
-        let Some(tab) = self.tabs.get(self.active_tab) else { return };
-        let has_selection = selection_range(self.filter_anchor, self.filter_cursor, tab.filter_sql.chars().count()).is_some();
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let has_selection = selection_range(
+            self.filter_anchor,
+            self.filter_cursor,
+            tab.filter_sql.chars().count(),
+        )
+        .is_some();
         let columns = self.filter_columns();
         let items = match word_at(&tab.filter_sql, self.filter_cursor) {
             Some((_, prefix)) if !has_selection => matching_columns(&columns, &prefix, force),
@@ -112,12 +132,18 @@ impl Workspace {
             .and_then(|(name, _)| items.iter().position(|(n, _)| n == name))
             .unwrap_or(0);
         let width = (longest + 64.0).clamp(240.0, 480.0);
-        self.filter_suggest = (!items.is_empty()).then_some(FilterSuggest { items, selected, width });
+        self.filter_suggest = (!items.is_empty()).then_some(FilterSuggest {
+            items,
+            selected,
+            width,
+        });
     }
 
     /// Keys for the open list; returns whether the key was used
     pub(super) fn handle_filter_suggest_key(&mut self, keystroke: &Keystroke) -> bool {
-        let Some(suggest) = self.filter_suggest.as_mut() else { return false };
+        let Some(suggest) = self.filter_suggest.as_mut() else {
+            return false;
+        };
         let len = suggest.items.len();
         match keystroke.key.as_str() {
             "down" => suggest.selected = (suggest.selected + 1) % len,
@@ -134,15 +160,32 @@ impl Workspace {
 
     /// Replaces the word at the caret with the quoted name of entry `index`
     pub(super) fn apply_filter_suggest(&mut self, index: usize) {
-        let Some(suggest) = self.filter_suggest.take() else { return };
-        let Some((name, _)) = suggest.items.get(index) else { return };
+        let Some(suggest) = self.filter_suggest.take() else {
+            return;
+        };
+        let Some((name, _)) = suggest.items.get(index) else {
+            return;
+        };
         let quoted = quote_ident(self.selected_driver_kind, name);
-        let Some(tab) = self.tabs.get_mut(self.active_tab) else { return };
-        let Some((range, _)) = word_at(&tab.filter_sql, self.filter_cursor) else { return };
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let Some((range, _)) = word_at(&tab.filter_sql, self.filter_cursor) else {
+            return;
+        };
 
         let len = tab.filter_sql.chars().count();
-        tab.filter_history.record((tab.filter_sql.clone(), self.filter_cursor.min(len)), EditKind::Other);
-        let byte = |i: usize| tab.filter_sql.char_indices().nth(i).map(|(b, _)| b).unwrap_or(tab.filter_sql.len());
+        tab.filter_history.record(
+            (tab.filter_sql.clone(), self.filter_cursor.min(len)),
+            EditKind::Other,
+        );
+        let byte = |i: usize| {
+            tab.filter_sql
+                .char_indices()
+                .nth(i)
+                .map(|(b, _)| b)
+                .unwrap_or(tab.filter_sql.len())
+        };
         let (start, end) = (byte(range.start), byte(range.end));
         tab.filter_sql.replace_range(start..end, &quoted);
         self.filter_cursor = range.start + quoted.chars().count();
@@ -151,8 +194,14 @@ impl Workspace {
     }
 
     /// The list under the filter input, if open
-    pub(super) fn render_filter_suggest(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let suggest = self.filter_suggest.as_ref().filter(|_| self.is_filter_focused)?;
+    pub(super) fn render_filter_suggest(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let suggest = self
+            .filter_suggest
+            .as_ref()
+            .filter(|_| self.is_filter_focused)?;
         let theme = &self.theme;
         let first = suggest.selected.saturating_sub(VISIBLE_ITEMS - 1);
 
@@ -172,36 +221,44 @@ impl Workspace {
                 this.filter_suggest = None;
                 cx.notify();
             }))
-            .children(suggest.items.iter().enumerate().skip(first).take(VISIBLE_ITEMS).map(|(idx, (name, data_type))| {
-                let is_sel = idx == suggest.selected;
-                div()
-                    .id(("filter-suggest-item", idx))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .h(px(22.0))
-                    .px_2()
-                    .rounded_sm()
-                    .text_size(px(12.0))
-                    .text_color(theme.text_primary)
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .cursor_pointer()
-                    .when(is_sel, |d| d.bg(theme.bg_surface_selected))
-                    .hover(|s| s.bg(theme.bg_surface_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.apply_filter_suggest(idx);
-                        cx.notify();
-                    }))
-                    .child(
+            .children(
+                suggest
+                    .items
+                    .iter()
+                    .enumerate()
+                    .skip(first)
+                    .take(VISIBLE_ITEMS)
+                    .map(|(idx, (name, data_type))| {
+                        let is_sel = idx == suggest.selected;
                         div()
-                            .w(px(22.0))
-                            .text_size(px(9.5))
-                            .text_color(rgb(0x58a6ff))
-                            .child(ui_grid::dbeaver_type_badge(*data_type)),
-                    )
-                    .child(name.clone())
-            }));
+                            .id(("filter-suggest-item", idx))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .h(px(22.0))
+                            .px_2()
+                            .rounded_sm()
+                            .text_size(px(12.0))
+                            .text_color(theme.text_primary)
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .cursor_pointer()
+                            .when(is_sel, |d| d.bg(theme.bg_surface_selected))
+                            .hover(|s| s.bg(theme.bg_surface_hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.apply_filter_suggest(idx);
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .w(px(22.0))
+                                    .text_size(px(9.5))
+                                    .text_color(rgb(0x58a6ff))
+                                    .child(ui_grid::dbeaver_type_badge(*data_type)),
+                            )
+                            .child(name.clone())
+                    }),
+            );
 
         Some(
             div()
@@ -219,7 +276,10 @@ mod tests {
     use mem_engine::DataType;
 
     fn cols(names: &[&str]) -> Vec<(String, DataType)> {
-        names.iter().map(|n| (n.to_string(), DataType::Text)).collect()
+        names
+            .iter()
+            .map(|n| (n.to_string(), DataType::Text))
+            .collect()
     }
 
     fn names(items: Vec<(String, DataType)>) -> Vec<String> {
@@ -229,7 +289,10 @@ mod tests {
     #[test]
     fn finds_the_word_at_the_caret() {
         assert_eq!(word_at("sta", 3), Some((0..3, "sta".to_string())));
-        assert_eq!(word_at("id = 1 AND sta", 14), Some((11..14, "sta".to_string())));
+        assert_eq!(
+            word_at("id = 1 AND sta", 14),
+            Some((11..14, "sta".to_string()))
+        );
         // The rest of the word after the caret is replaced too
         assert_eq!(word_at("status = 1", 3), Some((0..6, "sta".to_string())));
         // An opened quote, and its closing one, are part of the word
@@ -241,7 +304,10 @@ mod tests {
     #[test]
     fn prefix_matches_come_before_substring_matches() {
         let columns = cols(&["id", "statusReason", "lastStatus", "statusDetails"]);
-        assert_eq!(names(matching_columns(&columns, "sta", false)), ["statusReason", "statusDetails", "lastStatus"]);
+        assert_eq!(
+            names(matching_columns(&columns, "sta", false)),
+            ["statusReason", "statusDetails", "lastStatus"]
+        );
         assert_eq!(names(matching_columns(&columns, "STA", false)).len(), 3);
         assert!(matching_columns(&columns, "", false).is_empty());
         assert_eq!(matching_columns(&columns, "", true).len(), 4);

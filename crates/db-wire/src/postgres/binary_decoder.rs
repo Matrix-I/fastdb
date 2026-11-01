@@ -4,8 +4,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use mem_engine::DataType;
 use postgres_types::{FromSql, Kind};
-use tokio_postgres::types::Type;
 use tokio_postgres::Row;
+use tokio_postgres::types::Type;
 
 pub fn pg_type_to_data_type(t: &Type) -> DataType {
     match *t {
@@ -92,7 +92,9 @@ fn try_format_pg_value(ty: &Type, raw: &[u8]) -> DecodeResult {
         Type::TIMESTAMP | Type::TIMESTAMPTZ => match i64::from_be_bytes(fixed::<8>(raw)?) {
             i64::MAX => Ok("infinity".to_string()),
             i64::MIN => Ok("-infinity".to_string()),
-            _ if *ty == Type::TIMESTAMP => Ok(chrono::NaiveDateTime::from_sql(ty, raw)?.to_string()),
+            _ if *ty == Type::TIMESTAMP => {
+                Ok(chrono::NaiveDateTime::from_sql(ty, raw)?.to_string())
+            }
             _ => Ok(chrono::DateTime::<chrono::Utc>::from_sql(ty, raw)?.to_string()),
         },
         Type::TIMETZ => format_timetz(raw),
@@ -155,7 +157,9 @@ fn format_numeric(raw: &[u8]) -> DecodeResult {
     let weight = r.i16()? as i32;
     let sign = r.u16()?;
     let dscale = r.u16()? as usize;
-    let digits = (0..ndigits).map(|_| r.i16()).collect::<Result<Vec<_>, _>>()?;
+    let digits = (0..ndigits)
+        .map(|_| r.i16())
+        .collect::<Result<Vec<_>, _>>()?;
 
     match sign {
         0xC000 => return Ok("NaN".to_string()),
@@ -213,7 +217,12 @@ fn format_money(cents: i64) -> String {
 fn format_clock(micros: u64) -> String {
     let secs = micros / 1_000_000;
     let frac = micros % 1_000_000;
-    let mut out = format!("{:02}:{:02}:{:02}", secs / 3600, (secs / 60) % 60, secs % 60);
+    let mut out = format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    );
     if frac > 0 {
         let frac_str = format!("{frac:06}");
         out.push('.');
@@ -247,7 +256,8 @@ fn format_interval(raw: &[u8]) -> DecodeResult {
 
     let mut parts = Vec::new();
     let (years, mons) = (months / 12, months % 12);
-    let plural = |n: i32, one: &str, many: &str| format!("{n} {}", if n.abs() == 1 { one } else { many });
+    let plural =
+        |n: i32, one: &str, many: &str| format!("{n} {}", if n.abs() == 1 { one } else { many });
     if years != 0 {
         parts.push(plural(years, "year", "years"));
     }
@@ -364,7 +374,13 @@ fn format_hex(raw: &[u8]) -> String {
 /// Shows printable UTF-8 as text and anything else as a bytea-style hex literal
 fn format_unknown(raw: &[u8]) -> String {
     match std::str::from_utf8(raw) {
-        Ok(s) if !s.chars().any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r')) => s.to_string(),
+        Ok(s)
+            if !s
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r')) =>
+        {
+            s.to_string()
+        }
         _ => format_hex(raw),
     }
 }
@@ -387,7 +403,9 @@ mod tests {
 
     #[test]
     fn test_numeric_decoding() {
-        let fmt = |w, s, d, digits: &[i16]| format_pg_value(&Type::NUMERIC, &numeric_bytes(w, s, d, digits));
+        let fmt = |w, s, d, digits: &[i16]| {
+            format_pg_value(&Type::NUMERIC, &numeric_bytes(w, s, d, digits))
+        };
 
         assert_eq!(fmt(0, 0x0000, 2, &[123, 4500]), "123.45");
         assert_eq!(fmt(0, 0x4000, 2, &[123, 4500]), "-123.45");
@@ -412,7 +430,10 @@ mod tests {
             buf.extend_from_slice(&months.to_be_bytes());
             format_pg_value(&Type::INTERVAL, &buf)
         };
-        assert_eq!(interval(14_706_789_000, 3, 14), "1 year 2 mons 3 days 04:05:06.789");
+        assert_eq!(
+            interval(14_706_789_000, 3, 14),
+            "1 year 2 mons 3 days 04:05:06.789"
+        );
         assert_eq!(interval(0, 1, 0), "1 day");
         assert_eq!(interval(0, 0, 0), "00:00:00");
         assert_eq!(interval(-3_600_000_000, 0, 0), "-01:00:00");
@@ -421,22 +442,46 @@ mod tests {
         timetz.extend_from_slice(&(-25_200i32).to_be_bytes()); // UTC+07
         assert_eq!(format_pg_value(&Type::TIMETZ, &timetz), "12:34:56+07");
 
-        assert_eq!(format_pg_value(&Type::MONEY, &(-12_345i64).to_be_bytes()), "-123.45");
-        assert_eq!(format_pg_value(&Type::DATE, &i32::MAX.to_be_bytes()), "infinity");
-        assert_eq!(format_pg_value(&Type::TIMESTAMPTZ, &i64::MIN.to_be_bytes()), "-infinity");
+        assert_eq!(
+            format_pg_value(&Type::MONEY, &(-12_345i64).to_be_bytes()),
+            "-123.45"
+        );
+        assert_eq!(
+            format_pg_value(&Type::DATE, &i32::MAX.to_be_bytes()),
+            "infinity"
+        );
+        assert_eq!(
+            format_pg_value(&Type::TIMESTAMPTZ, &i64::MIN.to_be_bytes()),
+            "-infinity"
+        );
     }
 
     #[test]
     fn test_network_and_misc_decoding() {
-        assert_eq!(format_pg_value(&Type::INET, &[2, 32, 0, 4, 192, 168, 1, 10]), "192.168.1.10");
-        assert_eq!(format_pg_value(&Type::CIDR, &[2, 24, 1, 4, 10, 0, 0, 0]), "10.0.0.0/24");
+        assert_eq!(
+            format_pg_value(&Type::INET, &[2, 32, 0, 4, 192, 168, 1, 10]),
+            "192.168.1.10"
+        );
+        assert_eq!(
+            format_pg_value(&Type::CIDR, &[2, 24, 1, 4, 10, 0, 0, 0]),
+            "10.0.0.0/24"
+        );
         let mut v6 = vec![3, 128, 0, 16];
         v6.extend_from_slice(&Ipv6Addr::LOCALHOST.octets());
         assert_eq!(format_pg_value(&Type::INET, &v6), "::1");
-        assert_eq!(format_pg_value(&Type::MACADDR, &[8, 0, 0x2b, 1, 2, 3]), "08:00:2b:01:02:03");
-        assert_eq!(format_pg_value(&Type::OID, &16_384u32.to_be_bytes()), "16384");
+        assert_eq!(
+            format_pg_value(&Type::MACADDR, &[8, 0, 0x2b, 1, 2, 3]),
+            "08:00:2b:01:02:03"
+        );
+        assert_eq!(
+            format_pg_value(&Type::OID, &16_384u32.to_be_bytes()),
+            "16384"
+        );
         assert_eq!(format_pg_value(&Type::CHAR, b"r"), "r");
-        assert_eq!(format_pg_value(&Type::JSONB, b"\x01{\"a\": 1}"), "{\"a\": 1}");
+        assert_eq!(
+            format_pg_value(&Type::JSONB, b"\x01{\"a\": 1}"),
+            "{\"a\": 1}"
+        );
         assert_eq!(format_pg_value(&Type::BYTEA, &[0xde, 0xad]), "\\xdead");
     }
 
@@ -467,7 +512,10 @@ mod tests {
             buf.extend_from_slice(&(s.len() as i32).to_be_bytes());
             buf.extend_from_slice(s.as_bytes());
         }
-        assert_eq!(format_pg_value(&Type::TEXT_ARRAY, &buf), "{{a,\"b c\"},{\"\",x}}");
+        assert_eq!(
+            format_pg_value(&Type::TEXT_ARRAY, &buf),
+            "{{a,\"b c\"},{\"\",x}}"
+        );
 
         let empty = [0i32, 0, Type::INT4.oid() as i32]
             .iter()
@@ -486,7 +534,12 @@ mod tests {
         );
         assert_eq!(format_pg_value(&enum_ty, b"happy"), "happy");
 
-        let opaque = Type::new("opaque".to_string(), 90_002, Kind::Simple, "public".to_string());
+        let opaque = Type::new(
+            "opaque".to_string(),
+            90_002,
+            Kind::Simple,
+            "public".to_string(),
+        );
         assert_eq!(format_pg_value(&opaque, &[0x00, 0xff]), "\\x00ff");
 
         // Malformed payload for a known type falls back instead of failing

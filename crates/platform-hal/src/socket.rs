@@ -14,14 +14,14 @@ pub fn detect_local_unix_socket(kind: DbKind, host: &str, port: u16) -> Option<P
 
     let candidates: Vec<String> = match kind {
         DbKind::Postgres => vec![
-            format!("/tmp/.s.PGSQL.{port}"),                // macOS (Homebrew / Postgres.app)
+            format!("/tmp/.s.PGSQL.{port}"), // macOS (Homebrew / Postgres.app)
             format!("/var/run/postgresql/.s.PGSQL.{port}"), // Linux (Debian/Ubuntu)
-            format!("/run/postgresql/.s.PGSQL.{port}"),     // Linux (Arch/Fedora)
+            format!("/run/postgresql/.s.PGSQL.{port}"), // Linux (Arch/Fedora)
         ],
         DbKind::MySql => vec![
-            "/tmp/mysql.sock".to_string(),                  // macOS
-            "/var/run/mysqld/mysqld.sock".to_string(),      // Linux (Ubuntu/Debian)
-            "/var/lib/mysql/mysql.sock".to_string(),        // Linux (RHEL/Fedora)
+            "/tmp/mysql.sock".to_string(),             // macOS
+            "/var/run/mysqld/mysqld.sock".to_string(), // Linux (Ubuntu/Debian)
+            "/var/lib/mysql/mysql.sock".to_string(),   // Linux (RHEL/Fedora)
         ],
     };
 
@@ -37,8 +37,14 @@ mod tests {
 
     #[test]
     fn test_remote_host_skips_socket() {
-        assert_eq!(detect_local_unix_socket(DbKind::Postgres, "db.example.com", 5432), None);
-        assert_eq!(detect_local_unix_socket(DbKind::MySql, "192.168.1.100", 3306), None);
+        assert_eq!(
+            detect_local_unix_socket(DbKind::Postgres, "db.example.com", 5432),
+            None
+        );
+        assert_eq!(
+            detect_local_unix_socket(DbKind::MySql, "192.168.1.100", 3306),
+            None
+        );
     }
 
     #[test]

@@ -16,23 +16,66 @@ pub struct CompletionItem {
 }
 
 const SQL_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "ON",
-    "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT INTO", "VALUES",
-    "UPDATE", "SET", "DELETE FROM", "CREATE TABLE", "DROP TABLE", "ALTER TABLE",
-    "AS", "DISTINCT", "AND", "OR", "NOT", "IN", "IS NULL", "IS NOT NULL",
-    "UNION ALL", "UNION", "EXISTS", "BETWEEN", "CASE", "WHEN", "THEN", "ELSE", "END",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "JOIN",
+    "INNER JOIN",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "ON",
+    "GROUP BY",
+    "ORDER BY",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "INSERT INTO",
+    "VALUES",
+    "UPDATE",
+    "SET",
+    "DELETE FROM",
+    "CREATE TABLE",
+    "DROP TABLE",
+    "ALTER TABLE",
+    "AS",
+    "DISTINCT",
+    "AND",
+    "OR",
+    "NOT",
+    "IN",
+    "IS NULL",
+    "IS NOT NULL",
+    "UNION ALL",
+    "UNION",
+    "EXISTS",
+    "BETWEEN",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
 ];
 
 const SQL_FUNCTIONS: &[&str] = &[
-    "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "NOW", "LOWER",
-    "UPPER", "TRIM", "LENGTH", "SUBSTRING", "CONCAT", "ROUND", "DATE_TRUNC",
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "COALESCE",
+    "NULLIF",
+    "NOW",
+    "LOWER",
+    "UPPER",
+    "TRIM",
+    "LENGTH",
+    "SUBSTRING",
+    "CONCAT",
+    "ROUND",
+    "DATE_TRUNC",
 ];
 
-pub fn get_completions(
-    query: &str,
-    cursor_pos: usize,
-    cache: &SchemaCache,
-) -> Vec<CompletionItem> {
+pub fn get_completions(query: &str, cursor_pos: usize, cache: &SchemaCache) -> Vec<CompletionItem> {
     let prefix = &query[..cursor_pos.min(query.len())];
     let mut items = Vec::new();
 
@@ -40,12 +83,14 @@ pub fn get_completions(
     if let Some(last_dot_pos) = prefix.rfind('.') {
         let after_dot = &prefix[last_dot_pos + 1..];
         // A quoted name ("apiClient" or `apiClient`) loses its closing quote here
-        let before_dot = prefix[..last_dot_pos].trim_end().trim_end_matches(['"', '`']);
+        let before_dot = prefix[..last_dot_pos]
+            .trim_end()
+            .trim_end_matches(['"', '`']);
 
         // Extract identifier before dot
         let table_ident = before_dot
             .split(|c: char| !c.is_alphanumeric() && c != '_')
-            .last()
+            .next_back()
             .unwrap_or("");
 
         if !table_ident.is_empty() {
@@ -68,7 +113,7 @@ pub fn get_completions(
     // Extract current word prefix
     let current_word = prefix
         .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .last()
+        .next_back()
         .unwrap_or("")
         .to_uppercase();
 
@@ -79,15 +124,13 @@ pub fn get_completions(
         || trimmed_upper.contains("FROM ")
         || trimmed_upper.contains("JOIN ");
 
-    if is_after_from_or_join {
-        if let Ok(tables) = cache.search_tables(&current_word.to_lowercase()) {
-            for tbl in tables {
-                items.push(CompletionItem {
-                    label: tbl,
-                    detail: "Table".to_string(),
-                    kind: CompletionKind::Table,
-                });
-            }
+    if is_after_from_or_join && let Ok(tables) = cache.search_tables(&current_word.to_lowercase()) {
+        for tbl in tables {
+            items.push(CompletionItem {
+                label: tbl,
+                detail: "Table".to_string(),
+                kind: CompletionKind::Table,
+            });
         }
     }
 
@@ -114,15 +157,14 @@ pub fn get_completions(
     }
 
     // Suggest general table names
-    if !is_after_from_or_join {
-        if let Ok(tables) = cache.search_tables(&current_word.to_lowercase()) {
-            for tbl in tables {
-                items.push(CompletionItem {
-                    label: tbl,
-                    detail: "Table".to_string(),
-                    kind: CompletionKind::Table,
-                });
-            }
+    if !is_after_from_or_join && let Ok(tables) = cache.search_tables(&current_word.to_lowercase())
+    {
+        for tbl in tables {
+            items.push(CompletionItem {
+                label: tbl,
+                detail: "Table".to_string(),
+                kind: CompletionKind::Table,
+            });
         }
     }
 
@@ -136,8 +178,12 @@ mod tests {
     #[test]
     fn test_completion_keywords_and_tables() {
         let cache = SchemaCache::new().unwrap();
-        cache.add_table("public", "customers", "BASE TABLE").unwrap();
-        cache.add_column("public", "customers", "email", "varchar", false).unwrap();
+        cache
+            .add_table("public", "customers", "BASE TABLE")
+            .unwrap();
+        cache
+            .add_column("public", "customers", "email", "varchar", false)
+            .unwrap();
 
         // 1. Keyword completion
         let res = get_completions("SEL", 3, &cache);
@@ -155,21 +201,36 @@ mod tests {
     #[test]
     fn test_column_completion_through_a_table_alias() {
         let cache = SchemaCache::new().unwrap();
-        cache.add_table("public", "featureFlag", "BASE TABLE").unwrap();
-        cache.add_column("public", "featureFlag", "flagName", "varchar", false).unwrap();
+        cache
+            .add_table("public", "featureFlag", "BASE TABLE")
+            .unwrap();
+        cache
+            .add_column("public", "featureFlag", "flagName", "varchar", false)
+            .unwrap();
 
         let sql = "SELECT * FROM \"featureFlag\" f WHERE f.";
         let res = get_completions(sql, sql.len(), &cache);
-        assert!(res.iter().any(|item| item.label == "flagName" && item.kind == CompletionKind::Column));
+        assert!(
+            res.iter()
+                .any(|item| item.label == "flagName" && item.kind == CompletionKind::Column)
+        );
     }
 
     #[test]
     fn test_column_completion_after_a_quoted_table() {
         let cache = SchemaCache::new().unwrap();
-        cache.add_table("public", "apiClient", "BASE TABLE").unwrap();
-        cache.add_column("public", "apiClient", "clientId", "varchar", false).unwrap();
+        cache
+            .add_table("public", "apiClient", "BASE TABLE")
+            .unwrap();
+        cache
+            .add_column("public", "apiClient", "clientId", "varchar", false)
+            .unwrap();
 
-        for sql in ["SELECT \"apiClient\".", "SELECT `apiClient`.", "SELECT \"apiClient\".cli"] {
+        for sql in [
+            "SELECT \"apiClient\".",
+            "SELECT `apiClient`.",
+            "SELECT \"apiClient\".cli",
+        ] {
             let res = get_completions(sql, sql.len(), &cache);
             assert!(res.iter().any(|item| item.label == "clientId"), "{sql}");
         }

@@ -156,14 +156,14 @@ impl SqlParser {
                 _ => None,
             };
 
-            if let Some(tk) = token_kind {
-                if start < end {
-                    spans.push(HighlightSpan {
-                        start_byte: start,
-                        end_byte: end,
-                        kind: tk,
-                    });
-                }
+            if let Some(tk) = token_kind
+                && start < end
+            {
+                spans.push(HighlightSpan {
+                    start_byte: start,
+                    end_byte: end,
+                    kind: tk,
+                });
             }
 
             if cursor.goto_first_child() {

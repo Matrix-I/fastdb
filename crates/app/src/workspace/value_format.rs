@@ -15,7 +15,12 @@ pub enum ValueFormat {
 }
 
 impl ValueFormat {
-    pub const ALL: [ValueFormat; 4] = [ValueFormat::Binary, ValueFormat::Json, ValueFormat::Text, ValueFormat::Xml];
+    pub const ALL: [ValueFormat; 4] = [
+        ValueFormat::Binary,
+        ValueFormat::Json,
+        ValueFormat::Text,
+        ValueFormat::Xml,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -50,7 +55,10 @@ pub fn detect_format(bytes: &[u8], data_type: DataType) -> ValueFormat {
         DataType::Json => return ValueFormat::Json,
         DataType::Bytea => {
             return match std::str::from_utf8(bytes) {
-                Ok(s) if !is_pg_hex_literal(s) && !s.chars().any(|c| c.is_control() && !c.is_whitespace()) => {
+                Ok(s)
+                    if !is_pg_hex_literal(s)
+                        && !s.chars().any(|c| c.is_control() && !c.is_whitespace()) =>
+                {
                     detect_text_format(s)
                 }
                 _ => ValueFormat::Binary,
@@ -66,10 +74,10 @@ pub fn detect_format(bytes: &[u8], data_type: DataType) -> ValueFormat {
 
 fn detect_text_format(s: &str) -> ValueFormat {
     let t = s.trim();
-    if (t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')) {
-        if serde_json::from_str::<serde_json::Value>(t).is_ok() {
-            return ValueFormat::Json;
-        }
+    if ((t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')))
+        && serde_json::from_str::<serde_json::Value>(t).is_ok()
+    {
+        return ValueFormat::Json;
     }
     if t.starts_with('<') && t.ends_with('>') && t.len() > 2 {
         return ValueFormat::Xml;
@@ -78,41 +86,56 @@ fn detect_text_format(s: &str) -> ValueFormat {
 }
 
 /// Renders `bytes` in `format`; `auto_format` pretty-prints JSON and XML
-pub fn format_value(bytes: &[u8], data_type: DataType, format: ValueFormat, auto_format: bool) -> FormattedValue {
+pub fn format_value(
+    bytes: &[u8],
+    data_type: DataType,
+    format: ValueFormat,
+    auto_format: bool,
+) -> FormattedValue {
     let text = || String::from_utf8_lossy(bytes).into_owned();
     let (body, error) = match format {
         ValueFormat::Text => (text(), None),
         ValueFormat::Binary => (hex_dump(&binary_bytes(bytes, data_type)), None),
-        ValueFormat::Json if auto_format => match serde_json::from_slice::<serde_json::Value>(bytes) {
-            Ok(v) => (serde_json::to_string_pretty(&v).unwrap_or_else(|_| text()), None),
-            Err(e) => (text(), Some(format!("Invalid JSON: {e}"))),
-        },
+        ValueFormat::Json if auto_format => {
+            match serde_json::from_slice::<serde_json::Value>(bytes) {
+                Ok(v) => (
+                    serde_json::to_string_pretty(&v).unwrap_or_else(|_| text()),
+                    None,
+                ),
+                Err(e) => (text(), Some(format!("Invalid JSON: {e}"))),
+            }
+        }
         ValueFormat::Xml if auto_format => match pretty_xml(&text()) {
             Ok(s) => (s, None),
             Err(e) => (text(), Some(format!("Invalid XML: {e}"))),
         },
         ValueFormat::Json | ValueFormat::Xml => (text(), None),
     };
-    FormattedValue { lines: body.lines().map(str::to_owned).collect(), error }
+    FormattedValue {
+        lines: body.lines().map(str::to_owned).collect(),
+        error,
+    }
 }
 
 /// Postgres sends bytea as a `\x`-prefixed hex literal; other drivers send the raw bytes
 fn binary_bytes(bytes: &[u8], data_type: DataType) -> Vec<u8> {
-    if data_type == DataType::Bytea {
-        if let Ok(s) = std::str::from_utf8(bytes) {
-            if is_pg_hex_literal(s) {
-                return (2..s.len())
-                    .step_by(2)
-                    .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-                    .collect();
-            }
-        }
+    if data_type == DataType::Bytea
+        && let Ok(s) = std::str::from_utf8(bytes)
+        && is_pg_hex_literal(s)
+    {
+        return (2..s.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+            .collect();
     }
     bytes.to_vec()
 }
 
 fn is_pg_hex_literal(s: &str) -> bool {
-    s.len() >= 2 && s.starts_with("\\x") && s.len() % 2 == 0 && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
+    s.len() >= 2
+        && s.starts_with("\\x")
+        && s.len().is_multiple_of(2)
+        && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Classic `offset  hex bytes  |ascii|` dump
@@ -133,7 +156,13 @@ pub fn hex_dump(bytes: &[u8]) -> String {
             }
         }
         out.push_str(" |");
-        out.extend(chunk.iter().map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' }));
+        out.extend(chunk.iter().map(|&b| {
+            if b.is_ascii_graphic() || b == b' ' {
+                b as char
+            } else {
+                '.'
+            }
+        }));
         out.push('|');
     }
     out
@@ -151,19 +180,20 @@ pub fn pretty_xml(input: &str) -> Result<String, String> {
         match tok {
             XmlToken::Open(name, raw) => {
                 // <a>text</a> collapses onto a single line
-                if let (Some(XmlToken::Text(t)), Some(XmlToken::Close(close, close_raw))) = (tokens.get(i + 1), tokens.get(i + 2)) {
-                    if close == name {
-                        push_line(&mut out, depth, &format!("{raw}{t}{close_raw}"));
-                        i += 3;
-                        continue;
-                    }
+                if let (Some(XmlToken::Text(t)), Some(XmlToken::Close(close, close_raw))) =
+                    (tokens.get(i + 1), tokens.get(i + 2))
+                    && close == name
+                {
+                    push_line(&mut out, depth, &format!("{raw}{t}{close_raw}"));
+                    i += 3;
+                    continue;
                 }
-                if let Some(XmlToken::Close(close, close_raw)) = tokens.get(i + 1) {
-                    if close == name {
-                        push_line(&mut out, depth, &format!("{raw}{close_raw}"));
-                        i += 2;
-                        continue;
-                    }
+                if let Some(XmlToken::Close(close, close_raw)) = tokens.get(i + 1)
+                    && close == name
+                {
+                    push_line(&mut out, depth, &format!("{raw}{close_raw}"));
+                    i += 2;
+                    continue;
                 }
                 push_line(&mut out, depth, raw);
                 stack.push(name.clone());
@@ -273,19 +303,49 @@ mod tests {
 
     #[test]
     fn detects_format_from_content_and_type() {
-        assert_eq!(detect_format(br#"[{"a":1}]"#, DataType::Text), ValueFormat::Json);
-        assert_eq!(detect_format(b"{not json}", DataType::Text), ValueFormat::Text);
-        assert_eq!(detect_format(b"<a><b/></a>", DataType::Varchar), ValueFormat::Xml);
+        assert_eq!(
+            detect_format(br#"[{"a":1}]"#, DataType::Text),
+            ValueFormat::Json
+        );
+        assert_eq!(
+            detect_format(b"{not json}", DataType::Text),
+            ValueFormat::Text
+        );
+        assert_eq!(
+            detect_format(b"<a><b/></a>", DataType::Varchar),
+            ValueFormat::Xml
+        );
         assert_eq!(detect_format(b"hello", DataType::Text), ValueFormat::Text);
         assert_eq!(detect_format(b"broken", DataType::Json), ValueFormat::Json);
-        assert_eq!(detect_format(b"\\xdead", DataType::Bytea), ValueFormat::Binary);
-        assert_eq!(detect_format(&[0xff, 0x00], DataType::Unknown), ValueFormat::Binary);
+        assert_eq!(
+            detect_format(b"\\xdead", DataType::Bytea),
+            ValueFormat::Binary
+        );
+        assert_eq!(
+            detect_format(&[0xff, 0x00], DataType::Unknown),
+            ValueFormat::Binary
+        );
     }
 
     #[test]
     fn pretty_prints_json_keeping_key_order() {
-        let v = format_value(br#"{"z":1,"a":{"de":"Schweiz"}}"#, DataType::Json, ValueFormat::Json, true);
-        assert_eq!(v.lines, vec!["{", "  \"z\": 1,", "  \"a\": {", "    \"de\": \"Schweiz\"", "  }", "}"]);
+        let v = format_value(
+            br#"{"z":1,"a":{"de":"Schweiz"}}"#,
+            DataType::Json,
+            ValueFormat::Json,
+            true,
+        );
+        assert_eq!(
+            v.lines,
+            vec![
+                "{",
+                "  \"z\": 1,",
+                "  \"a\": {",
+                "    \"de\": \"Schweiz\"",
+                "  }",
+                "}"
+            ]
+        );
         assert_eq!(v.error, None);
     }
 
@@ -315,7 +375,12 @@ mod tests {
 
     #[test]
     fn hex_dumps_postgres_bytea_literal() {
-        let v = format_value(b"\\x48656c6c6f00", DataType::Bytea, ValueFormat::Binary, true);
+        let v = format_value(
+            b"\\x48656c6c6f00",
+            DataType::Bytea,
+            ValueFormat::Binary,
+            true,
+        );
         assert_eq!(
             v.lines,
             vec!["00000000  48 65 6c 6c 6f 00                                 |Hello.|"]

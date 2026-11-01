@@ -19,7 +19,12 @@ enum ColumnMenuAction {
 }
 
 impl Workspace {
-    pub(super) fn open_column_menu(&mut self, tab_idx: usize, col_idx: usize, position: Point<Pixels>) {
+    pub(super) fn open_column_menu(
+        &mut self,
+        tab_idx: usize,
+        col_idx: usize,
+        position: Point<Pixels>,
+    ) {
         let column = self
             .tabs
             .get(tab_idx)
@@ -27,11 +32,20 @@ impl Workspace {
             .and_then(|p| p.columns.get(col_idx))
             .map(|c| c.name.clone());
         if let Some(column) = column {
-            self.column_menu = Some(ColumnMenu { tab_idx, column, position });
+            self.column_menu = Some(ColumnMenu {
+                tab_idx,
+                column,
+                position,
+            });
         }
     }
 
-    fn run_column_menu_action(&mut self, action: ColumnMenuAction, menu: &ColumnMenu, cx: &mut Context<Self>) {
+    fn run_column_menu_action(
+        &mut self,
+        action: ColumnMenuAction,
+        menu: &ColumnMenu,
+        cx: &mut Context<Self>,
+    ) {
         let Some(tab) = self.tabs.get_mut(menu.tab_idx) else {
             return;
         };
@@ -51,13 +65,24 @@ impl Workspace {
         self.run_active_query(cx);
     }
 
-    pub(super) fn render_column_menu(&mut self, menu: ColumnMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_column_menu(
+        &mut self,
+        menu: ColumnMenu,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let tab = self.tabs.get(menu.tab_idx);
         let current = tab.and_then(|t| t.grid.ordering.clone());
-        let has_filter_or_order = tab.is_some_and(|t| t.grid.ordering.is_some() || !t.filter_sql.trim().is_empty());
+        let has_filter_or_order =
+            tab.is_some_and(|t| t.grid.ordering.is_some() || !t.filter_sql.trim().is_empty());
 
-        let item = |id: &'static str, icon: &'static str, label: String, checked: bool, enabled: bool, action: ColumnMenuAction, cx: &mut Context<Self>| {
+        let item = |id: &'static str,
+                    icon: &'static str,
+                    label: String,
+                    checked: bool,
+                    enabled: bool,
+                    action: ColumnMenuAction,
+                    cx: &mut Context<Self>| {
             let mut row = div()
                 .id(id)
                 .flex()
@@ -67,13 +92,21 @@ impl Workspace {
                 .px_2()
                 .rounded_sm()
                 .text_size(px(12.0))
-                .text_color(if enabled { theme.text_primary } else { theme.text_muted })
+                .text_color(if enabled {
+                    theme.text_primary
+                } else {
+                    theme.text_muted
+                })
                 .child(
                     div()
                         .w(px(14.0))
                         .flex()
                         .justify_center()
-                        .text_color(if enabled { rgb(0x58a6ff) } else { theme.text_muted })
+                        .text_color(if enabled {
+                            rgb(0x58a6ff)
+                        } else {
+                            theme.text_muted
+                        })
                         .child(icon),
                 )
                 .child(div().flex_1().child(label))
@@ -93,7 +126,9 @@ impl Workspace {
         };
         let separator = || div().h(px(1.0)).my_1().mx_1().bg(theme.border);
         let is_current = |descending: bool| {
-            current.as_ref().is_some_and(|o| o.column == menu.column && o.descending == descending)
+            current
+                .as_ref()
+                .is_some_and(|o| o.column == menu.column && o.descending == descending)
         };
 
         let panel = div()
@@ -141,6 +176,12 @@ impl Workspace {
                 cx,
             ));
 
-        deferred(anchored().position(menu.position).snap_to_window().child(panel)).with_priority(1)
+        deferred(
+            anchored()
+                .position(menu.position)
+                .snap_to_window()
+                .child(panel),
+        )
+        .with_priority(1)
     }
 }

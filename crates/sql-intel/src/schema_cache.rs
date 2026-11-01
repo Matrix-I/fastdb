@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Mutex;
 
 pub struct SchemaCache {
@@ -120,9 +120,15 @@ mod tests {
         cache.add_table("public", "users", "BASE TABLE").unwrap();
         cache.add_table("public", "orders", "BASE TABLE").unwrap();
 
-        cache.add_column("public", "users", "id", "int", true).unwrap();
-        cache.add_column("public", "users", "email", "varchar", false).unwrap();
-        cache.add_column("public", "orders", "total", "numeric", false).unwrap();
+        cache
+            .add_column("public", "users", "id", "int", true)
+            .unwrap();
+        cache
+            .add_column("public", "users", "email", "varchar", false)
+            .unwrap();
+        cache
+            .add_column("public", "orders", "total", "numeric", false)
+            .unwrap();
 
         let tables = cache.search_tables("us").unwrap();
         assert_eq!(tables, vec!["users"]);

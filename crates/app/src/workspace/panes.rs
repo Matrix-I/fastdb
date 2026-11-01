@@ -5,8 +5,8 @@
 //! notifies. The grid scrolls by notifying only the table pane: its ancestors are drawn
 //! again, but the navigator and top bar panes are not dirty and come from the last frame.
 
-use super::*;
 use super::top_bar::TOP_BAR_HEIGHT;
+use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PaneKind {
@@ -61,16 +61,28 @@ impl Panes {
     }
 
     pub fn top_bar(&self) -> AnyView {
-        AnyView::from(self.top_bar.clone()).cached(StyleRefinement::default().flex_none().w_full().h(px(TOP_BAR_HEIGHT)))
+        AnyView::from(self.top_bar.clone()).cached(
+            StyleRefinement::default()
+                .flex_none()
+                .w_full()
+                .h(px(TOP_BAR_HEIGHT)),
+        )
     }
 
     pub fn navigator(&self, width: f32) -> AnyView {
-        AnyView::from(self.navigator.clone()).cached(StyleRefinement::default().flex_none().w(px(width)).h_full())
+        AnyView::from(self.navigator.clone())
+            .cached(StyleRefinement::default().flex_none().w(px(width)).h_full())
     }
 
     /// Kept from growing to the grid's full content width, which would leave the grid
     /// nothing to scroll horizontally
     pub fn table_view(&self) -> AnyView {
-        AnyView::from(self.table_view.clone()).cached(StyleRefinement::default().flex_1().min_w_0().h_full().overflow_hidden())
+        AnyView::from(self.table_view.clone()).cached(
+            StyleRefinement::default()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_hidden(),
+        )
     }
 }

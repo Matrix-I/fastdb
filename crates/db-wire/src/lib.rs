@@ -1,21 +1,21 @@
-use std::sync::Arc;
 use anyhow::Result;
+use std::sync::Arc;
 
-pub mod traits;
-mod stream;
-pub mod ssh_tunnel;
 pub mod export;
-pub mod postgres;
 pub mod mysql;
-pub mod sqlite;
 pub mod odbc;
+pub mod postgres;
+pub mod sqlite;
+pub mod ssh_tunnel;
+mod stream;
+pub mod traits;
 
-pub use traits::*;
-pub use ssh_tunnel::*;
 pub use export::*;
-pub use postgres::*;
 pub use mysql::*;
+pub use postgres::*;
 pub use sqlite::*;
+pub use ssh_tunnel::*;
+pub use traits::*;
 
 pub fn get_runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
@@ -54,7 +54,9 @@ pub fn create_driver(config: ConnectionConfig) -> Result<Arc<dyn DatabaseDriver>
     match config.driver {
         DbDriverKind::Postgres => Ok(Arc::new(PostgresDriver::new(config))),
         DbDriverKind::MySql | DbDriverKind::MariaDb => Ok(Arc::new(MySqlDriver::new(config))),
-        DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => Ok(Arc::new(odbc::OdbcDriver::new(config))),
+        DbDriverKind::SqlServer | DbDriverKind::Oracle | DbDriverKind::Db2 => {
+            Ok(Arc::new(odbc::OdbcDriver::new(config)))
+        }
         DbDriverKind::Sqlite => Ok(Arc::new(SqliteDriver::new(config)?)),
     }
 }
@@ -91,7 +93,11 @@ mod tests {
             request_tx.send(reply_tx).unwrap();
             tokio::time::timeout(Duration::from_secs(2), reply_rx.recv_async()).await
         });
-        assert_eq!(reply.unwrap().unwrap(), 42, "background task died with the caller's runtime");
+        assert_eq!(
+            reply.unwrap().unwrap(),
+            42,
+            "background task died with the caller's runtime"
+        );
     }
 
     #[test]
@@ -117,6 +123,9 @@ mod tests {
         assert!(outcome.is_err());
 
         std::thread::sleep(Duration::from_millis(400));
-        assert!(!finished.load(Ordering::SeqCst), "abandoned task kept running");
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "abandoned task kept running"
+        );
     }
 }
