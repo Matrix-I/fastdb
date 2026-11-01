@@ -22,14 +22,14 @@ This plan adapts the release process used by
 
 FastDB already has most of the pieces, but they need work before a public build:
 
-- `ci/build-macos.sh` builds `FastDB.app` and a `.dmg` with an ad-hoc signature and app icon. The DMG still has **no `/Applications` symlink**, and the version is hard-coded to `0.1.0`.
+- `ci/build-macos.sh` builds `FastDB.app` and a `.dmg` with an ad-hoc signature, app icon and `/Applications` symlink. The version is still hard-coded to `0.1.0`; ZIP and checksum generation remain to be added to the script.
 - `ci/build-linux.sh` builds a `.deb` and an AppImage, also with a hard-coded version. It falls back to a host build, so running it on macOS silently produces a macOS binary inside a `.deb`.
 - `.github/workflows/ci.yml` builds and tests on macOS and Linux but publishes nothing.
 - The workspace `Cargo.toml` has release tuning with thin LTO, one codegen unit, abort-on-panic and stripped symbols.
 - `/dist` is in `.gitignore`.
-- No tags exist in the local checkout.
+- The local checkout contains tag `v0.1.0`.
 
-Status checked against repository code on 2026-11-01; runtime smoke tests and published release state have not been verified.
+Status checked against repository code on 2026-11-02; runtime smoke tests and published release state have not been verified.
 
 ### Release blockers found while reviewing
 
@@ -64,12 +64,13 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
   ```
   and stamp it into `Info.plist` with `plutil -replace CFBundleShortVersionString -string "$VERSION"`.
 - [x] `ci/build-macos.sh`: sign ad-hoc (`codesign --force --deep --sign -`).
-- [ ] `ci/build-macos.sh`: stage the DMG with an `Applications` symlink, also produce `FastDB-$VERSION-macos-arm64.zip`, and write `SHA256SUMS.txt`.
+- [x] `ci/build-macos.sh`: stage the DMG with an `Applications` symlink.
+- [ ] `ci/build-macos.sh`: produce `FastDB-$VERSION-macos-arm64.zip` and write `SHA256SUMS.txt`.
 - [ ] `ci/build-linux.sh`: fail instead of falling back when not on Linux; add `fastdb-$VERSION-linux-x86_64.tar.gz` next to the `.deb` and AppImage.
 - [x] Add `/dist` to `.gitignore`.
 - [ ] Add a `.github/workflows/release.yml` triggered on `v*` tags that runs the Linux script on `ubuntu-latest` (same apt packages as `linux-app` in `ci.yml`) and attaches its artifacts to the draft release. macOS stays a local build for now, as in laplace, since there is no signing certificate to put in CI.
-- [ ] Add a `LICENSE` file matching the workspace MIT declaration.
-- [ ] README: add an Installation section with the `xattr -dr com.apple.quarantine /Applications/FastDB.app` notice and links to `releases/latest`.
+- [x] Add a `LICENSE` file matching the workspace MIT declaration.
+- [x] README: add macOS preview installation instructions with the `xattr -dr com.apple.quarantine /Applications/FastDB.app` notice and a link to `releases/latest`.
 
 ### 3.2 Per-release checklist
 
