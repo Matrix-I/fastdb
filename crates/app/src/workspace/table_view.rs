@@ -491,7 +491,9 @@ impl Workspace {
             group_thousands(total_rows),
             if has_more_rows { "+" } else { "" }
         );
-        let summary = if is_appending {
+        let summary = if let Some(message) = &tab.export.message {
+            message.clone()
+        } else if is_appending {
             "Fetching next rows…".to_string()
         } else {
             fetch_summary.unwrap_or_default()
@@ -508,6 +510,7 @@ impl Workspace {
             .text_size(px(11.0))
             .text_color(theme.text_muted)
             .child(self.render_edit_toolbar(cx))
+            .child(self.render_export_toolbar(tab_idx, cx))
             .child(
                 div()
                     .id("fetch-size-input-box")

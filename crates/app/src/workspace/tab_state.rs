@@ -50,6 +50,7 @@ pub struct TabState {
     pub(super) show_history: bool,
     pub(super) query_history: Arc<Vec<String>>,
     pub(super) file_busy: bool,
+    pub(super) export: super::export::ExportState,
 }
 
 /// Inactive results own their grid, pager and fetch state; switching swaps the complete
@@ -267,6 +268,7 @@ impl TabState {
             show_history: false,
             query_history: Arc::new(Vec::new()),
             file_busy: false,
+            export: Default::default(),
         }
     }
 

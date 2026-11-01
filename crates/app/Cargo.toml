@@ -29,6 +29,4 @@ serde_json = { version = "1.0", features = ["preserve_order"] }
 futures.workspace = true
 semver = "1.0"
 reqwest = { package = "zed-reqwest", version = "=0.12.15-zed", default-features = false, features = ["rustls-tls-native-roots", "json", "stream"] }
-
-[dev-dependencies]
 tempfile = "3.17"

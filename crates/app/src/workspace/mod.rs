@@ -19,6 +19,7 @@ mod data_edit;
 mod data_panel;
 mod ddl;
 mod diagram_panel;
+mod export;
 mod fetch_plan;
 mod filter_suggest;
 mod keyboard;

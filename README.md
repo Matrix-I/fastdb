@@ -55,6 +55,7 @@ What exists today that these targets build on: a paged result store with an LRU 
   - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit. The vertical scrollbar follows the actual grid bounds and reaches the bottom with the last row.
   - Cell/range selection and clipboard copy as TSV.
   - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Save generates SQL and applies the changes in one transaction.
+  - **Export CSV / Export SQL** in the result footer saves all currently loaded rows from table or script results through a native save dialog. Fetch more rows before exporting if needed. Save or cancel staged edits first. Export runs in the background with status/errors in the footer; an existing destination is replaced only after the complete file is ready. CSV includes column headers, with NULL written as an empty field. SQL writes one INSERT per row with provider-specific quoting, using the table's schema/name or `query_result` for script results (rename that target before importing). Values use the result's text representation; this is a data export, not a schema or binary-type backup.
 - **Properties**: a scrollable detail pane with visible horizontal/vertical scrollbars for every section; stable column widths and expanding row heights keep long metadata readable without overlapping adjacent rows. Columns (type, nullability, default, collation, PK), constraints, indexes, and a partial DDL preview from available native column metadata. PostgreSQL also shows native type precision/length, column comments, owner, OID, effective tablespace, table comment, RLS flags, persistence, partition key, estimated rows, table/index/total bytes and vacuum/analyze timestamps. Index methods, ordered expressions/INCLUDE columns, uniqueness, validity, predicates and full constraint/foreign-key definitions come from PostgreSQL catalogs. Metadata refreshes with the connection's schema refresh; unsupported or unknown values remain unavailable.
 - **Diagram**: a simple entity box listing the table's columns.
 
@@ -123,7 +124,6 @@ These are goals of the project, but they are not available in the app today:
 
 - **Advanced script execution.** Pinned sessions/explicit transaction scripts and vendor procedural/batch syntax are not supported by Run script yet.
 - **Additional grid copy formats.** TSV copy is wired to the clipboard; CSV and SQL `INSERT` copy options are not available in the UI.
-- **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
 - **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. The DDL tab remains a partial preview, not a complete schema dump. The status bar's "120 FPS" label is static text.
 - **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
@@ -177,7 +177,7 @@ flowchart TD
 | `app` | binary | Window, workspace UI, connection management, query orchestration | Used |
 | `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used |
 | `mem-engine` | library | Slotted pages, LRU pager, LZ4 disk spill | Used |
-| `db-wire` | library | Drivers, streaming, cancellation, CSV/SQL export, SSH (stub) | Used (export and SSH unused) |
+| `db-wire` | library | Drivers, streaming, cancellation, CSV/SQL export, SSH (stub) | Used (SSH unused) |
 | `sql-intel` | library | Tree-sitter SQL parsing, schema cache, completion | Used |
 | `ui-core` | library | Theme and shared actions | Used |
 | `ui-editor` | library | Rope buffer and SQL editor view | Used |
