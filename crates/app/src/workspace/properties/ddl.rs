@@ -10,12 +10,22 @@ impl TableProperties {
     ) -> AnyElement {
         let ddl_code = self.ddl.clone();
         let ddl_copy = ddl_code.clone();
+        // Reserve the intrinsic width of the monospaced lines inside the shared viewport.
+        let code_width = ddl_code
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0) as f32
+            * 7.3
+            + 76.0;
 
         let ddl_view = div()
             .flex()
             .flex_col()
-            .flex_1()
-            .h_full()
+            .flex_shrink_0()
+            .min_w_full()
+            .w(px(code_width))
+            .whitespace_nowrap()
             .bg(theme.bg_editor)
             .child(
                 div()
@@ -23,6 +33,7 @@ impl TableProperties {
                     .items_center()
                     .justify_between()
                     .h(px(28.0))
+                    .flex_shrink_0()
                     .px_3()
                     .bg(theme.bg_surface)
                     .border_b_1()
@@ -67,15 +78,13 @@ impl TableProperties {
             .child(
                 div()
                     .flex()
-                    .flex_1()
+                    .flex_shrink_0()
                     .p_3()
                     .text_size(px(12.0))
                     .line_height(px(18.0))
                     .font_family(".AppleSystemUIFontMonospaced, Menlo, monospace")
                     .text_color(rgb(0x9cdcfe))
                     .id("props-ddl-code-scroll")
-                    .overflow_y_scroll()
-                    .overflow_x_scroll()
                     .child(div().flex().flex_col().gap_0p5().children(
                         ddl_code.lines().enumerate().map(|(idx, line)| {
                             div()
@@ -85,6 +94,7 @@ impl TableProperties {
                                 .child(
                                     div()
                                         .w(px(28.0))
+                                        .flex_shrink_0()
                                         .text_color(theme.text_muted)
                                         .text_size(px(11.0))
                                         .child(format!("{}", idx + 1)),

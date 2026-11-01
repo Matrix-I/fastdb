@@ -14,6 +14,7 @@ impl Workspace {
         let schema_name_opt = tab.schema_name.clone();
         let active_property_sec = tab.active_property_section;
         let is_header_collapsed = tab.properties_header_collapsed;
+        let scroll = tab.properties_scroll.clone();
         let schema = schema_name_opt.unwrap_or_default();
         let table = table_name_opt.unwrap_or_default();
         let model = self
@@ -38,6 +39,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .flex_1()
+            .min_w_0()
+            .min_h_0()
             .h_full()
             .overflow_hidden()
             .bg(theme.bg_editor);
@@ -54,6 +57,7 @@ impl Workspace {
             .items_center()
             .justify_center()
             .h(px(9.0))
+            .flex_shrink_0()
             .bg(theme.bg_surface)
             .border_b_1()
             .border_color(theme.border)
@@ -84,7 +88,7 @@ impl Workspace {
         prop_container = prop_container.child(splitter_bar);
 
         // 3. Bottom Master-Detail Layout
-        let mut master_detail = div().flex().flex_1().overflow_hidden();
+        let mut master_detail = div().flex().flex_1().min_h_0().min_w_0().overflow_hidden();
 
         // Left Navigation Categories
         let categories = [
@@ -142,6 +146,7 @@ impl Workspace {
 
         let mut left_nav = div()
             .w(px(145.0))
+            .flex_shrink_0()
             .h_full()
             .flex()
             .flex_col()
@@ -160,6 +165,7 @@ impl Workspace {
                     .items_center()
                     .gap_1p5()
                     .h(px(22.0))
+                    .flex_shrink_0()
                     .px_2()
                     .cursor_pointer()
                     .bg(if is_selected {
@@ -171,6 +177,7 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
                             t.active_property_section = sec;
+                            t.properties_scroll.set_offset(point(px(0.0), px(0.0)));
                             cx.notify();
                         }
                     }))
@@ -197,11 +204,14 @@ impl Workspace {
 
         // Right Detail Content
         let mut right_content = div()
+            .id(("props-detail-scroll", tab.id))
             .flex_1()
-            .h_full()
+            .min_w_0()
+            .min_h_0()
             .flex()
             .flex_col()
-            .overflow_hidden()
+            .overflow_scroll()
+            .track_scroll(&scroll)
             .bg(theme.bg_editor);
 
         match active_property_sec {
@@ -271,7 +281,29 @@ impl Workspace {
             }
         }
 
-        master_detail = master_detail.child(right_content);
+        master_detail = master_detail.child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .child(right_content)
+                        .child(properties::grid::detail_scrollbar(
+                            scroll.clone(),
+                            true,
+                            theme,
+                        )),
+                )
+                .child(properties::grid::detail_scrollbar(scroll, false, theme)),
+        );
         prop_container = prop_container.child(master_detail);
 
         prop_container

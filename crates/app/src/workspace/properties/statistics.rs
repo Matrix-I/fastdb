@@ -6,16 +6,18 @@ impl TableProperties {
         let mut stats_table = div()
             .flex()
             .flex_col()
-            .flex_1()
-            .h_full()
-            .id("props-stats-table")
-            .overflow_y_scroll();
+            .flex_shrink_0()
+            .w_full()
+            .min_w(px(520.0))
+            .whitespace_nowrap()
+            .id("props-stats-table");
 
         stats_table = stats_table.child(
             div()
                 .flex()
                 .items_center()
                 .h(px(24.0))
+                .flex_shrink_0()
                 .bg(theme.bg_grid_header)
                 .border_b_1()
                 .border_color(theme.border)
@@ -24,6 +26,7 @@ impl TableProperties {
                 .child(
                     div()
                         .w(px(220.0))
+                        .flex_shrink_0()
                         .px_2()
                         .border_r_1()
                         .border_color(theme.border)
@@ -38,6 +41,7 @@ impl TableProperties {
                     .flex()
                     .items_center()
                     .h(px(22.0))
+                    .flex_shrink_0()
                     .border_b_1()
                     .border_color(hsla(0.0, 0.0, 0.0, 0.04))
                     .text_size(px(11.5))
@@ -45,6 +49,7 @@ impl TableProperties {
                     .child(
                         div()
                             .w(px(220.0))
+                            .flex_shrink_0()
                             .px_2()
                             .text_color(theme.text_secondary)
                             .child(k),
