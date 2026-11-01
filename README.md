@@ -256,6 +256,8 @@ For local macOS builds, use the root script (same workflow as Litty):
 Outputs go to `dist/`: `FastDB.app`, `FastDB.dmg` (with an Applications shortcut),
 `FastDB-macos.zip`, and `fastdb-macos`, plus architecture-suffixed binary/ZIP copies.
 The app is signed ad-hoc for local use; distribution signing and notarization are separate steps.
+Both macOS packaging scripts use `diskutil image create from` when available,
+with an `hdiutil` fallback for older macOS versions.
 
 Packaging scripts live in [`ci/`](ci/):
 
