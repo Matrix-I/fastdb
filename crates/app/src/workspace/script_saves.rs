@@ -5,8 +5,10 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(super) struct SaveQueue {
     sender: flume::Sender<WriteRequest>,
+    pub connection_error: Arc<std::sync::Mutex<Option<String>>>,
 }
 struct WriteRequest {
+    job: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
     path: Option<PathBuf>,
     target: Option<PathBuf>,
     text: String,
@@ -57,17 +59,27 @@ impl Default for SaveQueue {
 impl SaveQueue {
     fn with_writer(writer: Arc<WriteFile>) -> Self {
         let (sender, receiver) = flume::unbounded::<WriteRequest>();
+        let connection_error = Arc::new(std::sync::Mutex::new(None));
+        let errors = connection_error.clone();
         std::thread::Builder::new()
             .name("fastdb-file-writer".into())
             .spawn(move || {
                 while let Ok(request) = receiver.recv() {
-                    let result = match (request.path.as_ref(), request.target.as_ref()) {
-                        (Some(path), Some(target)) => {
-                            writer(path, &request.text).and_then(|()| move_file(path, target))
+                    let is_connection = request.job.is_some();
+                    let result = if let Some(job) = request.job {
+                        job()
+                    } else {
+                        match (request.path.as_ref(), request.target.as_ref()) {
+                            (Some(path), Some(target)) => {
+                                writer(path, &request.text).and_then(|()| move_file(path, target))
+                            }
+                            (Some(path), None) => writer(path, &request.text),
+                            _ => errors.lock().unwrap().clone().map_or(Ok(()), Err),
                         }
-                        (Some(path), None) => writer(path, &request.text),
-                        _ => Ok(()),
                     };
+                    if is_connection {
+                        *errors.lock().unwrap() = result.clone().err();
+                    }
                     if let Err(error) = &result {
                         tracing::error!("{error}");
                     }
@@ -75,7 +87,20 @@ impl SaveQueue {
                 }
             })
             .expect("start file writer");
-        Self { sender }
+        Self {
+            sender,
+            connection_error,
+        }
+    }
+    pub fn connection_job(&self, job: impl FnOnce() -> Result<(), String> + Send + 'static) {
+        let (reply, _) = flume::bounded(1);
+        let _ = self.sender.send(WriteRequest {
+            job: Some(Box::new(job)),
+            path: None,
+            target: None,
+            text: String::new(),
+            reply,
+        });
     }
     pub fn move_script(
         &self,
@@ -85,6 +110,7 @@ impl SaveQueue {
     ) -> flume::Receiver<Result<(), String>> {
         let (reply, receiver) = flume::bounded(1);
         let _ = self.sender.send(WriteRequest {
+            job: None,
             path: Some(path),
             target: Some(target),
             text,
@@ -95,6 +121,7 @@ impl SaveQueue {
     pub fn flush(&self) -> flume::Receiver<Result<(), String>> {
         let (reply, receiver) = flume::bounded(1);
         let _ = self.sender.send(WriteRequest {
+            job: None,
             path: None,
             target: None,
             text: String::new(),
@@ -105,6 +132,7 @@ impl SaveQueue {
     pub fn write(&self, path: PathBuf, text: String) -> flume::Receiver<Result<(), String>> {
         let (reply, receiver) = flume::bounded(1);
         let _ = self.sender.send(WriteRequest {
+            job: None,
             path: Some(path),
             target: None,
             text,
@@ -214,7 +242,7 @@ impl Workspace {
                 let restart = matches!(action, AfterSave::Restart);
                 let flushed = self.save_queue.flush();
                 cx.spawn(async move |this, cx| {
-                    if flushed.recv_async().await.is_err() {
+                    if !matches!(flushed.recv_async().await, Ok(Ok(()))) {
                         return;
                     }
                     let _ = this.update(cx, |this, cx| {
@@ -291,6 +319,19 @@ mod tests {
             .recv()
             .unwrap()
             .unwrap();
+    }
+    #[test]
+    fn credential_failures_block_flush_until_a_successful_retry() {
+        let queue = SaveQueue::default();
+        queue.connection_job(|| Err("keychain locked".into()));
+        assert!(queue.flush().recv().unwrap().is_err());
+        assert_eq!(
+            queue.connection_error.lock().unwrap().as_deref(),
+            Some("keychain locked")
+        );
+        queue.connection_job(|| Ok(()));
+        queue.flush().recv().unwrap().unwrap();
+        assert!(queue.connection_error.lock().unwrap().is_none());
     }
     #[test]
     fn atomic_replacement_preserves_script_and_removes_temporary_file() {

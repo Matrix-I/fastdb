@@ -38,11 +38,12 @@ async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMeta
 
 impl Workspace {
     pub fn save_config(&self) {
-        let content = ConnectionRepository::serialize_connections_config(
-            &self.connections.saved_connections,
-            self.connections.active_connection_id.as_deref(),
-        );
-        self.save_queue.write(connections_config_path(), content);
+        let connections = self.connections.saved_connections.clone();
+        let active = self.connections.active_connection_id.clone();
+        self.save_queue.connection_job(move || {
+            ConnectionRepository::new(connections_config_path())
+                .save(&connections, active.as_deref())
+        });
     }
 
     pub fn test_connection(&mut self, cx: &mut Context<Self>) {
@@ -241,6 +242,12 @@ impl Workspace {
                             database: config.database.clone(),
                             user: config.user.clone(),
                             password: config.password.clone(),
+                            password_unavailable: config.password.is_none()
+                                && this
+                                    .connections
+                                    .saved_connections
+                                    .iter()
+                                    .any(|c| c.id == conn_id && c.password_unavailable),
                             use_unix_socket: config.use_unix_socket,
                             tls_enabled: config.tls_enabled,
                             tls_ca_cert: config.tls_ca_cert.clone(),
@@ -539,6 +546,11 @@ impl Workspace {
         };
 
         self.form.load(Some(&saved), false);
+        if saved.password_unavailable {
+            self.form.show_connection_modal = true;
+            self.form.test_result = Some(Err("Saved password unavailable. Unlock the keychain and restart, or re-enter the password.".into()));
+            return false;
+        }
         true
     }
 
@@ -608,6 +620,12 @@ impl Workspace {
             database: config.database.clone(),
             user: config.user.clone(),
             password: config.password.clone(),
+            password_unavailable: config.password.is_none()
+                && self
+                    .connections
+                    .saved_connections
+                    .iter()
+                    .any(|c| c.id == conn_id && c.password_unavailable),
             use_unix_socket: config.use_unix_socket,
             tls_enabled: config.tls_enabled,
             tls_ca_cert: config.tls_ca_cert.clone(),

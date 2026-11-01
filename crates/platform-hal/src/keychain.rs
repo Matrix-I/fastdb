@@ -109,3 +109,38 @@ impl CredentialStore for InMemoryCredentialStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_keychain_round_trip_when_enabled() {
+        if std::env::var("FASTDB_TEST_KEYCHAIN").as_deref() != Ok("1") {
+            return;
+        }
+        let store = KeychainStore::new("com.fastdb.credentials.integration-test");
+        let account = format!(
+            "test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        store.save(&account, "temporary-test-secret").unwrap();
+        let loaded = store.get(&account);
+        let updated = store.save(&account, "replacement-test-secret");
+        let replacement = store.get(&account);
+        let deleted = store.delete(&account);
+        assert_eq!(loaded.unwrap().as_deref(), Some("temporary-test-secret"));
+        updated.unwrap();
+        assert_eq!(
+            replacement.unwrap().as_deref(),
+            Some("replacement-test-secret")
+        );
+        deleted.unwrap();
+        assert_eq!(store.get(&account).unwrap(), None);
+        store.delete(&account).unwrap();
+    }
+}

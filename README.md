@@ -39,7 +39,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 - TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
 - Saved connections with create / edit / delete / test, plus quick presets per driver.
 - **TLS for PostgreSQL and MySQL**: enable TLS in the connection dialog to require encryption and verify the server certificate and hostname. Leave the root CA path empty for system trust, or supply a PEM/DER root CA certificate for a private CA. TLS uses TCP even when Unix socket discovery is enabled. Existing connections default to TLS disabled.
-- Saved connection passwords are currently stored in plain text in the config file. OS keychain helpers exist in `platform-hal`, but connection persistence does not use them yet.
+- Saved connection passwords use the OS keychain (macOS Keychain / Linux Secret Service). Existing plaintext passwords migrate automatically after successful keychain storage; config files retain only credential references. Keychain/save failures are shown in the workspace with a retry action.
 
 ### Database navigator
 - DBeaver-style tree: connection → databases → schemas → tables → columns, constraints, foreign keys, indexes.
@@ -123,7 +123,6 @@ These are goals of the project, but they are not available in the app today:
 
 - **Advanced script execution.** Pinned sessions/explicit transaction scripts and vendor procedural/batch syntax are not supported by Run script yet.
 - **Additional grid copy formats.** TSV copy is wired to the clipboard; CSV and SQL `INSERT` copy options are not available in the UI.
-- **Keychain-backed connection passwords.** OS keychain helpers exist, but saved connections still serialize passwords into JSON; keychain integration and migration remain to be done.
 - **Export from the UI.** Streaming CSV and SQL `INSERT` export exists in `db-wire::export`, but no menu or button calls it.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
 - **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. The DDL tab remains a partial preview, not a complete schema dump. The status bar's "120 FPS" label is static text.
@@ -176,7 +175,7 @@ flowchart TD
 | Crate | Kind | Responsibility | State |
 | :--- | :--- | :--- | :--- |
 | `app` | binary | Window, workspace UI, connection management, query orchestration | Used |
-| `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used (keychain helpers unused) |
+| `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used |
 | `mem-engine` | library | Slotted pages, LRU pager, LZ4 disk spill | Used |
 | `db-wire` | library | Drivers, streaming, cancellation, CSV/SQL export, SSH (stub) | Used (export and SSH unused) |
 | `sql-intel` | library | Tree-sitter SQL parsing, schema cache, completion | Used |
@@ -207,8 +206,7 @@ The app is ad-hoc signed and not notarized. If Gatekeeper blocks it, run:
 xattr -dr com.apple.quarantine /Applications/FastDB.app
 ```
 
-Saved connection passwords are stored in plaintext JSON. Keychain storage is planned;
-consider this limitation before saving credentials. Performance figures above remain unmeasured targets.
+The published v0.1.0 preview stores saved passwords in plaintext JSON. Current source builds use the OS keychain and migrate existing passwords. Performance figures above remain unmeasured targets.
 
 ### Run
 
@@ -220,7 +218,9 @@ cargo run --release -p fastdb-app
 
 For an isolated development profile, set `FASTDB_CONFIG_DIR=/tmp/fastdb-smoke` before launching. This keeps saved connections, scripts and update preferences separate from your normal profile.
 
-Saved connections are written to `connections.json` in the user config directory (`~/Library/Application Support/com.fastdb.FastDB/` on macOS, `~/.config/fastdb/` on Linux), so they survive rebuilds and launches from Finder. A `.fastdb_config.json` left in the working directory by older builds is moved there on first launch. Passwords are currently stored in that file in plain text.
+Saved connections are written to `connections.json` in the user config directory (`~/Library/Application Support/com.fastdb.FastDB/` on macOS, `~/.config/fastdb/` on Linux), so they survive rebuilds and launches from Finder. A `.fastdb_config.json` left in the working directory by older builds is migrated on first launch and removed after a successful save. Passwords are stored under the `com.fastdb.credentials` keychain service, keyed by connection ID; JSON contains a `keychain_password` reference flag, never a new plaintext password. Migration retains the source file if secure storage fails.
+
+An unlocked macOS Keychain or Linux Secret Service is required to save passwords. If a saved secret is missing or inaccessible, its reference is preserved and connecting requires re-entering the password or unlocking the keychain and restarting. Clearing a password or deleting a connection removes its stored secret; failed deletions are retried on the next save or startup. Failed saves show a workspace banner with **Retry saving connections** and block Quit until a successful retry. Ad-hoc signed macOS updates may prompt again for keychain access; cross-update access still needs release smoke testing.
 
 ---
 
@@ -239,6 +239,7 @@ The PostgreSQL and MySQL integration tests run when a server is configured throu
 | `FASTDB_TEST_PG_HOST` / `_USER` | `127.0.0.1` / `postgres` | PostgreSQL host and user (trust auth expected) |
 | `FASTDB_TEST_MYSQL_PORT` | (unset: skip) | MySQL port; enables `crates/db-wire/tests/mysql_test.rs` |
 | `FASTDB_TEST_MYSQL_HOST` / `_USER` / `_PASSWORD` / `_DATABASE` | `127.0.0.1` / `root` / none / `mysql` | MySQL connection |
+| `FASTDB_TEST_KEYCHAIN` | unset | Set to `1` to run the native credential-store round trip with an isolated test service |
 | `FASTDB_REQUIRE_DB_TESTS` | unset | When set, a missing port fails the tests instead of skipping them (used in CI) |
 
 For example, with Docker:
@@ -310,7 +311,7 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] In-app update checks, release notes and installer download
 - [x] Grid selection, TSV copy, and inline editing with `UPDATE` generation
 - [x] Row insertion, duplication and deletion with transactional Save / Cancel
-- [ ] Keychain-backed connection passwords and migration from plaintext config
+- [x] Keychain-backed connection passwords and migration from plaintext config
 - [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
 - [ ] Advanced script execution with pinned sessions, explicit transactions and provider-specific procedural/batch syntax
 - [ ] Grid copy as CSV / SQL `INSERT`

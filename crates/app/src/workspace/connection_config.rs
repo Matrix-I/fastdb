@@ -9,6 +9,8 @@ pub struct SavedConnection {
     pub database: String,
     pub user: String,
     pub password: Option<String>,
+    /// Preserve a credential reference when its secret could not be loaded.
+    pub password_unavailable: bool,
     pub use_unix_socket: bool,
     pub tls_enabled: bool,
     pub tls_ca_cert: Option<String>,
@@ -33,12 +35,14 @@ pub(super) fn write_connections_config(
 pub(super) struct ConnectionRepository {
     pub path: std::path::PathBuf,
     pub legacy_path: std::path::PathBuf,
+    pub credentials: std::sync::Arc<dyn platform_hal::keychain::CredentialStore>,
 }
 impl ConnectionRepository {
     pub fn new(path: std::path::PathBuf) -> Self {
         Self {
             path,
-            legacy_path: ".fastdb_config.json".into(),
+            legacy_path: LEGACY_CONFIG_FILE.into(),
+            credentials: std::sync::Arc::new(platform_hal::keychain::KeychainStore::default()),
         }
     }
     pub fn load_saved_connections_from_str(
@@ -102,6 +106,7 @@ impl ConnectionRepository {
                         database: d,
                         user: u,
                         password: pw,
+                        password_unavailable: item["keychain_password"].as_bool().unwrap_or(false),
                         use_unix_socket: sock,
                         tls_enabled: item["tls_enabled"].as_bool().unwrap_or(false),
                         tls_ca_cert: item["tls_ca_cert"]
@@ -153,6 +158,7 @@ impl ConnectionRepository {
                     database: d,
                     user: u,
                     password: pw,
+                    password_unavailable: false,
                     use_unix_socket: sock,
                     tls_enabled: false,
                     tls_ca_cert: None,
@@ -170,24 +176,169 @@ impl ConnectionRepository {
 
     /// Reads the saved connections from the user's config dir. A config left by older builds
     /// in the working directory is picked up once and moved there.
-    pub fn load_saved_connections(&self) -> (Vec<SavedConnection>, Option<String>) {
-        let path = &self.path;
-        if let Ok(content) = std::fs::read_to_string(path) {
-            return Self::load_saved_connections_from_str(&content);
-        }
-        let Ok(content) = std::fs::read_to_string(&self.legacy_path) else {
-            return (Vec::new(), None);
+    pub fn load_saved_connections(&self) -> (Vec<SavedConnection>, Option<String>, Option<String>) {
+        let (content, legacy) = match std::fs::read_to_string(&self.path) {
+            Ok(content) => (content, false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::read_to_string(&self.legacy_path) {
+                    Ok(content) => (content, true),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return (Vec::new(), None, None);
+                    }
+                    Err(_) => {
+                        return (
+                            Vec::new(),
+                            None,
+                            Some("Cannot read legacy connections config".into()),
+                        );
+                    }
+                }
+            }
+            Err(_) => {
+                return (
+                    Vec::new(),
+                    None,
+                    Some("Cannot read connections config".into()),
+                );
+            }
         };
-        let loaded = Self::load_saved_connections_from_str(&content);
-        if let Err(e) = write_connections_config(path, &content) {
-            tracing::warn!(
-                "Failed to move {} to {}: {}",
-                LEGACY_CONFIG_FILE,
-                path.display(),
-                e
+        if serde_json::from_str::<serde_json::Value>(&content).is_err() {
+            return (
+                Vec::new(),
+                None,
+                Some("Invalid connections config; the file was left unchanged".into()),
             );
         }
-        loaded
+        let (mut connections, active) = Self::load_saved_connections_from_str(&content);
+        let migrate = legacy
+            || connections.iter().any(|c| c.password.is_some())
+            || serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .is_some_and(|v| v["credential_cleanup"].is_array() || v["legacy_cleanup"] == true);
+        let mut warning = None;
+        for connection in &mut connections {
+            if connection.password_unavailable && connection.password.is_none() {
+                match self.credentials.get(&connection.id) {
+                    Ok(Some(password)) => {
+                        connection.password = Some(password);
+                        connection.password_unavailable = false;
+                    }
+                    _ => warning = Some("Some saved passwords could not be read from the keychain. Unlock the keychain and restart, or re-enter the password in Edit connection.".into()),
+                }
+            }
+        }
+        if migrate && self.save(&connections, active.as_deref()).is_err() {
+            warning = Some("Could not finish migrating credentials or cleaning up old secrets. Unlock the keychain and retry saving. Plaintext is removed only after its password is stored in the keychain.".into());
+        }
+        (connections, active, warning)
+    }
+
+    /// Secrets are written before removing plaintext; clearing/deletion happens only
+    /// after committing the config, so a failed file write retains existing secrets.
+    pub fn save(
+        &self,
+        connections: &[SavedConnection],
+        active: Option<&str>,
+    ) -> Result<(), String> {
+        let mut legacy_source = !self.path.exists() && self.legacy_path.is_file();
+        let mut cleanup = Vec::<String>::new();
+        let previous = match std::fs::read_to_string(&self.path) {
+            Ok(content) => {
+                let json = serde_json::from_str::<serde_json::Value>(&content)
+                    .map_err(|_| "Cannot replace an invalid connections config".to_string())?;
+                legacy_source |= json["legacy_cleanup"] == true;
+                if let Some(pending) = json["credential_cleanup"].as_array() {
+                    cleanup.extend(pending.iter().filter_map(|v| v.as_str().map(str::to_owned)));
+                }
+                Self::load_saved_connections_from_str(&content).0
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(_) => return Err("Cannot read connections config before saving".into()),
+        };
+        let mut ids = std::collections::HashSet::new();
+        if connections
+            .iter()
+            .any(|c| c.id.is_empty() || !ids.insert(&c.id))
+        {
+            return Err("Connection IDs must be unique and nonempty".into());
+        }
+        let keep = |id: &str| {
+            connections.iter().any(|c| {
+                c.id == id
+                    && (c.password_unavailable
+                        || c.password.as_ref().is_some_and(|p| !p.is_empty()))
+            })
+        };
+        cleanup.extend(
+            previous
+                .iter()
+                .filter(|c| (c.password_unavailable || c.password.is_some()) && !keep(&c.id))
+                .map(|c| c.id.clone()),
+        );
+        cleanup.retain(|id| !keep(id));
+        cleanup.sort();
+        cleanup.dedup();
+        let mut changed = Vec::new();
+        let rollback = |changed: &[(String, Option<String>)]| {
+            for (id, old) in changed.iter().rev() {
+                let _ = match old {
+                    Some(password) => self.credentials.save(id, password),
+                    None => self.credentials.delete(id),
+                };
+            }
+        };
+        for connection in connections {
+            if let Some(password) = connection.password.as_deref().filter(|p| !p.is_empty()) {
+                let old = match self.credentials.get(&connection.id) {
+                    Ok(old) => old,
+                    Err(_) => {
+                        rollback(&changed);
+                        return Err("Cannot access the keychain. Unlock it and retry saving the connection.".into());
+                    }
+                };
+                if old.as_deref() == Some(password) {
+                    continue;
+                }
+                if self.credentials.save(&connection.id, password).is_err() {
+                    rollback(&changed);
+                    return Err("Cannot save password in the keychain. Unlock it and retry saving the connection.".into());
+                }
+                changed.push((connection.id.clone(), old));
+            }
+        }
+        let content = Self::serialize_connections_config(connections, active);
+        let mut json: serde_json::Value =
+            serde_json::from_str(&content).expect("serialized config");
+        if legacy_source {
+            json["legacy_cleanup"] = serde_json::json!(true);
+        }
+        if !cleanup.is_empty() {
+            json["credential_cleanup"] = serde_json::json!(cleanup);
+        }
+        if write_connections_config(&self.path, &json.to_string()).is_err() {
+            rollback(&changed);
+            return Err("Cannot save connections config; credential updates were rolled back where possible".into());
+        }
+        for id in &cleanup {
+            self.credentials.delete(id)
+                .map_err(|_| "Connection config saved, but an unused password could not be deleted from the keychain. Retry saving after unlocking it.".to_string())?;
+        }
+        if legacy_source {
+            match std::fs::remove_file(&self.legacy_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(
+                    "Credentials migrated, but the legacy plaintext config could not be removed"
+                        .into(),
+                ),
+            }
+        }
+        if !cleanup.is_empty() || legacy_source {
+            write_connections_config(&self.path, &content).map_err(|_| {
+                "Credentials saved, but cleanup bookkeeping could not be updated".to_string()
+            })?;
+        }
+        Ok(())
     }
 
     pub fn serialize_connections_config(
@@ -205,7 +356,7 @@ impl ConnectionRepository {
                     "port": c.port.to_string(),
                     "database": c.database,
                     "user": c.user,
-                    "password": c.password.as_deref().filter(|p| !p.is_empty()),
+                    "keychain_password": c.password_unavailable || c.password.as_ref().is_some_and(|p| !p.is_empty()),
                     "use_unix_socket": c.use_unix_socket,
                     "tls_enabled": c.tls_enabled,
                     "tls_ca_cert": c.tls_ca_cert,
@@ -316,6 +467,7 @@ mod relocated_tests {
                 database: "prod_db".to_string(),
                 user: "postgres".to_string(),
                 password: Some("secret".to_string()),
+                password_unavailable: false,
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
@@ -329,6 +481,7 @@ mod relocated_tests {
                 database: "analytics".to_string(),
                 user: "root".to_string(),
                 password: None,
+                password_unavailable: false,
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
@@ -342,6 +495,7 @@ mod relocated_tests {
                 database: "/path/to/cache.db".to_string(),
                 user: "".to_string(),
                 password: None,
+                password_unavailable: false,
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
@@ -374,6 +528,7 @@ mod relocated_tests {
             database: "existing".to_string(),
             user: "postgres".to_string(),
             password: None,
+            password_unavailable: false,
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
@@ -388,6 +543,7 @@ mod relocated_tests {
             database: "new_db".to_string(),
             user: "root".to_string(),
             password: None,
+            password_unavailable: false,
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
@@ -418,6 +574,7 @@ mod relocated_tests {
                 database: "db1".to_string(),
                 user: "postgres".to_string(),
                 password: None,
+                password_unavailable: false,
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
@@ -431,6 +588,7 @@ mod relocated_tests {
                 database: "db2".to_string(),
                 user: "postgres".to_string(),
                 password: None,
+                password_unavailable: false,
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
@@ -446,6 +604,7 @@ mod relocated_tests {
             database: "db1_prod".to_string(),
             user: "admin".to_string(),
             password: Some("new_pass".to_string()),
+            password_unavailable: false,
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
@@ -477,6 +636,7 @@ mod relocated_tests {
                 database: "db1".to_string(),
                 user: "postgres".to_string(),
                 password: None,
+                password_unavailable: false,
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
@@ -490,6 +650,7 @@ mod relocated_tests {
                 database: "db2".to_string(),
                 user: "postgres".to_string(),
                 password: None,
+                password_unavailable: false,
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
@@ -513,6 +674,7 @@ mod relocated_tests {
             database: "prod_db".to_string(),
             user: "postgres".to_string(),
             password: password.map(|p| p.to_string()),
+            password_unavailable: false,
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
@@ -520,7 +682,7 @@ mod relocated_tests {
     }
 
     #[test]
-    fn test_password_roundtrips_through_config() {
+    fn test_password_is_referenced_but_never_serialized() {
         use crate::workspace::connection_config::ConnectionRepository;
 
         let conns = vec![saved_pg_connection("conn_pg", Some("s3cret-pw"))];
@@ -528,7 +690,10 @@ mod relocated_tests {
             ConnectionRepository::serialize_connections_config(&conns, Some("conn_pg"));
 
         let (loaded, _) = ConnectionRepository::load_saved_connections_from_str(&serialized);
-        assert_eq!(loaded[0].password.as_deref(), Some("s3cret-pw"));
+        assert_eq!(loaded[0].password, None);
+        assert!(loaded[0].password_unavailable);
+        assert!(!serialized.contains("s3cret-pw"));
+        assert!(!serialized.contains("\"password\""));
     }
 
     #[test]
@@ -559,8 +724,12 @@ mod repository_tests {
         let repository = ConnectionRepository {
             path: path.clone(),
             legacy_path: legacy,
+            credentials: std::sync::Arc::new(
+                platform_hal::keychain::InMemoryCredentialStore::default(),
+            ),
         };
-        let (saved, active) = repository.load_saved_connections();
+        let (saved, active, error) = repository.load_saved_connections();
+        assert!(error.is_none());
         assert_eq!(active.as_deref(), Some("a"));
         assert!(path.exists());
         write_connections_config(
@@ -568,6 +737,168 @@ mod repository_tests {
             &ConnectionRepository::serialize_connections_config(&saved, active.as_deref()),
         )
         .unwrap();
-        assert_eq!(repository.load_saved_connections(), (saved, active));
+        assert_eq!(repository.load_saved_connections(), (saved, active, None));
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    use platform_hal::keychain::{CredentialStore, InMemoryCredentialStore};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[derive(Default)]
+    struct Store {
+        inner: InMemoryCredentialStore,
+        fail_save: AtomicBool,
+        fail_get: AtomicBool,
+        fail_delete: AtomicBool,
+    }
+    impl CredentialStore for Store {
+        fn get(&self, id: &str) -> anyhow::Result<Option<String>> {
+            anyhow::ensure!(!self.fail_get.load(Ordering::SeqCst), "locked");
+            self.inner.get(id)
+        }
+        fn save(&self, id: &str, password: &str) -> anyhow::Result<()> {
+            anyhow::ensure!(!self.fail_save.load(Ordering::SeqCst), "locked");
+            self.inner.save(id, password)
+        }
+        fn delete(&self, id: &str) -> anyhow::Result<()> {
+            anyhow::ensure!(!self.fail_delete.load(Ordering::SeqCst), "locked");
+            self.inner.delete(id)
+        }
+    }
+    fn setup() -> (tempfile::TempDir, ConnectionRepository, Arc<Store>) {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::default());
+        let repo = ConnectionRepository {
+            path: temp.path().join("connections.json"),
+            legacy_path: temp.path().join("legacy.json"),
+            credentials: store.clone(),
+        };
+        (temp, repo, store)
+    }
+    const PLAINTEXT: &str = r#"{"active_connection_id":"a","connections":[{"id":"a","database":"db","password":"test-secret"}]}"#;
+
+    #[test]
+    fn migration_restart_update_clear_and_delete() {
+        let (_temp, repo, store) = setup();
+        std::fs::write(&repo.path, PLAINTEXT).unwrap();
+        let (mut connections, active, warning) = repo.load_saved_connections();
+        assert!(warning.is_none());
+        assert_eq!(active.as_deref(), Some("a"));
+        assert_eq!(store.get("a").unwrap().as_deref(), Some("test-secret"));
+        assert!(
+            !std::fs::read_to_string(&repo.path)
+                .unwrap()
+                .contains("test-secret")
+        );
+        assert_eq!(repo.load_saved_connections().0, connections);
+        connections[0].password = Some("updated".into());
+        repo.save(&connections, active.as_deref()).unwrap();
+        assert_eq!(
+            repo.load_saved_connections().0[0].password.as_deref(),
+            Some("updated")
+        );
+        connections[0].password = None;
+        repo.save(&connections, active.as_deref()).unwrap();
+        assert_eq!(store.get("a").unwrap(), None);
+        connections[0].password = Some("again".into());
+        repo.save(&connections, active.as_deref()).unwrap();
+        repo.save(&[], None).unwrap();
+        assert_eq!(store.get("a").unwrap(), None);
+    }
+
+    #[test]
+    fn failed_migration_preserves_plaintext_until_successful_retry() {
+        for legacy in [false, true] {
+            let (_temp, repo, store) = setup();
+            let source = if legacy {
+                &repo.legacy_path
+            } else {
+                &repo.path
+            };
+            std::fs::write(source, PLAINTEXT).unwrap();
+            store.fail_save.store(true, Ordering::SeqCst);
+            let (connections, active, warning) = repo.load_saved_connections();
+            assert!(warning.is_some());
+            assert_eq!(std::fs::read_to_string(source).unwrap(), PLAINTEXT);
+            store.fail_save.store(false, Ordering::SeqCst);
+            repo.save(&connections, active.as_deref()).unwrap();
+            assert!(!repo.legacy_path.exists());
+            assert!(
+                !std::fs::read_to_string(&repo.path)
+                    .unwrap()
+                    .contains("test-secret")
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_single_connection_migrates_and_removes_source() {
+        let (_temp, repo, store) = setup();
+        std::fs::write(
+            &repo.legacy_path,
+            r#"{"database":"db","password":"old-secret"}"#,
+        )
+        .unwrap();
+        let (connections, _, warning) = repo.load_saved_connections();
+        assert!(warning.is_none());
+        assert!(!repo.legacy_path.exists());
+        assert_eq!(store.get("conn_1").unwrap().as_deref(), Some("old-secret"));
+        assert_eq!(repo.load_saved_connections().0, connections);
+    }
+
+    #[test]
+    fn unavailable_password_reference_survives_unrelated_save() {
+        let (_temp, repo, store) = setup();
+        std::fs::write(&repo.path, PLAINTEXT).unwrap();
+        repo.load_saved_connections();
+        store.fail_get.store(true, Ordering::SeqCst);
+        let (mut connections, active, warning) = repo.load_saved_connections();
+        assert!(warning.is_some());
+        assert!(connections[0].password_unavailable);
+        connections[0].name = "renamed".into();
+        repo.save(&connections, active.as_deref()).unwrap();
+        store.fail_get.store(false, Ordering::SeqCst);
+        assert_eq!(
+            repo.load_saved_connections().0[0].password.as_deref(),
+            Some("test-secret")
+        );
+        store.delete("a").unwrap();
+        assert!(repo.load_saved_connections().2.is_some());
+    }
+
+    #[test]
+    fn failed_file_write_rolls_back_credential_update() {
+        let (_temp, repo, store) = setup();
+        std::fs::write(&repo.path, PLAINTEXT).unwrap();
+        let (mut connections, active, _) = repo.load_saved_connections();
+        let before = std::fs::read_to_string(&repo.path).unwrap();
+        std::fs::create_dir(repo.path.with_extension("json.tmp")).unwrap();
+        connections[0].password = Some("replacement".into());
+        assert!(repo.save(&connections, active.as_deref()).is_err());
+        assert_eq!(store.get("a").unwrap().as_deref(), Some("test-secret"));
+        assert_eq!(std::fs::read_to_string(&repo.path).unwrap(), before);
+    }
+
+    #[test]
+    fn failed_deletion_is_retried_after_restart() {
+        let (_temp, repo, store) = setup();
+        std::fs::write(&repo.path, PLAINTEXT).unwrap();
+        repo.load_saved_connections();
+        store.fail_delete.store(true, Ordering::SeqCst);
+        assert!(repo.save(&[], None).is_err());
+        assert!(
+            std::fs::read_to_string(&repo.path)
+                .unwrap()
+                .contains("credential_cleanup")
+        );
+        store.fail_delete.store(false, Ordering::SeqCst);
+        assert!(repo.load_saved_connections().2.is_none());
+        assert_eq!(store.get("a").unwrap(), None);
     }
 }

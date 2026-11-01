@@ -134,6 +134,7 @@ pub struct Workspace {
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
     save_queue: SaveQueue,
+    credential_warning: Option<String>,
     query_history: query_history::QueryHistory,
     script_action: Option<script_tools::ScriptAction>,
     script_request_id: u64,
@@ -155,7 +156,7 @@ impl Workspace {
         let theme = Theme::dark();
         let focus_handle = cx.focus_handle();
 
-        let (saved_connections, active_connection_id) =
+        let (saved_connections, active_connection_id, credential_warning) =
             connection_config::ConnectionRepository::new(
                 platform_hal::paths::config_dir().join("connections.json"),
             )
@@ -200,6 +201,7 @@ impl Workspace {
                 platform_hal::paths::config_dir().join("query-history"),
             ),
             save_queue,
+            credential_warning,
             updates,
             _update_changed: update_changed,
             _restart_requested: restart_requested,
@@ -257,12 +259,18 @@ impl Workspace {
         }
 
         cx.spawn(async move |this, cx| {
+            let mut last_credential_error = None;
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(530))
                     .await;
                 if this
                     .update(cx, |this, cx| {
+                        let error = this.save_queue.connection_error.lock().unwrap().clone();
+                        if error != last_credential_error {
+                            last_credential_error = error;
+                            cx.notify();
+                        }
                         let has_cursor = this.form.show_connection_modal
                             || this.script_chooser.is_some()
                             || this.input.is_filter_focused
@@ -380,6 +388,32 @@ impl Render for Workspace {
 
         // 1. Top Bar / Tabs & Toolbar
         root = root.child(panes.top_bar());
+        let credential_error = self
+            .save_queue
+            .connection_error
+            .lock()
+            .unwrap()
+            .clone()
+            .or_else(|| self.credential_warning.clone());
+        if let Some(error) = credential_error {
+            root = root.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_color(theme.text_warning)
+                    .child(error)
+                    .child(
+                        div()
+                            .id("retry-connection-save")
+                            .cursor_pointer()
+                            .child("Retry saving connections")
+                            .on_click(cx.listener(|this, _, _, _| {
+                                this.credential_warning = None;
+                                this.save_config();
+                            })),
+                    ),
+            );
+        }
 
         // 2. Main Body: Left Sidebar + Center Workspace
         root = root.child(
