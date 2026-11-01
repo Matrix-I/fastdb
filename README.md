@@ -312,10 +312,12 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] Row insertion, duplication and deletion with transactional Save / Cancel
 - [ ] Keychain-backed connection passwords and migration from plaintext config
 - [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
+- [ ] Advanced script execution with pinned sessions, explicit transactions and provider-specific procedural/batch syntax
 - [ ] Grid copy as CSV / SQL `INSERT`
 - [ ] Export to CSV / SQL from the UI
 - [x] PostgreSQL table statistics and catalog metadata in Properties
 - [ ] Rich table statistics and metadata for other providers
+- [ ] Complete provider-specific DDL generation beyond the current partial metadata preview
 - [x] TLS for PostgreSQL and MySQL with certificate/hostname verification and optional root CA
 - [x] Provider picker with PostgreSQL, Db2 for LUW, MariaDB, MySQL, Oracle, SQL Server and SQLite
 - [x] MariaDB provider preset using the MySQL-compatible driver
