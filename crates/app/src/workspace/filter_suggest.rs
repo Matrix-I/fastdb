@@ -8,7 +8,7 @@ use gpui::prelude::FluentBuilder;
 use mem_engine::DataType;
 use ui_core::history::EditKind;
 
-use super::fetch_plan::quote_ident;
+use db_wire::sql::quote_ident;
 
 use super::*;
 

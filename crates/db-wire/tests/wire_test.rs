@@ -160,3 +160,43 @@ async fn test_sqlite_apply_row_changes_is_all_or_nothing() {
     assert_eq!(pager.get_cell(0, 1).as_deref(), Some(&b"z"[..]));
     assert_eq!(pager.get_cell(1, 0).as_deref(), Some(&b"3"[..]));
 }
+
+#[tokio::test]
+async fn planned_row_changes_execute_transactionally_on_sqlite() {
+    use db_wire::{
+        DbDriverKind,
+        sql::{RowChanges, SqlDialect},
+    };
+    let driver = SqliteDriver::new_memory();
+    driver
+        .execute_query("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);")
+        .await
+        .unwrap();
+    driver
+        .execute_query("INSERT INTO t VALUES (1, 'before'), (2, NULL);")
+        .await
+        .unwrap();
+    let (pager, _, _) = driver
+        .execute_query("SELECT * FROM t ORDER BY id;")
+        .await
+        .unwrap();
+    let mut changes = RowChanges::default();
+    changes.changes.insert((0, 1), Some("it's after".into()));
+    changes.deleted_rows.insert(1);
+    changes
+        .inserted_rows
+        .push(vec![None, Some("inserted".into())]);
+    let statements = changes
+        .plan_sql("\"t\"", &pager, &[0], SqlDialect(DbDriverKind::Sqlite))
+        .unwrap();
+    assert_eq!(driver.apply_row_changes(&statements).await.unwrap(), 3);
+    let (result, count, _) = driver
+        .execute_query("SELECT * FROM t ORDER BY id;")
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(
+        result.get_cell(0, 1).as_deref(),
+        Some(b"it's after".as_slice())
+    );
+}

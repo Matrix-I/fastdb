@@ -53,7 +53,7 @@ What exists today that these targets build on: a paged result store with an LRU 
   - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit.
   - Cell/range selection and clipboard copy as TSV.
   - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Save generates SQL and applies the changes in one transaction.
-- **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and generated DDL.
+- **Properties**: columns (type, nullability, default, collation, PK), constraints, indexes, and a partial DDL preview from available native column metadata. Missing index/constraint definitions are labeled as unavailable.
 - **Diagram**: a simple entity box listing the table's columns.
 
 ### SQL editor

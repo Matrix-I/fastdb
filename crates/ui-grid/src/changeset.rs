@@ -1,4 +1,3 @@
-use mem_engine::QueryResultPager;
 use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,34 +10,6 @@ pub struct CellKey {
 pub struct ModifiedCell {
     pub original_value: Option<Vec<u8>>,
     pub new_value: Option<String>,
-}
-
-/// How identifiers and string literals are written in generated SQL
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SqlDialect {
-    /// `"ident"` and `'literal'` (PostgreSQL, SQLite)
-    Ansi,
-    /// `` `ident` `` and `'literal'` with backslashes escaped
-    MySql,
-}
-
-impl SqlDialect {
-    pub fn quote_ident(self, name: &str) -> String {
-        match self {
-            SqlDialect::Ansi => format!("\"{}\"", name.replace('"', "\"\"")),
-            SqlDialect::MySql => format!("`{}`", name.replace('`', "``")),
-        }
-    }
-
-    pub fn literal(self, value: Option<&str>) -> String {
-        match value {
-            None => "NULL".to_string(),
-            Some(v) => match self {
-                SqlDialect::Ansi => format!("'{}'", v.replace('\'', "''")),
-                SqlDialect::MySql => format!("'{}'", v.replace('\\', "\\\\").replace('\'', "''")),
-            },
-        }
-    }
 }
 
 /// A row added in the grid, not yet written to the table
@@ -170,168 +141,11 @@ impl Changeset {
             r.position -= 1;
         }
     }
-
-    /// Generates the statements that apply every staged change: UPDATEs for edited rows,
-    /// INSERTs for new rows and DELETEs for deleted rows. Rows are identified by the
-    /// `key_cols` values, or by all of their original values when there is no key.
-    pub fn generate_sql(
-        &self,
-        target: &str,
-        pager: &QueryResultPager,
-        key_cols: &[usize],
-        dialect: SqlDialect,
-    ) -> Vec<String> {
-        let col_name = |c: usize| {
-            let name = pager
-                .columns
-                .get(c)
-                .map(|col| col.name.as_str())
-                .unwrap_or("col");
-            dialect.quote_ident(name)
-        };
-        let where_clause = |row: u64| {
-            let all_cols: Vec<usize> = (0..pager.columns.len()).collect();
-            let cols = if key_cols.is_empty() {
-                &all_cols[..]
-            } else {
-                key_cols
-            };
-            cols.iter()
-                .map(|&c| match pager.get_cell(row, c) {
-                    Some(bytes) => format!(
-                        "{} = {}",
-                        col_name(c),
-                        dialect.literal(Some(&String::from_utf8_lossy(&bytes)))
-                    ),
-                    None => format!("{} IS NULL", col_name(c)),
-                })
-                .collect::<Vec<_>>()
-                .join(" AND ")
-        };
-
-        let mut statements = Vec::new();
-
-        let mut edited_rows: HashMap<u64, Vec<(usize, Option<&str>)>> = HashMap::new();
-        for (key, cell) in &self.changes {
-            if !self.deleted_rows.contains(&key.row_idx) {
-                edited_rows
-                    .entry(key.row_idx)
-                    .or_default()
-                    .push((key.col_idx, cell.new_value.as_deref()));
-            }
-        }
-        let mut edited_rows: Vec<_> = edited_rows.into_iter().collect();
-        edited_rows.sort_by_key(|(row, _)| *row);
-        for (row, mut edits) in edited_rows {
-            edits.sort_by_key(|(c, _)| *c);
-            let set_clause = edits
-                .iter()
-                .map(|&(c, v)| format!("{} = {}", col_name(c), dialect.literal(v)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            statements.push(format!(
-                "UPDATE {target} SET {set_clause} WHERE {};",
-                where_clause(row)
-            ));
-        }
-
-        for row in &self.inserted_rows {
-            let set: Vec<(usize, &str)> = row
-                .values
-                .iter()
-                .enumerate()
-                .filter_map(|(c, v)| v.as_deref().map(|v| (c, v)))
-                .collect();
-            if set.is_empty() {
-                statements.push(match dialect {
-                    SqlDialect::Ansi => format!("INSERT INTO {target} DEFAULT VALUES;"),
-                    SqlDialect::MySql => format!("INSERT INTO {target} () VALUES ();"),
-                });
-            } else {
-                let cols = set
-                    .iter()
-                    .map(|&(c, _)| col_name(c))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let vals = set
-                    .iter()
-                    .map(|&(_, v)| dialect.literal(Some(v)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                statements.push(format!("INSERT INTO {target} ({cols}) VALUES ({vals});"));
-            }
-        }
-
-        for &row in &self.deleted_rows {
-            statements.push(format!("DELETE FROM {target} WHERE {};", where_clause(row)));
-        }
-
-        statements
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mem_engine::{ColumnMeta, DataType};
-
-    fn users_pager() -> QueryResultPager {
-        let cols = vec![
-            ColumnMeta::new("id", DataType::Int4),
-            ColumnMeta::new("username", DataType::Text),
-        ];
-        let pager = QueryResultPager::new(cols).unwrap();
-        pager
-            .append_row(vec![Some(&b"42"[..]), Some(&b"old_name"[..])])
-            .unwrap();
-        pager.append_row(vec![Some(&b"43"[..]), None]).unwrap();
-        pager
-    }
-
-    #[test]
-    fn test_changeset_and_sql_generation() {
-        let pager = users_pager();
-
-        let mut cs = Changeset::new();
-        cs.set_cell(
-            0,
-            1,
-            Some(b"old_name".to_vec()),
-            Some("it's new".to_string()),
-        );
-
-        assert!(cs.is_modified(0, 1));
-        assert_eq!(cs.get_modified_value(0, 1), Some("it's new"));
-
-        let stmts = cs.generate_sql("\"public\".\"users\"", &pager, &[0], SqlDialect::Ansi);
-        assert_eq!(
-            stmts,
-            vec!["UPDATE \"public\".\"users\" SET \"username\" = 'it''s new' WHERE \"id\" = '42';"]
-        );
-    }
-
-    #[test]
-    fn test_insert_and_delete_sql() {
-        let pager = users_pager();
-
-        let mut cs = Changeset::new();
-        cs.insert_row_at(2, vec![None, None]);
-        cs.insert_row_at(2, vec![None, Some("new\\user".to_string())]);
-        cs.deleted_rows.insert(1);
-        // An edit of a deleted row is dropped: the row goes away anyway
-        cs.set_cell(1, 1, None, Some("ignored".to_string()));
-        assert_eq!(cs.count(), 4);
-
-        let stmts = cs.generate_sql("`users`", &pager, &[], SqlDialect::MySql);
-        assert_eq!(
-            stmts,
-            vec![
-                "INSERT INTO `users` (`username`) VALUES ('new\\\\user');",
-                "INSERT INTO `users` () VALUES ();",
-                "DELETE FROM `users` WHERE `id` = '43' AND `username` IS NULL;",
-            ]
-        );
-    }
 
     #[test]
     fn test_new_rows_sit_between_fetched_rows() {

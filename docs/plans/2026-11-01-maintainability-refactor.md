@@ -85,13 +85,15 @@ Acceptance: terminal events affect only their operation and tab. Query and Save 
 
 Depends on Phase 2 so provider identity is authoritative.
 
-- [ ] Add a small provider-aware SQL module in `db-wire` for quoting identifiers/qualified names, table pagination and existing row-write syntax. Consolidate duplicated implementations in app query code and `ui-grid::SqlDialect`.
-- [ ] Keep UI filter text and script statement selection in the app/`sql-intel`; pass explicit inputs into SQL planning rather than passing a workspace or tab object.
-- [ ] Translate staged grid edits into a database-neutral change request at the app boundary. Move SQL generation into `db-wire` without making `db-wire` depend on `ui-grid` or adding a reverse dependency.
-- [ ] Preserve original row/key values, deterministic statement ordering, NULL/default distinctions and the driver contract that each write affects exactly one row or the transaction rolls back.
-- [ ] Move `generate_table_ddl` to the SQL owner if it generates executable provider-specific SQL. Keep badges and visual formatting in UI modules. Represent unsupported or incomplete metadata explicitly instead of claiming accurate DDL.
-- [ ] Add SQL output tests for PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, Oracle and Db2, including embedded identifier delimiters, literal escaping, pagination and empty/default inserts. Return explicit errors for unsupported syntax rather than treating all providers as interchangeable ANSI SQL.
-- [ ] Preserve live transaction tests and extend affected provider tests where environments are available. Document unvalidated provider behavior in `docs/PROVIDERS.md`.
+- [x] Add a small provider-aware SQL module in `db-wire` for quoting identifiers/qualified names, table pagination and existing row-write syntax. Consolidate duplicated implementations in app query code and `ui-grid::SqlDialect`.
+- [x] Keep UI filter text and script statement selection in the app/`sql-intel`; pass explicit inputs into SQL planning rather than passing a workspace or tab object.
+- [x] Translate staged grid edits into a database-neutral change request at the app boundary. Move SQL generation into `db-wire` without making `db-wire` depend on `ui-grid` or adding a reverse dependency.
+- [x] Preserve original row/key values, deterministic statement ordering, NULL/default distinctions and the driver contract that each write affects exactly one row or the transaction rolls back.
+- [x] Move `generate_table_ddl` to the SQL owner if it generates executable provider-specific SQL. Keep badges and visual formatting in UI modules. Represent unsupported or incomplete metadata explicitly instead of claiming accurate DDL.
+- [x] Add SQL output tests for PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, Oracle and Db2, including embedded identifier delimiters, literal escaping, pagination and empty/default inserts. Return explicit errors for unsupported syntax rather than treating all providers as interchangeable ANSI SQL.
+- [x] Preserve live transaction tests and extend affected provider tests where environments are available. Document unvalidated provider behavior in `docs/PROVIDERS.md`.
+
+Validation note: generated writes are exercised against bundled SQLite. External provider/TLS tests require configured servers; Oracle/Db2 default-only inserts now fail explicitly rather than generating unverified syntax.
 
 Acceptance: `ui-grid` no longer generates SQL or selects a provider dialect. Query and edit planning derive syntax from the same session-owned provider. Existing streaming/export behavior remains intact.
 

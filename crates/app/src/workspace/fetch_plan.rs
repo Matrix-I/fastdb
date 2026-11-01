@@ -1,36 +1,6 @@
 use super::tab_state::script_fetch_query;
 use super::*;
-/// Column name quoted for the driver's SQL dialect
-pub(super) fn quote_ident(kind: DbDriverKind, name: &str) -> String {
-    match kind {
-        DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`", name.replace('`', "``")),
-        DbDriverKind::Postgres
-        | DbDriverKind::Sqlite
-        | DbDriverKind::SqlServer
-        | DbDriverKind::Oracle
-        | DbDriverKind::Db2 => format!("\"{}\"", name.replace('"', "\"\"")),
-    }
-}
-
-/// Vendor-specific pagination for table browsing. Free-form ODBC SQL runs unchanged.
-fn table_page_suffix(kind: DbDriverKind, size: usize, offset: u64, ordered: bool) -> String {
-    match kind {
-        DbDriverKind::SqlServer => format!(
-            "{} OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY",
-            if ordered {
-                ""
-            } else {
-                " ORDER BY (SELECT NULL)"
-            }
-        ),
-        DbDriverKind::Oracle | DbDriverKind::Db2 => {
-            format!(" OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY")
-        }
-        _ if offset > 0 => format!(" LIMIT {size} OFFSET {offset}"),
-        _ => format!(" LIMIT {size}"),
-    }
-}
-
+use db_wire::sql::{SqlDialect, quote_ident, table_page_suffix};
 impl Workspace {
     /// SQL of the first fetch for a tab, as shown in the "SQL" dialog
     pub fn build_query_for_tab(&self, tab_idx: usize) -> String {
@@ -58,18 +28,7 @@ impl Workspace {
             }
         };
 
-        let target = match self.tab_provider(tab_idx) {
-            DbDriverKind::Postgres
-            | DbDriverKind::SqlServer
-            | DbDriverKind::Oracle
-            | DbDriverKind::Db2 => format!(
-                "{}.{}",
-                quote_ident(self.tab_provider(tab_idx), schema),
-                quote_ident(self.tab_provider(tab_idx), table)
-            ),
-            DbDriverKind::MySql | DbDriverKind::MariaDb => format!("`{}`.`{}`", schema, table),
-            DbDriverKind::Sqlite => format!("\"{}\"", table),
-        };
+        let target = SqlDialect(self.tab_provider(tab_idx)).qualified_table(schema, table);
 
         let filter = tab.filter_sql.trim();
         let f_upper = filter.to_uppercase();

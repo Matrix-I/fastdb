@@ -50,7 +50,7 @@ use crate::updater::{
 };
 pub use column_menu::ColumnMenu;
 pub use connection_config::SavedConnection;
-pub use ddl::generate_table_ddl;
+use db_wire::sql::generate_table_ddl;
 use ddl::render_dbeaver_col_badge;
 pub use filter_suggest::FilterSuggest;
 pub use nav_context_menu::NavContextMenu;

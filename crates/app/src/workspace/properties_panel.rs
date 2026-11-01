@@ -1123,6 +1123,7 @@ impl Workspace {
             }
             PropertySection::Ddl => {
                 let ddl_code = generate_table_ddl(
+                    self.tab_provider(active_tab_idx),
                     s_name,
                     t_name,
                     &columns_vec,

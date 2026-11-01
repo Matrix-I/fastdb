@@ -113,3 +113,10 @@ query cancellation and connection reuse across short-lived caller runtimes.
 
 See [local server setup](../ci/provider-containers/README.md) for images, ports,
 architecture requirements and the Db2 image's setup workaround.
+
+
+## SQL planning boundaries
+
+Table browsing and row edits share provider-aware identifier quoting and pagination in `db-wire::sql`. SQL Server identifiers use brackets and string literals preserve Unicode. Default-only row inserts are rejected for Oracle and Db2 until their provider-specific behavior has live coverage; enter at least one column instead. Generated row edits still run through the driver's exactly-one-row transactional contract.
+
+DDL in Properties is a partial metadata preview, not an exact reconstruction. Incomplete native column types make the preview unavailable; index and constraint names without definitions appear only as comments. SQL planning has deterministic unit coverage for all presets. Unit coverage does not replace the configured live provider and TLS tests described above.

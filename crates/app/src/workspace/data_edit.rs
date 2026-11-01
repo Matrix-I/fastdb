@@ -5,9 +5,10 @@
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
-use ui_grid::{CellEdit, CellEditorRenderer, RowRef, SqlDialect};
+use ui_grid::{CellEdit, CellEditorRenderer, RowRef};
 
 use super::*;
+use db_wire::sql::{RowChanges, SqlDialect};
 
 impl Workspace {
     /// Whether the active tab shows a table whose rows can be edited
@@ -280,18 +281,8 @@ impl Workspace {
             return;
         };
 
-        let dialect = match self.tab_provider(self.active_tab) {
-            DbDriverKind::MySql | DbDriverKind::MariaDb => SqlDialect::MySql,
-            _ => SqlDialect::Ansi,
-        };
-        let target = match self.tab_provider(self.active_tab) {
-            DbDriverKind::Sqlite => dialect.quote_ident(&table),
-            _ => format!(
-                "{}.{}",
-                dialect.quote_ident(&schema),
-                dialect.quote_ident(&table)
-            ),
-        };
+        let dialect = SqlDialect(self.tab_provider(self.active_tab));
+        let target = dialect.qualified_table(&schema, &table);
         // Rows are found by their primary key when the result has every key column
         let pk_names: Vec<&str> = self
             .tab_session(self.active_tab)
@@ -314,10 +305,28 @@ impl Workspace {
             Vec::new()
         };
 
-        let statements = tab
-            .grid
-            .changeset
-            .generate_sql(&target, &pager, &key_cols, dialect);
+        let changes = &tab.grid.changeset;
+        let request = RowChanges {
+            changes: changes
+                .changes
+                .iter()
+                .map(|(key, cell)| ((key.row_idx, key.col_idx), cell.new_value.clone()))
+                .collect(),
+            inserted_rows: changes
+                .inserted_rows
+                .iter()
+                .map(|row| row.values.clone())
+                .collect(),
+            deleted_rows: changes.deleted_rows.clone(),
+        };
+        let statements = match request.plan_sql(&target, &pager, &key_cols, dialect) {
+            Ok(statements) => statements,
+            Err(error) => {
+                self.tabs[self.active_tab].last_error = Some(format!("{error:#}"));
+                cx.notify();
+                return;
+            }
+        };
         let tab_id = tab.id;
         let connection_id = tab
             .connection_id
