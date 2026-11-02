@@ -505,18 +505,19 @@ impl Workspace {
         let render: CellEditorRenderer = Rc::new(move || {
             let len = edit.text.chars().count();
             let selection = selection_range(edit.anchor, edit.caret, len);
-            div()
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .children(render_caret_text(
-                    &edit.text,
-                    Some(edit.caret.min(len)),
-                    caret_visible,
-                    selection,
-                    &pick,
-                ))
-                .into_any_element()
+            ui_editor::line_input::pick_surface(
+                div().flex().items_center().overflow_hidden(),
+                usize::MAX,
+                &pick,
+            )
+            .children(render_caret_text(
+                &edit.text,
+                Some(edit.caret.min(len)),
+                caret_visible,
+                selection,
+                &pick,
+            ))
+            .into_any_element()
         });
         Some((row, col, render))
     }

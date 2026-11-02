@@ -128,25 +128,50 @@ impl Workspace {
         let pick = self.script_editor_pick(tab_idx, cx);
         let tab = &mut self.tabs[tab_idx];
         let editor_focused = tab.editor_focused;
+        let editor_scroll = tab.editor.scroll_handle.clone();
         let editor = div()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
             .flex_none()
             .h(relative(0.45))
             .w_full()
             .border_b_1()
             .border_color(theme.border)
             .cursor_text()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if event.button == MouseButton::Left {
                     this.focus_script_editor(true);
                     window.focus(&this.focus_handle);
                     cx.notify();
-                }),
-            )
+                }
+            }))
             .child(
-                tab.editor
-                    .render_editor(editor_focused, caret_visible, pick),
-            );
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(
+                        div().flex_1().min_w_0().min_h_0().overflow_hidden().child(
+                            tab.editor
+                                .render_editor(editor_focused, caret_visible, pick, window),
+                        ),
+                    )
+                    .child(properties::grid::detail_scrollbar(
+                        editor_scroll.clone(),
+                        true,
+                        theme,
+                    )),
+            )
+            .child(properties::grid::detail_scrollbar(
+                editor_scroll,
+                false,
+                theme,
+            ));
 
         let last_error = tab.last_error.clone();
         let no_result_set = tab.grid.pager.as_ref().is_some_and(|p| p.num_cols() == 0);
@@ -314,15 +339,11 @@ impl Workspace {
     /// Click handler for the characters of a script tab's editor
     fn script_editor_pick(&self, tab_idx: usize, cx: &mut Context<Self>) -> EditorPick {
         let workspace = cx.entity().downgrade();
-        Rc::new(move |line, col, extend, window, cx| {
+        Rc::new(move |line, col, kind, window, cx| {
             let _ = workspace.update(cx, |this, cx| {
                 this.focus_script_editor(true);
                 if let Some(tab) = this.tabs.get_mut(tab_idx) {
-                    tab.editor
-                        .buffer
-                        .move_selection(extend, |buffer| buffer.set_cursor_line_col(line, col));
-                    tab.editor.hide_completions();
-                    tab.editor.caret_moved = true;
+                    tab.editor.pick(line, col, kind);
                 }
                 window.focus(&this.focus_handle);
                 cx.notify();

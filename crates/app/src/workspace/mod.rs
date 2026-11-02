@@ -70,11 +70,11 @@ pub use tab_context_menu::TabContextMenu;
 #[cfg(test)]
 pub use tab_state::{QueryStatus, script_fetch_query};
 pub use tab_state::{TabState, group_thousands};
-use text_input::{
+use ui_core::actions::CheckForUpdates;
+use ui_editor::line_input::{
     CaretPick, LineHistory, LineInput, apply_pick, handle_line_key, render_caret_text,
     selection_range,
 };
-use ui_core::actions::CheckForUpdates;
 
 use value_panel::{VALUE_PANEL_WIDTH, ValuePanelState};
 use widgets::{dbeaver_driver_icon, render_field_content};

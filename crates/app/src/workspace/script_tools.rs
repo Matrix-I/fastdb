@@ -12,6 +12,17 @@ pub(super) struct ScriptAction {
     error: Option<String>,
 }
 
+impl ScriptAction {
+    pub(super) fn cancel_selection(&mut self) -> bool {
+        !self.delete
+            && ui_editor::line_input::clear_selection(
+                &mut self.caret,
+                &mut self.anchor,
+                self.name.chars().count(),
+            )
+    }
+}
+
 pub(super) fn tool(label: &'static str) -> Stateful<Div> {
     div()
         .flex_none()
@@ -244,7 +255,7 @@ impl Workspace {
             panel = panel.child(div().text_size(px(12.0)).child(format!("Move {} to the connection's scripts/.trash folder? You can restore its .sql file manually.", action.name)));
         } else {
             panel = panel.child(
-                div()
+                ui_editor::line_input::pick_surface(div(), usize::MAX, &pick)
                     .px_2()
                     .py_1()
                     .border_1()

@@ -55,36 +55,34 @@ impl Workspace {
                                 .child("Root CA certificate (optional; system trust when empty)"),
                         )
                         .child(
-                            div()
-                                .id("tls-ca-path")
-                                .px_3()
-                                .py_2()
-                                .rounded_md()
-                                .bg(theme.bg_app)
-                                .border_1()
-                                .border_color(if self.form.active_field == Some(FormField::TlsCa) {
-                                    theme.border_focused
-                                } else {
-                                    theme.border
-                                })
-                                .text_size(px(12.0))
-                                .cursor_text()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.form.active_field = Some(FormField::TlsCa);
-                                    this.form.field_cursor = usize::MAX;
-                                    this.form.field_anchor = None;
-                                    cx.notify();
-                                }))
-                                .child(render_field_content(
-                                    &self.form.form_tls_ca_cert,
-                                    "/path/to/ca.pem or ca.der",
-                                    self.form.active_field == Some(FormField::TlsCa),
-                                    self.form.field_anchor,
-                                    self.form.field_cursor,
-                                    self.input.cursor_visible,
-                                    theme,
-                                    &self.field_caret_pick(FormField::TlsCa, cx),
-                                )),
+                            ui_editor::line_input::pick_surface(
+                                div(),
+                                usize::MAX,
+                                &self.field_caret_pick(FormField::TlsCa, cx),
+                            )
+                            .id("tls-ca-path")
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(theme.bg_app)
+                            .border_1()
+                            .border_color(if self.form.active_field == Some(FormField::TlsCa) {
+                                theme.border_focused
+                            } else {
+                                theme.border
+                            })
+                            .text_size(px(12.0))
+                            .cursor_text()
+                            .child(render_field_content(
+                                &self.form.form_tls_ca_cert,
+                                "/path/to/ca.pem or ca.der",
+                                self.form.active_field == Some(FormField::TlsCa),
+                                self.form.field_anchor,
+                                self.form.field_cursor,
+                                self.input.cursor_visible,
+                                theme,
+                                &self.field_caret_pick(FormField::TlsCa, cx),
+                            )),
                         ),
                 )
             })
@@ -243,7 +241,7 @@ impl Workspace {
                                     .gap_1()
                                     .child(div().text_size(px(11.0)).text_color(theme.text_muted).child("Connection Name (Optional)"))
                                     .child(
-                                        div()
+                                        ui_editor::line_input::pick_surface(div(), usize::MAX, &self.field_caret_pick(FormField::Name, cx))
                                             .id("input-field-name")
                                             .p_2()
                                             .rounded_md()
@@ -252,14 +250,6 @@ impl Workspace {
                                             .border_color(if is_name_active { theme.text_accent } else { theme.border })
                                             .text_size(px(13.0))
                                             .cursor_text()
-                                            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                this.form.active_field = Some(FormField::Name);
-                                                this.form.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                this.form.field_cursor = usize::MAX;
-                                                this.input.cursor_visible = true;
-                                                window.focus(&this.focus_handle);
-                                                cx.notify();
-                                            }))
                                             .child(render_field_content(
                                                 &self.form.form_name,
                                                 "(optional - defaults to database name)",
@@ -285,7 +275,7 @@ impl Workspace {
                                             .gap_1()
                                             .child(div().text_size(px(11.0)).text_color(theme.text_muted).child("Host"))
                                             .child(
-                                                div()
+                                                ui_editor::line_input::pick_surface(div(), usize::MAX, &self.field_caret_pick(FormField::Host, cx))
                                                     .id("input-field-host")
                                                     .p_2()
                                                     .rounded_md()
@@ -294,14 +284,6 @@ impl Workspace {
                                                     .border_color(if is_host_active { theme.text_accent } else { theme.border })
                                                     .text_size(px(13.0))
                                                     .cursor_text()
-                                                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.form.active_field = Some(FormField::Host);
-                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.form.field_cursor = usize::MAX;
-                                                        this.input.cursor_visible = true;
-                                                        window.focus(&this.focus_handle);
-                                                        cx.notify();
-                                                    }))
                                                     .child(render_field_content(
                                                         &self.form.form_host,
                                                         "localhost",
@@ -322,7 +304,7 @@ impl Workspace {
                                             .gap_1()
                                             .child(div().text_size(px(11.0)).text_color(theme.text_muted).child("Port"))
                                             .child(
-                                                div()
+                                                ui_editor::line_input::pick_surface(div(), usize::MAX, &self.field_caret_pick(FormField::Port, cx))
                                                     .id("input-field-port")
                                                     .p_2()
                                                     .rounded_md()
@@ -331,14 +313,6 @@ impl Workspace {
                                                     .border_color(if is_port_active { theme.text_accent } else { theme.border })
                                                     .text_size(px(13.0))
                                                     .cursor_text()
-                                                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.form.active_field = Some(FormField::Port);
-                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.form.field_cursor = usize::MAX;
-                                                        this.input.cursor_visible = true;
-                                                        window.focus(&this.focus_handle);
-                                                        cx.notify();
-                                                    }))
                                                     .child(render_field_content(
                                                         &self.form.form_port,
                                                         "5432",
@@ -369,7 +343,7 @@ impl Workspace {
                                                 if is_sqlite { "SQLite Database File / Path" } else if self.form.selected_driver_kind == DbDriverKind::Oracle { "Service Name" } else { "Database Name" }
                                             ))
                                             .child(
-                                                div()
+                                                ui_editor::line_input::pick_surface(div(), usize::MAX, &self.field_caret_pick(FormField::Database, cx))
                                                     .id("input-field-db")
                                                     .p_2()
                                                     .rounded_md()
@@ -378,14 +352,6 @@ impl Workspace {
                                                     .border_color(if is_db_active { theme.text_accent } else { theme.border })
                                                     .text_size(px(13.0))
                                                     .cursor_text()
-                                                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.form.active_field = Some(FormField::Database);
-                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.form.field_cursor = usize::MAX;
-                                                        this.input.cursor_visible = true;
-                                                        window.focus(&this.focus_handle);
-                                                        cx.notify();
-                                                    }))
                                                     .child(render_field_content(
                                                         &self.form.form_database,
                                                         if is_sqlite { "e.g. ./test.db or :memory:" } else { "database name" },
@@ -406,7 +372,7 @@ impl Workspace {
                                             .gap_1()
                                             .child(div().text_size(px(11.0)).text_color(theme.text_muted).child("Username"))
                                             .child(
-                                                div()
+                                                ui_editor::line_input::pick_surface(div(), usize::MAX, &self.field_caret_pick(FormField::User, cx))
                                                     .id("input-field-user")
                                                     .p_2()
                                                     .rounded_md()
@@ -415,14 +381,6 @@ impl Workspace {
                                                     .border_color(if is_user_active { theme.text_accent } else { theme.border })
                                                     .text_size(px(13.0))
                                                     .cursor_text()
-                                                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                        this.form.active_field = Some(FormField::User);
-                                                        this.form.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                        this.form.field_cursor = usize::MAX;
-                                                        this.input.cursor_visible = true;
-                                                        window.focus(&this.focus_handle);
-                                                        cx.notify();
-                                                    }))
                                                     .child(render_field_content(
                                                         &self.form.form_user,
                                                         "username",
@@ -469,7 +427,7 @@ impl Workspace {
                                         } else {
                                             "•".repeat(self.form.form_password.chars().count())
                                         };
-                                        div()
+                                        ui_editor::line_input::pick_surface(div(), usize::MAX, &self.field_caret_pick(FormField::Password, cx))
                                             .id("input-field-pass")
                                             .p_2()
                                             .rounded_md()
@@ -478,14 +436,6 @@ impl Workspace {
                                             .border_color(if is_pass_active { theme.text_accent } else { theme.border })
                                             .text_size(px(13.0))
                                             .cursor_text()
-                                            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                                                this.form.active_field = Some(FormField::Password);
-                                                this.form.field_anchor = (event.click_count() >= 2).then_some(0);
-                                                this.form.field_cursor = usize::MAX;
-                                                this.input.cursor_visible = true;
-                                                window.focus(&this.focus_handle);
-                                                cx.notify();
-                                            }))
                                             .child(render_field_content(
                                                 &display_pass,
                                                 "(optional password)",

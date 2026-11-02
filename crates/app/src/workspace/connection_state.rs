@@ -1,9 +1,9 @@
-use super::text_input::LineHistory;
 use super::{FormField, SavedConnection};
 use db_wire::{ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
 use sql_intel::SchemaCache;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use ui_editor::line_input::LineHistory;
 
 pub(super) struct ConnectionFormState {
     pub request_id: u64,

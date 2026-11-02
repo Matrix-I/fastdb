@@ -44,6 +44,18 @@ impl Workspace {
             return;
         }
 
+        if event.keystroke.key == "escape"
+            && !self.updates.read(cx).is_open()
+            && self.menus.grid_context_menu.is_none()
+            && self.menus.column_menu.is_none()
+            && self.menus.nav_context_menu.is_none()
+            && self.cancel_focused_text_selection()
+        {
+            self.input.cursor_visible = true;
+            cx.notify();
+            return;
+        }
+
         if self.script_action.is_some() {
             self.handle_script_action_key(&event.keystroke, cx);
             return;
@@ -166,11 +178,11 @@ impl Workspace {
                     cx.notify();
                 }
             }
-        } else if self
-            .tabs
-            .get(self.active_tab)
-            .is_some_and(|t| t.active_subtab == TableSubTab::Data && t.grid.editing_cell.is_some())
-        {
+        } else if self.tabs.get(self.active_tab).is_some_and(|t| {
+            t.active_subtab == TableSubTab::Data
+                && t.grid.editing_cell.is_some()
+                && (!t.is_script() || !t.editor_focused)
+        }) {
             self.handle_cell_edit_key(event, cx);
         } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("s")
@@ -262,31 +274,7 @@ impl Workspace {
                     return;
                 }
                 tab.editor.identifier_quote = quote;
-                let cmd = event.keystroke.modifiers.platform || event.keystroke.modifiers.control;
-                if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
-                    if undo_key == UndoKey::Redo {
-                        tab.editor.redo()
-                    } else {
-                        tab.editor.undo()
-                    };
-                } else if cmd && event.keystroke.key.eq_ignore_ascii_case("a") {
-                    tab.editor.buffer.select_all();
-                    tab.editor.caret_moved = true;
-                    tab.editor.hide_completions();
-                } else if cmd && matches!(event.keystroke.key.as_str(), "c" | "x") {
-                    if let Some(text) = tab.editor.buffer.selected_text() {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                        if event.keystroke.key == "x" {
-                            tab.editor.buffer.delete_selection();
-                            tab.editor.hide_completions();
-                            tab.editor.caret_moved = true;
-                        }
-                    }
-                } else if cmd && event.keystroke.key.eq_ignore_ascii_case("v") {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        tab.editor.insert_text(&text);
-                    }
-                } else if !tab.editor.handle_key(&event.keystroke) {
+                if !tab.editor.handle_input_key(&event.keystroke, cx) {
                     return;
                 }
                 self.input.cursor_visible = true;

@@ -298,7 +298,7 @@ impl Workspace {
             );
         }
 
-        let search = div()
+        let search = ui_editor::line_input::pick_surface(div(), usize::MAX, &pick)
             .flex()
             .items_center()
             .h(px(28.0))

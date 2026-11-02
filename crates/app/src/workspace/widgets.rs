@@ -14,12 +14,16 @@ pub(super) fn render_field_content(
     theme: &Theme,
     on_pick: &CaretPick,
 ) -> Div {
-    let row = div()
-        .flex()
-        .items_center()
-        .h(px(18.0))
-        .w_full()
-        .overflow_hidden();
+    let row = ui_editor::line_input::pick_surface(
+        div()
+            .flex()
+            .items_center()
+            .h(px(18.0))
+            .w_full()
+            .overflow_hidden(),
+        usize::MAX,
+        on_pick,
+    );
 
     if value.is_empty() {
         let placeholder_el = div()

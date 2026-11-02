@@ -67,9 +67,7 @@ impl RopeyBuffer {
     }
 
     pub fn selection(&self) -> Option<std::ops::Range<usize>> {
-        let anchor = self.selection_anchor?;
-        (anchor != self.cursor_offset)
-            .then_some(anchor.min(self.cursor_offset)..anchor.max(self.cursor_offset))
+        crate::line_input::selection_range(self.selection_anchor, self.cursor_offset, self.len())
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -84,9 +82,10 @@ impl RopeyBuffer {
     }
 
     pub fn move_selection(&mut self, extend: bool, movement: impl FnOnce(&mut Self)) {
-        let anchor = self.selection_anchor.unwrap_or(self.cursor_offset);
+        let mut anchor = self.selection_anchor;
+        crate::line_input::move_anchor(&mut anchor, self.cursor_offset, extend);
         movement(self);
-        self.selection_anchor = extend.then_some(anchor);
+        self.selection_anchor = anchor;
     }
 
     pub fn delete_selection(&mut self) -> bool {

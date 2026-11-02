@@ -217,7 +217,7 @@ impl Workspace {
                             )
                             // Filter Expression Input Box ("khung để nối thêm sql như dbeaver")
                             .child(
-                                div()
+                                ui_editor::line_input::pick_surface(div(), usize::MAX, &self.filter_caret_pick(cx))
                                     .id("filter-sql-input-box")
                                     .relative()
                                     .flex()
@@ -230,16 +230,6 @@ impl Workspace {
                                     .rounded_xs()
                                     .px_2()
                                     .cursor_text()
-                                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                        this.commit_cell_edit();
-                                        this.blur_fetch_size();
-                                        this.input.is_filter_focused = true;
-                                        this.input.filter_anchor = (event.click_count() >= 2).then_some(0);
-                                        this.input.filter_cursor = usize::MAX;
-                                        this.input.filter_suggest = None;
-                                        this.input.cursor_visible = true;
-                                        cx.notify();
-                                    }))
                                     .text_size(px(11.5))
                                     .child(render_field_content(
                                         &filter_sql,
@@ -515,37 +505,37 @@ impl Workspace {
             .child(self.render_edit_toolbar(cx))
             .child(self.render_export_toolbar(tab_idx, cx))
             .child(
-                div()
-                    .id("fetch-size-input-box")
-                    .flex()
-                    .items_center()
-                    .w(px(64.0))
-                    .h(px(20.0))
-                    .px_1()
-                    .bg(theme.bg_editor)
-                    .border_1()
-                    .border_color(if is_fetch_size_focused {
-                        rgb(0x388bfd)
-                    } else {
-                        theme.border
-                    })
-                    .rounded_xs()
-                    .cursor_text()
-                    .text_color(theme.text_primary)
-                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                        this.focus_fetch_size(event.click_count() >= 2, usize::MAX);
-                        cx.notify();
-                    }))
-                    .child(render_field_content(
-                        &fetch_size_text,
-                        "",
-                        is_fetch_size_focused,
-                        self.input.fetch_size_anchor,
-                        self.input.fetch_size_cursor,
-                        self.input.cursor_visible,
-                        theme,
-                        &self.fetch_size_caret_pick(cx),
-                    )),
+                ui_editor::line_input::pick_surface(
+                    div(),
+                    usize::MAX,
+                    &self.fetch_size_caret_pick(cx),
+                )
+                .id("fetch-size-input-box")
+                .flex()
+                .items_center()
+                .w(px(64.0))
+                .h(px(20.0))
+                .px_1()
+                .bg(theme.bg_editor)
+                .border_1()
+                .border_color(if is_fetch_size_focused {
+                    rgb(0x388bfd)
+                } else {
+                    theme.border
+                })
+                .rounded_xs()
+                .cursor_text()
+                .text_color(theme.text_primary)
+                .child(render_field_content(
+                    &fetch_size_text,
+                    "",
+                    is_fetch_size_focused,
+                    self.input.fetch_size_anchor,
+                    self.input.fetch_size_cursor,
+                    self.input.cursor_visible,
+                    theme,
+                    &self.fetch_size_caret_pick(cx),
+                )),
             )
             .child({
                 let fetch_next_btn = div()

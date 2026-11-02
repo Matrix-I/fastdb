@@ -8,16 +8,17 @@ use std::sync::Arc;
 use ui_core::theme::Theme;
 
 use crate::buffer::RopeyBuffer;
+pub use crate::line_input::PickKind as EditorPickKind;
+use crate::line_input::{PickAction, pick_action};
+use crate::text_edit::{TextClipboard, TextCommand, TextTarget, dispatch};
 
-const LINE_HEIGHT: f32 = 20.0;
-const GUTTER_WIDTH: f32 = 48.0;
-const MONO_FONT: &str = ".AppleSystemUIFontMonospaced, Menlo, monospace";
-/// Approximate advance of one monospace char at 13 px, used to place the completion popup
-const CHAR_WIDTH: f32 = 7.8;
+use crate::layout::{
+    CODE_PADDING, EditorLayout, GUTTER_WIDTH, LINE_HEIGHT, MONO_FONT, VERTICAL_PADDING, reveal_axis,
+};
 
-/// Called with `(line, col)` when a char of the editor is clicked; `col` may be past the
-/// end of the line (`usize::MAX` for a click right of the text)
-pub type EditorPick = Rc<dyn Fn(usize, usize, bool, &mut Window, &mut App)>;
+/// Reports mouse presses and drags at `(line, col)`; `col` may be past the
+/// end of the line (`usize::MAX` for a click right of the text).
+pub type EditorPick = Rc<dyn Fn(usize, usize, EditorPickKind, &mut Window, &mut App)>;
 
 /// Completion entries shown in the popup; the selection wraps within them
 pub const MAX_VISIBLE_COMPLETIONS: usize = 6;
@@ -37,6 +38,8 @@ pub struct SqlEditorView {
     /// Quote put around completed names that are not plain lowercase identifiers:
     /// `"` for PostgreSQL and SQLite, a backtick for MySQL
     pub identifier_quote: char,
+    layout: EditorLayout,
+    line_drag_anchor: Option<usize>,
 }
 
 impl SqlEditorView {
@@ -52,7 +55,58 @@ impl SqlEditorView {
             caret_moved: true,
             scroll_handle: ScrollHandle::new(),
             identifier_quote: '"',
+            layout: EditorLayout::default(),
+            line_drag_anchor: None,
         }
+    }
+
+    pub fn select_all(&mut self) {
+        self.line_drag_anchor = None;
+        self.buffer.select_all();
+        self.hide_completions();
+        // Keep the selected text under the user's eyes rather than jumping to EOF.
+        self.caret_moved = false;
+    }
+
+    pub fn pick(&mut self, line: usize, col: usize, kind: EditorPickKind) {
+        match pick_action(kind, true, self.line_drag_anchor.is_some()) {
+            PickAction::SelectUnit => {
+                let line = line.min(self.buffer.line_count().saturating_sub(1));
+                self.line_drag_anchor = Some(line);
+                self.select_lines(line, line);
+                self.caret_moved = false;
+            }
+            PickAction::ExtendUnit => {
+                if let Some(anchor) = self.line_drag_anchor {
+                    self.select_lines(anchor, line);
+                }
+                self.caret_moved = false;
+            }
+            PickAction::Move { extend } => {
+                self.line_drag_anchor = None;
+                self.buffer
+                    .move_selection(extend, |buffer| buffer.set_cursor_line_col(line, col));
+                self.caret_moved = true;
+            }
+            PickAction::Ignore => {}
+        }
+        self.hide_completions();
+    }
+
+    fn select_lines(&mut self, anchor: usize, focus: usize) {
+        let last_line = self.buffer.line_count().saturating_sub(1);
+        let first = anchor.min(focus).min(last_line);
+        let last = anchor.max(focus).min(last_line);
+        let start = self.buffer.line_start_offset(first);
+        let end = if last < last_line {
+            self.buffer.line_start_offset(last + 1)
+        } else {
+            self.buffer.len()
+        };
+        self.buffer
+            .move_selection(false, |buffer| buffer.set_cursor_offset(start));
+        self.buffer
+            .move_selection(true, |buffer| buffer.set_cursor_offset(end));
     }
 
     /// Returns the SQL statement at the current cursor offset
@@ -81,6 +135,7 @@ impl SqlEditorView {
     }
 
     pub fn insert_text(&mut self, s: &str) {
+        self.line_drag_anchor = None;
         self.buffer.insert_str(s);
         self.caret_moved = true;
         self.update_completions();
@@ -199,11 +254,11 @@ impl SqlEditorView {
     /// Handles an editing or navigation key. Returns `false` for keys the caller owns
     /// (clipboard, undo, run, app shortcuts).
     pub fn handle_key(&mut self, keystroke: &Keystroke) -> bool {
+        self.line_drag_anchor = None;
         let mods = &keystroke.modifiers;
         let cmd = mods.platform || mods.control;
         let key = keystroke.key.as_str();
-
-        if self.show_completions && !mods.shift {
+        if self.show_completions && !mods.shift && !cmd && !mods.alt {
             match key {
                 "up" => {
                     self.select_prev_completion();
@@ -214,17 +269,48 @@ impl SqlEditorView {
                     return true;
                 }
                 "enter" | "return" | "tab" if !cmd => return self.apply_selected_completion(),
-                "escape" => {
-                    self.hide_completions();
-                    return true;
-                }
                 _ => {}
             }
         }
 
-        if !matches!(key, "left" | "right" | "up" | "down" | "home" | "end") {
-            return self.handle_edit_key(keystroke, cmd);
+        let Some(command) = TextCommand::from_key(keystroke, true) else {
+            return false;
+        };
+        if matches!(
+            command,
+            TextCommand::Copy
+                | TextCommand::Cut
+                | TextCommand::Paste
+                | TextCommand::Undo
+                | TextCommand::Redo
+        ) {
+            return false;
         }
+        struct NoClipboard;
+        impl TextClipboard for NoClipboard {
+            fn read(&mut self) -> Option<String> {
+                None
+            }
+            fn write(&mut self, _: String) {}
+        }
+        dispatch(self, &command, &mut NoClipboard);
+        true
+    }
+
+    /// Shared editing entry point with access to the system clipboard.
+    pub fn handle_input_key(&mut self, key: &Keystroke, cx: &mut App) -> bool {
+        if self.handle_key(key) {
+            return true;
+        }
+        let Some(command) = TextCommand::from_key(key, true) else {
+            return false;
+        };
+        dispatch(self, &command, cx);
+        true
+    }
+
+    fn navigate(&mut self, key: &str, mods: &Modifiers) {
+        let cmd = mods.platform || mods.control;
         if !mods.shift
             && matches!(key, "left" | "right")
             && !cmd
@@ -238,7 +324,7 @@ impl SqlEditorView {
             });
             self.caret_moved = true;
             self.hide_completions();
-            return true;
+            return;
         }
         self.buffer.move_selection(mods.shift, |buffer| match key {
             "left" if cmd => buffer.move_line_start(),
@@ -257,38 +343,6 @@ impl SqlEditorView {
         });
         self.caret_moved = true;
         self.hide_completions();
-        true
-    }
-
-    /// Keys that change the text; see [`Self::handle_key`]
-    fn handle_edit_key(&mut self, keystroke: &Keystroke, cmd: bool) -> bool {
-        if cmd {
-            return false;
-        }
-        let key = keystroke.key.as_str();
-        match key {
-            "backspace" => self.backspace(),
-            "delete" => {
-                self.buffer.delete_forward();
-                self.caret_moved = true;
-                self.hide_completions();
-            }
-            "enter" | "return" => self.insert_text("\n"),
-            "tab" => self.insert_text("    "),
-            "space" => self.insert_text(" "),
-            "escape" => self.hide_completions(),
-            _ => {
-                let typed = keystroke
-                    .key_char
-                    .as_deref()
-                    .or((key.chars().count() == 1).then_some(key));
-                match typed {
-                    Some(s) if s.chars().count() == 1 => self.insert_text(s),
-                    _ => return false,
-                }
-            }
-        }
-        true
     }
 
     pub fn render_editor(
@@ -296,11 +350,37 @@ impl SqlEditorView {
         focused: bool,
         caret_visible: bool,
         on_pick: EditorPick,
+        window: &mut Window,
     ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
+        self.layout.update(&self.buffer, window);
+        let content_width = self.layout.content_width();
         if std::mem::take(&mut self.caret_moved) {
-            self.scroll_handle.scroll_to_item(cursor_line);
+            let viewport = self.scroll_handle.bounds().size;
+            let offset = self.scroll_handle.offset();
+            let x = GUTTER_WIDTH
+                + CODE_PADDING
+                + self
+                    .layout
+                    .prefix_width(&self.buffer, cursor_line, cursor_col);
+            let y = VERTICAL_PADDING + cursor_line as f32 * LINE_HEIGHT;
+            self.scroll_handle.set_offset(point(
+                px(reveal_axis(
+                    offset.x.into(),
+                    x,
+                    x + 2.0,
+                    viewport.width.into(),
+                    content_width,
+                )),
+                px(reveal_axis(
+                    offset.y.into(),
+                    y,
+                    y + LINE_HEIGHT,
+                    viewport.height.into(),
+                    self.buffer.line_count() as f32 * LINE_HEIGHT + VERTICAL_PADDING * 2.0,
+                )),
+            ));
         }
 
         let mut lines = div()
@@ -308,25 +388,28 @@ impl SqlEditorView {
             .flex()
             .flex_col()
             .size_full()
+            .min_w_0()
+            .min_h_0()
             .py_1()
-            .overflow_y_scroll()
+            .overflow_scroll()
             .track_scroll(&self.scroll_handle);
 
         for l in 0..self.buffer.line_count().max(1) {
             let content = self.buffer.line(l).unwrap_or_default();
             let content = content.trim_end_matches(['\n', '\r']);
-            let caret_col = (focused && l == cursor_line).then_some(cursor_col);
+            let caret_col = (focused && l == cursor_line && self.buffer.selection().is_none())
+                .then_some(cursor_col);
             lines = lines.child(render_line(
                 l,
                 content,
-                caret_col,
-                caret_visible,
+                caret_col.map(|col| (col, caret_visible)),
                 self.buffer.selection().map(|range| {
                     let start = self.buffer.line_start_offset(l);
                     range.start.saturating_sub(start)..range.end.saturating_sub(start)
                 }),
                 &on_pick,
                 &theme,
+                content_width,
             ));
         }
 
@@ -335,9 +418,12 @@ impl SqlEditorView {
             .flex()
             .flex_col()
             .size_full()
+            .min_w_0()
+            .min_h_0()
             .bg(theme.bg_editor)
             .text_color(theme.text_primary)
             .font_family(MONO_FONT)
+            .font_weight(FontWeight::NORMAL)
             .text_size(px(13.0))
             .overflow_hidden()
             .child(lines);
@@ -345,7 +431,12 @@ impl SqlEditorView {
         if focused && self.show_completions && !self.completion_items.is_empty() {
             let scroll_y = f32::from(self.scroll_handle.offset().y);
             let top = (cursor_line as f32 + 1.0) * LINE_HEIGHT + 4.0 + scroll_y;
-            let left = GUTTER_WIDTH + 12.0 + cursor_col as f32 * CHAR_WIDTH;
+            let left = GUTTER_WIDTH
+                + CODE_PADDING
+                + self
+                    .layout
+                    .prefix_width(&self.buffer, cursor_line, cursor_col)
+                + f32::from(self.scroll_handle.offset().x);
             root = root.child(self.render_completion_popup(top, left, &theme));
         }
         root
@@ -494,38 +585,24 @@ fn caret_bar(visible: bool) -> AnyElement {
 fn render_line(
     line: usize,
     content: &str,
-    caret_col: Option<usize>,
-    caret_visible: bool,
+    caret: Option<(usize, bool)>,
     selection: Option<std::ops::Range<usize>>,
     on_pick: &EditorPick,
     theme: &Theme,
+    content_width: f32,
 ) -> AnyElement {
+    let caret_col = caret.map(|(col, _)| col);
+    let caret_visible = caret.is_some_and(|(_, visible)| visible);
+    let pick = on_pick.clone();
+    let line_pick: crate::line_input::CaretPick =
+        Rc::new(move |col, kind, window, cx| pick(line, col, kind, window, cx));
     let half = |col: usize, right: bool| {
-        let pick = on_pick.clone();
         let el = div().absolute().top_0().bottom_0().w(relative(0.5));
         let el = if right { el.right_0() } else { el.left_0() };
-        let drag_pick = on_pick.clone();
-        el.on_mouse_down(
-            MouseButton::Left,
-            move |event: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                pick(line, col, event.modifiers.shift, window, cx);
-            },
-        )
-        .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
-            if event.pressed_button == Some(MouseButton::Left) {
-                drag_pick(line, col, true, window, cx);
-            }
-        })
+        crate::line_input::pick_surface(el, col, &line_pick)
     };
 
-    let mut code = div()
-        .flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .pl_3()
-        .overflow_hidden();
+    let mut code = div().flex().flex_1().h_full().items_center().pl_3();
     if caret_col.is_some() {
         code = code.bg(theme.bg_surface_hover);
     }
@@ -551,9 +628,13 @@ fn render_line(
                 div()
                     .relative()
                     .flex_none()
-                    .text_color(color)
+                    .text_color(if selection.as_ref().is_some_and(|r| r.contains(&byte)) {
+                        crate::line_input::selection_text_color().into()
+                    } else {
+                        color
+                    })
                     .bg(if selection.as_ref().is_some_and(|r| r.contains(&byte)) {
-                        theme.bg_surface_selected
+                        crate::line_input::selection_color()
                     } else {
                         rgba(0x00000000)
                     })
@@ -568,31 +649,25 @@ fn render_line(
     if caret_col.is_some_and(|c| c >= col) {
         code = code.child(caret_bar(caret_visible));
     }
+    let line_break_selected = selection
+        .as_ref()
+        .is_some_and(|range| range.start <= content.len() && range.end > content.len());
     // Clicking right of the text puts the caret at the end of the line
-    let pick = on_pick.clone();
-    let drag_pick = on_pick.clone();
-    code = code.child(
-        div()
-            .flex_1()
-            .h_full()
-            .on_mouse_down(
-                MouseButton::Left,
-                move |event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    pick(line, usize::MAX, event.modifiers.shift, window, cx);
-                },
-            )
-            .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
-                if event.pressed_button == Some(MouseButton::Left) {
-                    drag_pick(line, usize::MAX, true, window, cx);
-                }
-            }),
-    );
+    code = code.child(crate::line_input::pick_surface(
+        div().flex_1().h_full().bg(if line_break_selected {
+            crate::line_input::selection_color()
+        } else {
+            rgba(0x00000000)
+        }),
+        usize::MAX,
+        &line_pick,
+    ));
 
     div()
         .flex()
         .flex_none()
-        .w_full()
+        .min_w_full()
+        .w(px(content_width))
         .h(px(LINE_HEIGHT))
         .child(
             div()
@@ -618,16 +693,75 @@ fn render_line(
         .into_any_element()
 }
 
+impl TextTarget for SqlEditorView {
+    fn select_all(&mut self) {
+        SqlEditorView::select_all(self);
+    }
+    fn selected_text(&self) -> Option<String> {
+        self.buffer.selected_text()
+    }
+    fn delete_selection(&mut self) {
+        self.line_drag_anchor = None;
+        self.buffer.delete_selection();
+        self.hide_completions();
+        self.caret_moved = true;
+    }
+    fn insert(&mut self, text: &str) {
+        self.insert_text(text);
+    }
+    fn backspace(&mut self, modifiers: &Modifiers) {
+        if self.buffer.selection().is_some() {
+            TextTarget::delete_selection(self);
+            return;
+        }
+        if modifiers.platform || modifiers.control || modifiers.alt {
+            self.buffer.move_selection(true, |buffer| {
+                if modifiers.platform || modifiers.control {
+                    buffer.move_line_start();
+                } else {
+                    buffer.move_word_left();
+                }
+            });
+            self.buffer.delete_selection();
+            self.caret_moved = true;
+            self.update_completions();
+        } else {
+            self.backspace();
+        }
+    }
+    fn delete_forward(&mut self) {
+        self.buffer.delete_forward();
+        self.caret_moved = true;
+        self.hide_completions();
+    }
+    fn navigate(&mut self, key: &str, modifiers: &Modifiers) {
+        SqlEditorView::navigate(self, key, modifiers);
+    }
+    fn restore(&mut self, redo: bool) {
+        if redo {
+            self.redo();
+        } else {
+            self.undo();
+        }
+    }
+    fn escape(&mut self) {
+        self.buffer.set_cursor_offset(self.buffer.cursor_offset());
+        self.line_drag_anchor = None;
+        self.hide_completions();
+        self.caret_moved = false;
+    }
+}
+
 impl Render for SqlEditorView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_editor(true, true, Rc::new(|_, _, _, _, _| {}))
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_editor(true, true, Rc::new(|_, _, _, _, _| {}), window)
     }
 }
 
 #[cfg(test)]
 mod tests {
     // Not a glob: `super::*` brings in `gpui::test`, which shadows the built-in `#[test]`.
-    use super::{MAX_VISIBLE_COMPLETIONS, SqlEditorView};
+    use super::{EditorPickKind, MAX_VISIBLE_COMPLETIONS, SqlEditorView};
     use gpui::{Keystroke, Modifiers};
     use sql_intel::SchemaCache;
     use std::sync::Arc;
@@ -748,6 +882,183 @@ mod tests {
         assert!(ed.caret_moved);
         assert!(ed.handle_key(&cmd("right")));
         assert_eq!(ed.buffer.cursor_line_col(), (0, 9));
+    }
+
+    #[test]
+    fn select_all_covers_long_unicode_scripts_without_moving_the_viewport() {
+        let original = format!(
+            "SELECT 'Tiếng Việt 😀';\n{}\nSELECT 2;",
+            "long_column_name, ".repeat(100)
+        );
+        let mut ed = editor(&original);
+        ed.scroll_handle
+            .set_offset(gpui::point(gpui::px(-250.0), gpui::px(-40.0)));
+        ed.show_completions = true;
+        assert!(ed.handle_key(&cmd("a")));
+        assert_eq!(
+            ed.buffer.selected_text().as_deref(),
+            Some(original.as_str())
+        );
+        assert_eq!(ed.buffer.selection(), Some(0..original.len()));
+        assert_eq!(
+            ed.scroll_handle.offset(),
+            gpui::point(gpui::px(-250.0), gpui::px(-40.0))
+        );
+        assert!(!ed.caret_moved);
+        assert!(!ed.show_completions);
+        ed.insert_text("SELECT 42;");
+        assert_eq!(ed.buffer.text(), "SELECT 42;");
+        ed.undo();
+        assert_eq!(ed.buffer.text(), original);
+        let mut control_a = key("a");
+        control_a.modifiers.control = true;
+        assert!(ed.handle_key(&control_a));
+        assert_eq!(
+            ed.buffer.selected_text().as_deref(),
+            Some(original.as_str())
+        );
+    }
+
+    #[test]
+    fn double_click_selects_complete_unicode_lines_and_line_endings() {
+        let original = "SELECT 1;\r\nSELECT 'Việt 😀';\r\nSELECT 3;";
+        let mut ed = editor(original);
+        let double_click = EditorPickKind::Press {
+            shift: false,
+            clicks: 2,
+        };
+        ed.pick(1, 4, double_click);
+        assert_eq!(
+            ed.buffer.selected_text().as_deref(),
+            Some("SELECT 'Việt 😀';\r\n")
+        );
+        assert!(!ed.caret_moved);
+        ed.insert_text("SELECT 42;\n");
+        assert_eq!(ed.buffer.text(), "SELECT 1;\r\nSELECT 42;\nSELECT 3;");
+        ed.undo();
+        assert_eq!(ed.buffer.text(), original);
+        ed.pick(2, usize::MAX, double_click);
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("SELECT 3;"));
+        ed.pick(0, 0, double_click);
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("SELECT 1;\r\n"));
+    }
+
+    #[test]
+    fn double_click_drag_extends_whole_lines_and_single_click_resets_it() {
+        let mut ed = editor("one\n\nthree\nfour");
+        ed.pick(
+            2,
+            2,
+            EditorPickKind::Press {
+                shift: false,
+                clicks: 2,
+            },
+        );
+        ed.pick(2, 1, EditorPickKind::Drag);
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("three\n"));
+        ed.pick(0, 1, EditorPickKind::Drag);
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("one\n\nthree\n"));
+        ed.pick(3, 1, EditorPickKind::Drag);
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("three\nfour"));
+        ed.pick(
+            0,
+            1,
+            EditorPickKind::Press {
+                shift: false,
+                clicks: 1,
+            },
+        );
+        assert!(ed.buffer.selection().is_none());
+        ed.pick(0, 2, EditorPickKind::Drag);
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("n"));
+        ed.pick(
+            0,
+            3,
+            EditorPickKind::Press {
+                shift: true,
+                clicks: 1,
+            },
+        );
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("ne"));
+        ed.pick(
+            1,
+            0,
+            EditorPickKind::Press {
+                shift: false,
+                clicks: 2,
+            },
+        );
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("\n"));
+    }
+
+    #[test]
+    fn shift_click_extends_the_original_anchor_even_on_rapid_clicks() {
+        let mut ed = editor("one\nViệt 😀\nlast");
+        let press = |shift, clicks| EditorPickKind::Press { shift, clicks };
+        ed.pick(1, 1, press(false, 1));
+        ed.pick(2, 2, press(true, 2));
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("iệt 😀\nla"));
+        ed.pick(1, 3, press(true, 1));
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("iệ"));
+        ed.pick(0, 1, press(true, 3));
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("ne\nV"));
+        ed.pick(0, 2, EditorPickKind::Drag);
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("e\nV"));
+
+        ed.pick(1, 1, press(false, 2));
+        ed.pick(2, 2, press(true, 2));
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("Việt 😀\nla"));
+    }
+
+    #[test]
+    fn shift_navigation_and_mouse_clicks_share_the_selection_anchor() {
+        let mut ed = editor("one\ntwo\nlast");
+        ed.pick(
+            1,
+            1,
+            EditorPickKind::Press {
+                shift: false,
+                clicks: 1,
+            },
+        );
+        let mut right = key("right");
+        right.modifiers.shift = true;
+        assert!(ed.handle_key(&right));
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("w"));
+        ed.pick(
+            2,
+            2,
+            EditorPickKind::Press {
+                shift: true,
+                clicks: 1,
+            },
+        );
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("wo\nla"));
+        let mut home = key("home");
+        home.modifiers.shift = true;
+        assert!(ed.handle_key(&home));
+        assert_eq!(ed.buffer.selected_text().as_deref(), Some("wo\n"));
+    }
+
+    #[test]
+    fn escape_clears_reverse_selection_and_completions_without_moving_the_caret() {
+        let mut ed = editor("SELECT 'Việt 😀';");
+        let mut left = key("left");
+        left.modifiers.shift = true;
+        assert!(ed.handle_key(&left));
+        assert!(ed.buffer.selection().is_some());
+        let caret = ed.buffer.cursor_offset();
+        let original = ed.buffer.text();
+        ed.show_completions = true;
+        ed.scroll_handle
+            .set_offset(gpui::point(gpui::px(-20.0), gpui::px(0.0)));
+        assert!(ed.handle_key(&key("escape")));
+        assert!(ed.buffer.selection().is_none());
+        assert_eq!(ed.buffer.cursor_offset(), caret);
+        assert_eq!(ed.buffer.text(), original);
+        assert!(!ed.show_completions);
+        assert!(!ed.caret_moved);
+        assert_eq!(ed.scroll_handle.offset().x, gpui::px(-20.0));
     }
 
     #[test]
