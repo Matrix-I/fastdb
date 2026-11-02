@@ -1,0 +1,14 @@
+{
+  "protocol": 1,
+  "description": "Initial safety budgets, not product performance claims. Calibrate on a dedicated display host; tighten after reviewing measurements.",
+  "metrics": {
+    "startup_ms": {"max": 2000, "relative": 0.20, "noise": 25},
+    "idle_rss_mib": {"max": 256, "relative": 0.15, "noise": 8},
+    "query_ms": {"max": 60000, "relative": 0.15, "noise": 250},
+    "first_batch_ms": {"max": 1000, "relative": 0.20, "noise": 10},
+    "peak_rss_mib": {"max": 384, "relative": 0.15, "noise": 16},
+    "scroll_p95_ms": {"max": 50, "relative": 0.20, "noise": 2},
+    "scroll_over_50ms_pct": {"max": 5, "relative": 0.20, "noise": 1},
+    "binary_mib": {"max": 100, "relative": 0.05, "noise": 1}
+  }
+}

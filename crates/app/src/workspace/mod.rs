@@ -246,7 +246,7 @@ impl Workspace {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        if workspace.updates.read(cx).is_time_for_auto_check(now) {
+        if !crate::benchmark::enabled() && workspace.updates.read(cx).is_time_for_auto_check(now) {
             cx.spawn(async move |this, cx| {
                 // Wait 3 seconds so main window is displayed first
                 cx.background_executor()

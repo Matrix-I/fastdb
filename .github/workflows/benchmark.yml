@@ -1,0 +1,69 @@
+name: Desktop performance
+
+# Dedicated display host only: hosted VMs have unstable GPU/display timing.
+# Manual dispatch also avoids executing arbitrary PR code on a self-hosted runner.
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: 'Baseline commit/tag with benchmark protocol v1 (empty = absolute budgets only)'
+        required: false
+        default: ''
+      display_id:
+        description: 'Fixed display configuration identifier'
+        required: true
+        default: 'dedicated-60hz-2x'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-performance
+  cancel-in-progress: false
+
+jobs:
+  desktop:
+    runs-on: [self-hosted, macOS, fastdb-benchmark]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate regression checker
+        run: cargo test --locked -p xtask
+      - name: Build native benchmark runner
+        run: cargo build --locked -p xtask
+      - uses: actions/checkout@v7
+        if: inputs.baseline_ref != ''
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: benchmark-baseline
+      - name: Build baseline
+        if: inputs.baseline_ref != ''
+        working-directory: benchmark-baseline
+        run: cargo build --locked --release -p fastdb-app
+      - name: Measure baseline
+        if: inputs.baseline_ref != ''
+        working-directory: benchmark-baseline
+        env:
+          DISPLAY_ID: ${{ inputs.display_id }}
+        run: >-
+          "$GITHUB_WORKSPACE/target/debug/xtask" benchmark --output "$RUNNER_TEMP/fastdb-bench/baseline.json"
+          --display-id "$DISPLAY_ID" --machine-id "$RUNNER_NAME"
+      - name: Build candidate
+        run: cargo build --locked --release -p fastdb-app
+      - name: Measure and enforce thresholds
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          DISPLAY_ID: ${{ inputs.display_id }}
+        shell: bash
+        run: |
+          args=()
+          if [[ -n "$BASELINE_REF" ]]; then
+            args+=(--baseline "$RUNNER_TEMP/fastdb-bench/baseline.json")
+          fi
+          target/debug/xtask benchmark --output "$RUNNER_TEMP/fastdb-bench/candidate.json" \
+            --display-id "$DISPLAY_ID" --machine-id "$RUNNER_NAME" "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-performance-${{ github.sha }}
+          path: ${{ runner.temp }}/fastdb-bench/

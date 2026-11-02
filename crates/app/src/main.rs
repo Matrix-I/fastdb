@@ -5,6 +5,7 @@ use gpui::*;
 use tracing::info;
 
 mod assets;
+mod benchmark;
 pub mod updater;
 mod workspace;
 use assets::FastDbAssetSource;
@@ -70,8 +71,14 @@ fn main() -> Result<()> {
 
     info!("Initializing FastDB - Next-Gen Pure Rust Database Client");
 
-    // Clean up abandoned spill files on startup
-    if let Err(e) = platform_hal::paths::cleanup_old_spill_files() {
+    if benchmark::enabled() {
+        benchmark::validate_profile()?;
+    }
+
+    // Avoid touching spill files belonging to normal app sessions during benchmarks.
+    if !benchmark::enabled()
+        && let Err(e) = platform_hal::paths::cleanup_old_spill_files()
+    {
         tracing::warn!("Spill cleanup warning: {}", e);
     }
 
@@ -124,6 +131,9 @@ fn main() -> Result<()> {
             let workspace = cx.new(Workspace::new);
             let weak = workspace.downgrade();
             window.on_window_should_close(cx, move |_, cx| {
+                if benchmark::enabled() {
+                    return true;
+                }
                 weak.update(cx, |workspace, cx| {
                     if workspace.allow_quit {
                         true
@@ -134,6 +144,9 @@ fn main() -> Result<()> {
                 })
                 .unwrap_or(true)
             });
+            if benchmark::enabled() {
+                benchmark::start(workspace.clone(), window, cx);
+            }
             workspace
         })
         .expect("Failed to open FastDB main window");

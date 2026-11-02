@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "xtask",
     "crates/app",
     "crates/platform-hal",
     "crates/mem-engine",

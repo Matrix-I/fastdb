@@ -8,3 +8,6 @@
 *.swp
 *.swo
 .fastdb_config.json
+
+# Local performance measurements
+benchmarks/results/

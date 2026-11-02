@@ -16,7 +16,7 @@ FastDB is a database client built from scratch in Rust. It talks to databases th
 
 ## 🎯 Goals
 
-FastDB is aiming for these targets against a typical JVM client. None of them has been benchmarked yet.
+FastDB is aiming for these targets against a typical JVM client. They remain aspirational; the [regression protocol](benchmarks/README.md) and [local measurements](benchmarks/VALIDATION.md) track measured behavior and acceptance budgets separately.
 
 | Metric | DBeaver (Java / JDBC) | FastDB target |
 | :--- | :--- | :--- |
@@ -127,7 +127,7 @@ These are goals of the project, but they are not available in the app today:
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
 - **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. The DDL tab remains a partial preview, not a complete schema dump. The status bar's "120 FPS" label is static text.
 - **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
-- **Benchmarks.** None of the numbers under [Goals](#-goals) has been measured.
+- **Performance target validation.** The desktop regression suite measures startup, RSS, a million-row SQLite stream, scrolling and release executable size; cold-cache startup, live-provider latency and the original target claims still need separate measurements.
 
 ---
 
@@ -174,6 +174,7 @@ flowchart TD
 
 | Crate | Kind | Responsibility | State |
 | :--- | :--- | :--- | :--- |
+| `xtask` | developer tool | Native benchmark runner and regression checker (`cargo xtask`) | Used |
 | `app` | binary | Window, workspace UI, connection management, query orchestration | Used |
 | `platform-hal` | library | Paths, spill directory, Unix socket discovery, keychain, keymap helpers | Used |
 | `mem-engine` | library | Slotted pages, LRU pager, LZ4 disk spill | Used |
@@ -260,6 +261,27 @@ FASTDB_TEST_PG_PORT=5432 FASTDB_TEST_MYSQL_PORT=3306 FASTDB_TEST_MYSQL_PASSWORD=
 
 With Docker and OpenSSL available, run `./ci/test-tls.sh`. It creates disposable PostgreSQL and MySQL servers with a private test CA, checks encrypted sessions, rejects untrusted certificates and incorrect hostnames, verifies PostgreSQL TLS cancellation, and checks that PostgreSQL refuses plaintext fallback. The containers and temporary certificates are removed on exit. CI runs this after the regular driver tests.
 
+### Performance regression checks
+
+Build the release app, then run the fixed desktop workload on a visible desktop:
+
+```bash
+cargo build --locked --release -p fastdb-app
+cargo xtask benchmark --output benchmarks/results/baseline.json --display-id built-in-60hz-2x
+# After a change and rebuild, compare on the same machine/display/toolchain:
+cargo xtask benchmark --output benchmarks/results/candidate.json --display-id built-in-60hz-2x \
+  --baseline benchmarks/results/baseline.json
+```
+
+The suite measures process startup, idle/peak RSS, streaming 1,000,000 rows x 20
+columns through SQLite and the spilling pager, real grid scrolling p95/stutters,
+and release executable size. It discards a warmup launch and checks median results
+from five processes against absolute budgets and optional baseline regression
+limits. Reports retain per-run metrics, frame intervals and build/host provenance.
+See [benchmark protocol, thresholds and CI setup](benchmarks/README.md). The original
+performance goals above remain aspirational; these initial budgets are deliberately
+broader. The manual desktop workflow requires a dedicated display host.
+
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three jobs:
@@ -315,7 +337,7 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
 - [ ] Advanced script execution with pinned sessions, explicit transactions and provider-specific procedural/batch syntax
 - [ ] Grid copy as CSV / SQL `INSERT`
-- [ ] Export to CSV / SQL from the UI
+- [x] Export to CSV / SQL from the UI
 - [x] PostgreSQL table statistics and catalog metadata in Properties
 - [ ] Rich table statistics and metadata for other providers
 - [ ] Complete provider-specific DDL generation beyond the current partial metadata preview
@@ -326,7 +348,8 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] Local container validation of Oracle and SQL Server connections, SQL and row-edit transactions
 - [ ] Live Db2 validation and broader ODBC platform/TLS coverage (deferred; PostgreSQL is the priority)
 - [ ] SSH bastion / jump host tunneling
-- [ ] Benchmarks for the goals above
+- [x] Reproducible desktop regression benchmarks with a native Rust runner, versioned workloads, absolute budgets and same-host baseline thresholds
+- [ ] Validate original performance targets with cold-cache and live-provider measurements
 - [x] PostgreSQL visual query plan (`EXPLAIN ANALYZE`) viewer
 - [ ] Data diff and schema comparison
 - [ ] Theme switching
