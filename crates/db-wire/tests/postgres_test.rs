@@ -463,3 +463,100 @@ fn postgres_foreign_keys_preserve_schema_identity_and_composite_mapping() {
         driver.execute_query(&format!("DROP SCHEMA {schema} CASCADE")).await.unwrap();
     });
 }
+
+#[test]
+fn structured_filter_literals_preserve_unicode_and_backslashes_under_server_modes() {
+    let Some(cfg) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        use db_wire::filter::{Criterion, FilterOp, FilterSpec};
+        let driver = PostgresDriver::new(cfg);
+        driver
+            .execute_query("SET standard_conforming_strings=off")
+            .await
+            .unwrap();
+        driver
+            .execute_query("CREATE TEMP TABLE filter_literal_data (value text)")
+            .await
+            .unwrap();
+        let value = r#"Tiếng Việt \path 'quoted' a LIMIT b"#;
+        let spec = FilterSpec {
+            criteria: vec![Criterion {
+                column: "value".into(),
+                op: FilterOp::Equal,
+                value: value.into(),
+            }],
+            ..Default::default()
+        };
+        let predicate = spec.sql(DbDriverKind::Postgres, &["value".into()]).unwrap();
+        let literal = predicate
+            .split_once(" = ")
+            .unwrap()
+            .1
+            .strip_suffix(')')
+            .unwrap();
+        driver
+            .execute_query(&format!(
+                "INSERT INTO filter_literal_data VALUES ({literal})"
+            ))
+            .await
+            .unwrap();
+        let (pager, rows, _) = driver
+            .execute_query(&format!(
+                "SELECT value FROM filter_literal_data {predicate} LIMIT 200"
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(cell_text(&pager, 0, 0).as_deref(), Some(value));
+        driver
+            .execute_query("SET standard_conforming_strings=on")
+            .await
+            .unwrap();
+    });
+}
+
+#[test]
+fn structured_numeric_filter_uses_index_at_realistic_volume() {
+    let Some(cfg) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        use db_wire::filter::{Criterion, FilterOp, FilterOrder, FilterSpec};
+        let driver = PostgresDriver::new(cfg);
+        for sql in [
+            "SET statement_timeout='15s'",
+            "CREATE TEMP TABLE filter_plan_data (id integer PRIMARY KEY, payload text)",
+            "INSERT INTO filter_plan_data SELECT g, repeat('x',100) FROM generate_series(1,100000) g",
+            "ANALYZE filter_plan_data",
+        ] {
+            driver.execute_query(sql).await.unwrap();
+        }
+        let predicate = FilterSpec {
+            criteria: vec![Criterion {
+                column: "id".into(),
+                op: FilterOp::GreaterEqual,
+                value: "99990".into(),
+            }],
+            order: Some(FilterOrder {
+                column: "id".into(),
+                descending: false,
+            }),
+            ..Default::default()
+        }
+        .sql(DbDriverKind::Postgres, &["id".into()])
+        .unwrap();
+        let (pager, rows, _) = driver.execute_query(&format!(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM filter_plan_data {predicate} LIMIT 200"
+        )).await.unwrap();
+        assert_eq!(rows, 1);
+        let text = cell_text(&pager, 0, 0).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let scan = &plan[0]["Plan"]["Plans"][0];
+        assert!(matches!(scan["Node Type"].as_str(), Some("Index Scan" | "Index Only Scan")), "{text}");
+        assert_eq!(scan["Actual Rows"], 11);
+        assert!(scan["Index Cond"].as_str().unwrap().contains("id >= 99990"), "{text}");
+        eprintln!("structured filter plan (100000 rows): {text}");
+    });
+}

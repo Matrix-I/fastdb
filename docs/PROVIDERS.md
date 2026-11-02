@@ -321,3 +321,22 @@ Live PostgreSQL fixtures validate all seven sections, FK/view targets,
 partition parent/bounds, user triggers/rules, RLS roles/flags, table/column grants
 and empty/missing relations. Other-provider defaults are covered by SQLite tests.
 GUI acceptance is pending at the user's request.
+
+
+## Structured filter values
+
+The criteria builder emits provider-quoted identifiers and data literals with
+explicit comparison/LIKE/NULL operators. PostgreSQL uses E literals with doubled
+backslashes/quotes, preserving values even when standard_conforming_strings is
+off. MySQL/MariaDB uses CONVERT of UTF-8 hex literals so NO_BACKSLASH_ESCAPES and
+connection string escaping cannot change data semantics. Other providers use the
+existing dialect literal rules; live ODBC criteria validation remains pending.
+
+SQLite fixtures verify exact returned rows, numeric comparisons, ordering, empty
+strings, NULL text versus NULL predicates and attempted quote injection. Native
+PostgreSQL and MySQL fixtures verify Unicode/quote/backslash preservation under
+server string modes; the MySQL fixture executes generated predicates and numeric
+comparisons against bound input rows on one leased test session. These tests do
+not modify global server settings. Paging recognizes only outer clauses rather
+than keywords inside quoted values or subqueries; ambiguous legacy lexical forms
+retain conservative fallback behavior.

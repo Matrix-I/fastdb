@@ -32,15 +32,24 @@ impl Workspace {
 
         let filter = tab.filter_sql.trim();
         let f_upper = filter.to_uppercase();
+        let clauses = sql_intel::filter_clauses(filter);
+        let has_order = clauses
+            .as_ref()
+            .map(|c| c.order_by)
+            .unwrap_or_else(|| f_upper.contains("ORDER BY"));
+        let has_limit = clauses
+            .as_ref()
+            .map(|c| c.limit || c.offset || c.fetch)
+            .unwrap_or_else(|| {
+                ["LIMIT", "OFFSET", "FETCH"]
+                    .iter()
+                    .any(|word| f_upper.split_whitespace().any(|part| part == *word))
+            });
+
         // A filter that orders or limits its rows itself already ends the statement,
         // so the header ordering cannot be appended after it
         let order_suffix = match &tab.grid.ordering {
-            Some(o)
-                if !f_upper.contains("ORDER BY")
-                    && !["LIMIT", "OFFSET", "FETCH"]
-                        .iter()
-                        .any(|w| f_upper.split_whitespace().any(|p| p == *w)) =>
-            {
+            Some(o) if !has_order && !has_limit => {
                 format!(
                     " ORDER BY {} {}",
                     quote_ident(self.tab_provider(tab_idx), &o.column),
@@ -54,7 +63,7 @@ impl Workspace {
             self.tab_provider(tab_idx),
             tab.fetch.size,
             offset,
-            !order_suffix.is_empty() || f_upper.contains("ORDER BY"),
+            !order_suffix.is_empty() || has_order,
         );
 
         if filter.is_empty() {
@@ -64,9 +73,7 @@ impl Workspace {
             )
         } else {
             // A filter with its own LIMIT decides the row count, so it is not fetched in chunks
-            let paged = !["LIMIT", "OFFSET", "FETCH"]
-                .iter()
-                .any(|word| f_upper.split_whitespace().any(|part| part == *word));
+            let paged = !has_limit;
             let limit_suffix = if paged { limit_suffix.as_str() } else { "" };
 
             let sql = if f_upper.starts_with("WHERE")

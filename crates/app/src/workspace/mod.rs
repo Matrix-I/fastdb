@@ -25,7 +25,9 @@ mod diagram_model;
 mod diagram_panel;
 mod export;
 mod fetch_plan;
+mod filter_builder;
 mod filter_suggest;
+mod filter_timeline;
 mod grid_clipboard;
 mod grid_selection;
 mod keyboard;
@@ -139,6 +141,7 @@ pub struct Workspace {
     revealed_tab: Option<(u64, usize, usize)>,
     operations: Operations,
     column_pending: Option<column_editor::PendingColumn>,
+    filter_builder: Option<filter_builder::CriteriaEditor>,
     column_pick: Option<(String, String, String, String)>,
     pub next_tab_id: u64,
     /// Saved SQL scripts, one folder per connection
@@ -208,6 +211,7 @@ impl Workspace {
             revealed_tab: None,
             operations: Operations::default(),
             column_pending: None,
+            filter_builder: None,
             column_pick: None,
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),
@@ -249,6 +253,7 @@ impl Workspace {
                 navigator_width: NAVIGATOR_DEFAULT_WIDTH,
                 value_panel_width: VALUE_PANEL_WIDTH,
                 show_right_panels: false,
+                focus_data: false,
             },
             menus: WorkspaceMenus {
                 nav_context_menu: None,
@@ -456,16 +461,34 @@ impl Render for Workspace {
             );
         }
 
+        if self.layout.focus_data {
+            root =
+                root.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap_3()
+                        .px_2()
+                        .py_1()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_secondary)
+                        .child("Expanded workspace")
+                        .child(script_tools::tool("Restore workspace (Esc)").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.layout.focus_data = false;
+                                cx.notify();
+                            }),
+                        )),
+                );
+        }
+
         // 2. Main Body: Left Sidebar + Center Workspace
-        root = root.child(
-            div()
-                .flex()
-                .flex_1()
-                .w_full()
-                .overflow_hidden()
-                .child(panes.navigator(self.layout.navigator_width))
-                .child(panes.table_view()),
-        );
+        let mut body = div().flex().flex_1().w_full().overflow_hidden();
+        if !self.layout.focus_data {
+            body = body.child(panes.navigator(self.layout.navigator_width));
+        }
+        root = root.child(body.child(panes.table_view()));
 
         if let Some(menu) = self.menus.nav_context_menu.clone() {
             root = root.child(self.render_nav_context_menu(menu, cx));
@@ -481,6 +504,9 @@ impl Render for Workspace {
         }
 
         // 4. Modal Dialog: Database Connection Setup
+        if self.filter_builder.is_some() {
+            root = root.child(self.render_filter_builder(cx));
+        }
         if self.form.show_connection_modal {
             root = root.child(self.render_connection_dialog(cx));
         }

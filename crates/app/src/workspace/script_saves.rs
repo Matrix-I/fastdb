@@ -300,6 +300,9 @@ impl Workspace {
         }
     }
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
+        self.filter_builder = None;
+        self.script_chooser = None;
+        self.script_action = None;
         self.save_then(
             self.tabs.iter().map(|t| t.id).collect(),
             AfterSave::Quit,

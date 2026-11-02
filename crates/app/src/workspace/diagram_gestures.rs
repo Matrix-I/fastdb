@@ -89,7 +89,8 @@ pub(super) fn install(cx: &mut Context<Workspace>) -> Monitor {
             while let Ok(gesture) = rx.recv_async().await {
                 if this
                     .update(cx, |this, cx| {
-                        if this.form.show_connection_modal
+                        if this.filter_builder.is_some()
+                            || this.form.show_connection_modal
                             || this.show_about_dialog
                             || this.script_chooser.is_some()
                             || this.script_action.is_some()

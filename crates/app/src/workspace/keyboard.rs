@@ -30,6 +30,7 @@ impl Workspace {
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("q")
         {
+            self.filter_builder = None;
             self.request_quit(cx);
             return;
         }
@@ -57,6 +58,18 @@ impl Workspace {
             return;
         }
 
+        if self.filter_builder.is_some() {
+            if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                && event.keystroke.key == "w"
+            {
+                self.filter_builder = None;
+                cx.notify();
+                return;
+            }
+            if self.handle_filter_builder_key(event, cx) {
+                return;
+            }
+        }
         if event.keystroke.key == "escape"
             && !self.updates.read(cx).is_open()
             && self.menus.grid_context_menu.is_none()
@@ -69,6 +82,20 @@ impl Workspace {
             return;
         }
 
+        if event.keystroke.key == "escape"
+            && self.menus.grid_context_menu.is_none()
+            && self.menus.column_menu.is_none()
+            && self.menus.nav_context_menu.is_none()
+            && self.layout.focus_data
+            && !self.form.show_connection_modal
+            && self.script_action.is_none()
+            && self.script_chooser.is_none()
+            && !self.updates.read(cx).is_open()
+        {
+            self.layout.focus_data = false;
+            cx.notify();
+            return;
+        }
         if self.script_action.is_some() {
             self.handle_script_action_key(&event.keystroke, cx);
             return;

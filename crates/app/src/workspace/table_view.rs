@@ -1,4 +1,5 @@
 use super::*;
+use gpui::prelude::FluentBuilder;
 
 impl Workspace {
     /// Center area: tab strip and the active table tab (data, properties, diagram)
@@ -57,6 +58,11 @@ impl Workspace {
                     let filter_sql = self.tabs[active_tab_idx].filter_sql.clone();
                     let is_filter_focused = self.input.is_filter_focused;
                     let is_running_query = self.operations.is_running();
+                    let history_editable= !is_running_query && !self.tabs[active_tab_idx].grid.changeset.is_dirty()
+                        && self.tabs[active_tab_idx].grid.editing_cell.is_none() && self.tab_session(active_tab_idx).driver.is_some();
+                    let can_back=history_editable&&self.tabs[active_tab_idx].filter_timeline.can_back();
+                    let can_forward=history_editable&&self.tabs[active_tab_idx].filter_timeline.can_forward();
+                    let expanded=self.layout.focus_data;
 
                     let mut center_col = div()
                         .flex()
@@ -208,14 +214,10 @@ impl Workspace {
                             )
                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                             .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.text_color(theme.text_primary))
-                                    .cursor_pointer()
-                                    .child("⛶")
+                                div().id("btn-expand-data").px_1().py_0p5().text_size(px(11.0))
+    .text_color(theme.text_secondary).cursor_pointer().hover(|s|s.bg(theme.bg_surface_hover))
+    .on_click(cx.listener(|this,_,_,cx|{this.layout.focus_data= !this.layout.focus_data;this.layout.resizing_panel=None;cx.notify();}))
+    .child(if expanded{"Restore"}else{"Expand"})
                             )
                             // Filter Expression Input Box ("khung để nối thêm sql như dbeaver")
                             .child(
@@ -301,36 +303,25 @@ impl Workspace {
                             )
                             // Filter criteria funnel ∇
                             .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.text_color(theme.text_primary))
-                                    .cursor_pointer()
-                                    .child("∇")
+                                div().id("btn-filter-criteria").px_1().py_0p5().text_size(px(11.0))
+    .text_color(theme.text_secondary).cursor_pointer().hover(|s|s.bg(theme.bg_surface_hover))
+    .on_click(cx.listener(|this,_,_,cx|this.open_filter_builder(cx))).child("Criteria")
                             )
                             // History Back ◀
                             .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .text_size(px(10.0))
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.text_color(theme.text_primary))
-                                    .cursor_pointer()
-                                    .child("◀")
+                                div().id("btn-filter-back").px_1().py_0p5().text_size(px(10.0))
+    .text_color(if can_back{theme.text_primary}else{theme.text_muted})
+    .when(can_back,|button|button.cursor_pointer().hover(|s|s.bg(theme.bg_surface_hover))
+        .on_click(cx.listener(|this,_,_,cx|this.navigate_filter_history(false,cx))))
+    .child("◀")
                             )
                             // History Forward ▶
                             .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .text_size(px(10.0))
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.text_color(theme.text_primary))
-                                    .cursor_pointer()
-                                    .child("▶")
+                                div().id("btn-filter-forward").px_1().py_0p5().text_size(px(10.0))
+    .text_color(if can_forward{theme.text_primary}else{theme.text_muted})
+    .when(can_forward,|button|button.cursor_pointer().hover(|s|s.bg(theme.bg_surface_hover))
+        .on_click(cx.listener(|this,_,_,cx|this.navigate_filter_history(true,cx))))
+    .child("▶")
                             )
                             // Refresh ↻
                             .child(

@@ -466,3 +466,84 @@ mod tls_tests {
         assert!(!opts.prefer_socket());
     }
 }
+
+#[cfg(test)]
+mod filter_mode_tests {
+    use super::{ConnectionConfig, MySqlDriver};
+    use crate::filter::{Criterion, FilterOp, FilterSpec};
+    use mysql_async::prelude::Queryable;
+    #[test]
+    fn criteria_values_roundtrip_with_and_without_backslash_escapes() {
+        let Ok(port) = std::env::var("FASTDB_TEST_MYSQL_PORT") else {
+            assert!(
+                std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none(),
+                "FASTDB_TEST_MYSQL_PORT required"
+            );
+            return;
+        };
+        crate::get_runtime().block_on(async {
+            let driver = MySqlDriver::new(ConnectionConfig {
+                driver: crate::DbDriverKind::MySql,
+                host: std::env::var("FASTDB_TEST_MYSQL_HOST")
+                    .unwrap_or_else(|_| "127.0.0.1".into()),
+                port: port.parse().unwrap(),
+                user: std::env::var("FASTDB_TEST_MYSQL_USER").unwrap_or_else(|_| "root".into()),
+                password: std::env::var("FASTDB_TEST_MYSQL_PASSWORD").ok(),
+                database: std::env::var("FASTDB_TEST_MYSQL_DATABASE")
+                    .unwrap_or_else(|_| "mysql".into()),
+                use_unix_socket: false,
+                ..Default::default()
+            });
+            let mut conn = driver.get_pool().unwrap().get_conn().await.unwrap();
+            let original: String = conn
+                .query_first("SELECT @@SESSION.sql_mode")
+                .await
+                .unwrap()
+                .unwrap();
+            let value_column=crate::sql::SqlDialect(crate::DbDriverKind::MySql).quote_ident("value");
+            conn.query_drop(format!("CREATE TEMPORARY TABLE fastdb_filter_values ({value_column} TEXT,score INTEGER) CHARACTER SET utf8mb4")).await.unwrap();
+            for mode in ["", "NO_BACKSLASH_ESCAPES"] {
+                conn.exec_drop("SET SESSION sql_mode=?", (mode,))
+                    .await
+                    .unwrap();
+                for value in ["", "Tiếng Việt 'quote'\\path", "x' OR 1=1 --"] {
+                    let spec = FilterSpec {
+                        criteria: vec![Criterion {
+                            column: "value".into(),
+                            op: FilterOp::Equal,
+                            value: value.into(),
+                        }],
+                        ..Default::default()
+                    };
+                    let predicate = spec
+                        .sql(crate::DbDriverKind::MySql, &["value".into()])
+                        .unwrap();
+                    conn.query_drop("DELETE FROM fastdb_filter_values").await.unwrap();
+                    conn.exec_drop(format!("INSERT INTO fastdb_filter_values({value_column},score) VALUES (?,10),('decoy',0)"),(value,)).await.unwrap();
+                    let actual:Vec<String>=conn.query(format!("SELECT {value_column} FROM fastdb_filter_values {predicate}")).await.unwrap();
+                    assert_eq!(actual,vec![value.to_string()]);
+                    let numeric=FilterSpec{criteria:vec![Criterion{column:"score".into(),op:FilterOp::Greater,value:"5".into()}],..Default::default()};
+                    let numeric=numeric.sql(crate::DbDriverKind::MySql,&["score".into()]).unwrap();
+                    let rows:Vec<String>=conn.query(format!("SELECT {value_column} FROM fastdb_filter_values {numeric}")).await.unwrap();
+                    assert_eq!(rows,vec![value.to_string()]);
+                }
+            }
+            conn.exec_drop("SET SESSION sql_mode=?", (original,))
+                .await
+                .unwrap();
+            conn.query_drop("SET SESSION MAX_EXECUTION_TIME=15000").await.unwrap();
+            conn.query_drop("CREATE TEMPORARY TABLE fastdb_filter_plan (id INTEGER PRIMARY KEY)").await.unwrap();
+            conn.query_drop("INSERT INTO fastdb_filter_plan WITH d AS (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n FROM d a CROSS JOIN d b CROSS JOIN d c CROSS JOIN d d CROSS JOIN d e").await.unwrap();
+            let predicate = FilterSpec {
+                criteria: vec![Criterion { column: "id".into(), op: FilterOp::GreaterEqual, value: "99990".into() }],
+                order: Some(crate::filter::FilterOrder {column: "id".into(), descending: false}),
+                ..Default::default()
+            }.sql(crate::DbDriverKind::MySql, &["id".into()]).unwrap();
+            let plan: String = conn.query_first(format!("EXPLAIN ANALYZE SELECT id FROM fastdb_filter_plan {predicate} LIMIT 200")).await.unwrap().unwrap();
+            assert!(plan.contains("index range scan") && plan.contains("99990 <= id") && plan.contains("rows=11 loops=1"), "{plan}");
+            assert!(!plan.contains("Sort:"), "{plan}");
+            eprintln!("structured MySQL filter plan (100000 rows): {plan}");
+
+        });
+    }
+}

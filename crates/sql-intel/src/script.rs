@@ -17,6 +17,9 @@ struct Token<'a> {
 }
 
 fn tokens(sql: &str) -> Result<Vec<Token<'_>>, String> {
+    tokens_policy(sql, false)
+}
+fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, String> {
     let b = sql.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -56,12 +59,24 @@ fn tokens(sql: &str) -> Result<Vec<Token<'_>>, String> {
         } else if matches!(b[i], b'\'' | b'"' | b'`' | b'[') {
             kind = Kind::Quoted;
             let quote = if b[i] == b'[' { b']' } else { b[i] };
+            let explicit_e = escaped_e_strings
+                && quote == b'\''
+                && out.last().is_some_and(|t: &Token<'_>| {
+                    t.kind == Kind::Word && t.text.eq_ignore_ascii_case("E") && t.end == start
+                });
             i += 1;
             loop {
                 if i >= b.len() {
                     return Err("Unterminated SQL literal or identifier".into());
                 }
                 if b[i] == b'\\' && matches!(quote, b'\'' | b'`' | b'"') {
+                    if explicit_e {
+                        if i + 1 >= b.len() {
+                            return Err("Unterminated E string escape".into());
+                        }
+                        i += 2;
+                        continue;
+                    }
                     // Backslash quoting depends on the provider/session SQL mode. Reject rather
                     // than accidentally execute a different statement boundary.
                     return Err("Script splitting/formatting does not support backslashes in string literals; execute the selected statement instead".into());
@@ -269,6 +284,49 @@ pub fn session_transaction_transition(sql: &str) -> Option<&'static str> {
     }
 }
 
+/// Clause keywords outside literals, quoted identifiers, comments and subqueries.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct FilterClauses {
+    pub order_by: bool,
+    pub limit: bool,
+    pub offset: bool,
+    pub fetch: bool,
+}
+pub fn filter_clauses(sql: &str) -> Option<FilterClauses> {
+    let scanned = tokens_policy(sql, true).ok()?;
+    let mut clauses = FilterClauses::default();
+    let mut depth = 0;
+    let mut previous = String::new();
+    for token in scanned {
+        if token.kind == Kind::Comment {
+            continue;
+        }
+        if token.kind == Kind::Symbol && token.text == "(" {
+            depth += 1;
+        }
+        if token.kind == Kind::Symbol && token.text == ")" {
+            depth -= 1;
+        }
+        if depth != 0 {
+            continue;
+        }
+        if token.kind == Kind::Word {
+            let word = token.text.to_ascii_uppercase();
+            match word.as_str() {
+                "BY" if previous == "ORDER" => clauses.order_by = true,
+                "LIMIT" => clauses.limit = true,
+                "OFFSET" => clauses.offset = true,
+                "FETCH" => clauses.fetch = true,
+                _ => {}
+            }
+            previous = word;
+        } else {
+            previous.clear();
+        }
+    }
+    Some(clauses)
+}
+
 fn split_script_policy(sql: &str, transactions: bool) -> Result<Vec<String>, String> {
     let tokens = tokens(sql)?;
     let mut start = 0;
@@ -472,5 +530,22 @@ mod persistent_tests {
         );
         assert_eq!(session_transaction_transition("SELECT 'BEGIN'"), None);
         assert!(split_session_script("SELECT ';'; SELECT $$BEGIN; END$$").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod filter_clause_tests {
+    use super::filter_clauses;
+    #[test]
+    fn quoted_and_nested_keywords_do_not_change_outer_paging() {
+        let c =
+            filter_clauses("WHERE x = 'a LIMIT b ORDER BY c' AND y IN (SELECT x FROM t LIMIT 1)")
+                .unwrap();
+        assert!(!c.limit && !c.order_by);
+        let c = filter_clauses("WHERE x='ORDER BY' ORDER /*comment*/ BY id LIMIT 5").unwrap();
+        assert!(c.order_by && c.limit);
+        assert!(!filter_clauses("WHERE \"LIMIT\" = 1").unwrap().limit);
+        let c = filter_clauses(r#"WHERE x=E'alpha\' LIMIT' ORDER BY id"#).unwrap();
+        assert!(!c.limit && c.order_by);
     }
 }

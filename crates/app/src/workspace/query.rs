@@ -98,6 +98,14 @@ impl Workspace {
             return;
         }
         if let Some(tab) = self.tabs.get_mut(index) {
+            if !tab.is_script()
+                && (tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some())
+            {
+                tab.last_error =
+                    Some("Save or Cancel row edits before replacing the table result".into());
+                cx.notify();
+                return;
+            }
             tab.fetch.commit_size_text();
             if tab.is_script() {
                 let statement = tab.editor.active_statement();
@@ -232,6 +240,19 @@ impl Workspace {
                 connection.clone(),
                 tab.script_sql.clone().unwrap_or(sql.clone()),
             );
+        }
+        if !tab.is_script() && tab.column_editor.is_none() && !append {
+            tab.filter_timeline
+                .record(super::filter_timeline::FilterSnapshot {
+                    sql: tab.filter_sql.clone(),
+                    order: tab
+                        .grid
+                        .ordering
+                        .as_ref()
+                        .map(|o| (o.column.clone(), o.descending)),
+                    fetch_size: tab.fetch.size,
+                    criteria: tab.filter_spec.clone(),
+                });
         }
         tab.begin_fetch(paged, append);
         let tab_id = tab.id;

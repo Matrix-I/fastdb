@@ -12,7 +12,7 @@ impl Workspace {
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
         let view_mode = tab.view_mode;
-        let show_right_panels = self.layout.show_right_panels;
+        let show_right_panels = self.layout.show_right_panels && !self.layout.focus_data;
         let mut data_row = div().flex().flex_row().flex_1().w_full().overflow_hidden();
 
         // Left vertical toolstrip (Grid / Text)

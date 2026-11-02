@@ -17,6 +17,7 @@ pub(super) struct WorkspaceLayout {
     pub navigator_width: f32,
     pub value_panel_width: f32,
     pub show_right_panels: bool,
+    pub focus_data: bool,
 }
 pub(super) struct WorkspaceMenus {
     pub nav_context_menu: Option<NavContextMenu>,
