@@ -93,6 +93,18 @@ impl Workspace {
                     }),
             )
             .child(tool("Run script").on_click(cx.listener(|this, _, _, cx| this.run_script(cx))))
+            .when(supports_plan && !is_running_query, |toolbar| {
+                toolbar
+                    .child(tool("Begin").on_click(
+                        cx.listener(|this, _, _, cx| this.transaction_command("BEGIN", cx)),
+                    ))
+                    .child(tool("Commit").on_click(
+                        cx.listener(|this, _, _, cx| this.transaction_command("COMMIT", cx)),
+                    ))
+                    .child(tool("Rollback").on_click(
+                        cx.listener(|this, _, _, cx| this.transaction_command("ROLLBACK", cx)),
+                    ))
+            })
             .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
             .child(tool("History").on_click(cx.listener(|this, _, _, cx| this.toggle_history(cx))))
             .when(supports_plan && !is_running_query, |toolbar| {

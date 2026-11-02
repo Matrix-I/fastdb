@@ -193,6 +193,82 @@ pub fn split_script_with_transactions(sql: &str) -> Result<Vec<String>, String> 
     Ok(statements)
 }
 
+/// Persistent PostgreSQL sessions allow transaction boundaries across executions.
+/// Keep the conservative lexer and reject transaction options whose state cannot
+/// be represented by the toolbar. PostgreSQL validates savepoint existence.
+pub fn split_session_script(sql: &str) -> Result<Vec<String>, String> {
+    let statements = split_script_policy(sql, true)?;
+    for statement in &statements {
+        let scanned = tokens(statement)?;
+        let significant: Vec<_> = scanned
+            .iter()
+            .filter(|t| t.kind != Kind::Comment && t.text != ";")
+            .collect();
+        let words: Vec<_> = significant
+            .iter()
+            .map(|t| t.text.to_ascii_uppercase())
+            .collect();
+        let first = words.first().map(String::as_str).unwrap_or("");
+        let identifier = |i: usize| {
+            significant.get(i).is_some_and(|t| {
+                t.kind == Kind::Word || (t.kind == Kind::Quoted && t.text.starts_with('"'))
+            })
+        };
+        let ordinary = significant.iter().all(|t| t.kind == Kind::Word);
+        let valid = match first {
+            "BEGIN" | "COMMIT" | "END" | "ABORT" => {
+                ordinary
+                    && (words.len() == 1
+                        || (words.len() == 2
+                            && matches!(words[1].as_str(), "WORK" | "TRANSACTION")))
+            }
+            "START" => words == ["START", "TRANSACTION"],
+            "ROLLBACK" => {
+                (ordinary
+                    && (words.len() == 1
+                        || (words.len() == 2
+                            && matches!(words[1].as_str(), "WORK" | "TRANSACTION"))))
+                    || (words.get(1).is_some_and(|w| w == "TO")
+                        && ((words.len() == 3 && identifier(2))
+                            || (words.len() == 4 && words[2] == "SAVEPOINT" && identifier(3))))
+            }
+            "SAVEPOINT" => words.len() == 2 && identifier(1),
+            "RELEASE" => {
+                (words.len() == 2 && identifier(1))
+                    || (words.len() == 3 && words[1] == "SAVEPOINT" && identifier(2))
+            }
+            "PREPARE" if words.get(1).is_some_and(|w| w == "TRANSACTION") => false,
+            _ => !significant.iter().any(|t| {
+                t.kind == Kind::Word
+                    && matches!(
+                        t.text.to_ascii_uppercase().as_str(),
+                        "BEGIN" | "COMMIT" | "ROLLBACK"
+                    )
+            }),
+        };
+        if !valid {
+            return Err("Unsupported transaction or procedural form in tab session".into());
+        }
+    }
+    Ok(statements)
+}
+
+/// State changes apply only after PostgreSQL acknowledges successful execution.
+pub fn session_transaction_transition(sql: &str) -> Option<&'static str> {
+    let scanned = tokens(sql).ok()?;
+    let words: Vec<_> = scanned
+        .iter()
+        .filter(|t| t.kind != Kind::Comment)
+        .map(|t| t.text.to_ascii_uppercase())
+        .collect();
+    match words.first()?.as_str() {
+        "BEGIN" | "START" => Some("In transaction"),
+        "ROLLBACK" if words.get(1).is_some_and(|w| w == "TO") => Some("In transaction"),
+        "COMMIT" | "END" | "ROLLBACK" | "ABORT" => Some("Idle"),
+        _ => None,
+    }
+}
+
 fn split_script_policy(sql: &str, transactions: bool) -> Result<Vec<String>, String> {
     let tokens = tokens(sql)?;
     let mut start = 0;
@@ -362,5 +438,39 @@ mod transaction_tests {
         ] {
             assert!(split(sql).is_err(), "accepted unsupported script: {sql}");
         }
+    }
+}
+
+#[cfg(test)]
+mod persistent_tests {
+    use super::*;
+    #[test]
+    fn boundaries_and_savepoints_can_span_runs() {
+        for sql in [
+            "BEGIN",
+            "COMMIT",
+            "SAVEPOINT s",
+            "ROLLBACK TO s",
+            "ROLLBACK TO SAVEPOINT \"quoted name\"",
+            "RELEASE SAVEPOINT s",
+            "BEGIN; SELECT 1",
+        ] {
+            assert!(split_session_script(sql).is_ok(), "{sql}");
+        }
+        for sql in [
+            "COMMIT AND CHAIN",
+            "PREPARE TRANSACTION 'x'",
+            "BEGIN SELECT 1 END",
+            "SAVEPOINT s extra",
+            "ROLLBACK TO",
+        ] {
+            assert!(split_session_script(sql).is_err(), "{sql}");
+        }
+        assert_eq!(
+            session_transaction_transition("/* comment */ ROLLBACK TO s"),
+            Some("In transaction")
+        );
+        assert_eq!(session_transaction_transition("SELECT 'BEGIN'"), None);
+        assert!(split_session_script("SELECT ';'; SELECT $$BEGIN; END$$").is_ok());
     }
 }

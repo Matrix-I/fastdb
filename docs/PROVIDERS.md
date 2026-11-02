@@ -214,28 +214,25 @@ test server requires password authentication. Leave it unset for trust/peer setu
 
 ## PostgreSQL script sessions
 
-Run script leases a dedicated PostgreSQL connection for one complete run. The
-connection uses the saved session's TLS/root CA/hostname validation and socket
-policy, with its own cancellation token. Metadata, browsing and transactional
-row-edit Save use the original driver connection. The script never reconnects
-silently or retries statements/COMMIT after connection loss.
+Execute and Run script share one dedicated physical PostgreSQL connection per
+SQL tab. TLS/root CA/hostname validation and socket policy apply, with a separate
+cancellation token. Metadata, browsing, row-edit Save and Explain/Analyze use the
+original driver connection. A lost tab session never reconnects or retries SQL.
 
-Temporary tables and session settings persist between statements in that run.
-Support includes BEGIN / START TRANSACTION, COMMIT / END, ROLLBACK / ABORT and
-optional WORK / TRANSACTION on the single-keyword controls. Preflight requires
-balanced, non-nested blocks before any SQL executes. BEGIN options, chaining,
-savepoints and prepared transactions are not supported yet; SET TRANSACTION
-inside a block is allowed. Standalone statement execution and subsequent script
-runs do not share this session.
+Temporary tables, settings and transactions survive successive runs. Begin,
+Commit and Rollback toolbar controls execute on the tab session. SQL supports
+BEGIN / START TRANSACTION, COMMIT / END, ROLLBACK / ABORT, optional WORK /
+TRANSACTION, SAVEPOINT, ROLLBACK TO [SAVEPOINT] and RELEASE [SAVEPOINT].
+BEGIN options, chaining and prepared transactions remain unsupported.
 
-Scripts stop at the first failure or Cancel. The runner drops the current query
-future before sending its session-local cancellation, waits for cancellation,
-then attempts ROLLBACK and closes/discards the session. Cancel and cleanup each
-have a five-second bound; a cleanup failure is reported separately. Earlier
-commits/autocommit statements are not undone, and a connection loss during COMMIT
-may have an uncertain outcome. Run ownership stays active through cleanup, so a
-late cancel cannot affect a new statement/run. Closing a tab/disconnecting cancels
-the run; Quit waits for bounded cleanup after the existing autosave barrier.
+SQL errors stop remaining statements and retain the session for recovery.
+Cancel drops the current query future before its session-local cancellation,
+waits for acknowledgement, then rolls back and closes the connection. Cancellation
+and cleanup each have a five-second bound. Closing the tab or disconnecting also
+closes idle sessions, causing server rollback. Earlier committed/autocommit work
+remains applied; losing a COMMIT acknowledgement can mean an uncertain outcome.
+Run ownership remains active through cleanup so late cancellation cannot reach
+a later run. Quit waits for bounded active-run cleanup after the autosave barrier.
 
 Other providers retain their ordinary-script policy and default to no dedicated
 session capability. No provider is selected through workspace-specific SQL cases.

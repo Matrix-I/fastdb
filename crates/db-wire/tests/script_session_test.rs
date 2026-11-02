@@ -211,3 +211,64 @@ fn pinned_session_socket_outlives_the_callers_runtime() {
         session.finish().await.unwrap();
     });
 }
+
+#[test]
+fn persistent_tab_runs_recover_with_savepoints() {
+    let Some(cfg) = config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver: Arc<dyn DatabaseDriver> = Arc::new(PostgresDriver::new(cfg));
+        let owner = Arc::new(db_wire::script::TabSession::default());
+        for (sql, fails) in [
+            ("CREATE TEMP TABLE tab_session_test (value integer)", false),
+            ("BEGIN", false),
+            ("INSERT INTO tab_session_test VALUES (1)", false),
+            ("SAVEPOINT s", false),
+            ("SELECT 1/0", true),
+            ("ROLLBACK TO s", false),
+            ("INSERT INTO tab_session_test VALUES (2)", false),
+            ("RELEASE s", false),
+            ("COMMIT", false),
+            ("SELECT sum(value) FROM tab_session_test", false),
+        ] {
+            let (tx, rx) = flume::unbounded();
+            db_wire::script::run_tab_script(
+                driver.clone(),
+                vec![sql.into()],
+                Arc::new(ScriptControl::default()),
+                tx,
+                Arc::downgrade(&owner),
+            )
+            .await;
+            let mut outcome = None;
+            for event in rx.drain() {
+                match event {
+                    ScriptEvent::Finished(result) => outcome = Some(result),
+                    ScriptEvent::Stream(StreamEvent::SchemaReady(pager))
+                        if sql.starts_with("SELECT sum") =>
+                    {
+                        assert_eq!(text(&pager, 0, 0).as_deref(), Some("3"));
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(outcome.unwrap().error.is_some(), fails, "{sql}");
+        }
+        // A second SQL tab on the same saved connection has its own backend.
+        let second = Arc::new(db_wire::script::TabSession::default());
+        let (tx, rx) = flume::unbounded();
+        db_wire::script::run_tab_script(
+            driver,
+            vec!["SELECT * FROM tab_session_test".into()],
+            Arc::new(ScriptControl::default()),
+            tx,
+            Arc::downgrade(&second),
+        )
+        .await;
+        assert!(rx.drain().any(|event| matches!(
+            event,
+            ScriptEvent::Finished(ScriptOutcome { error: Some(_), .. })
+        )));
+    });
+}

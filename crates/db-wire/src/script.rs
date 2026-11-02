@@ -15,6 +15,25 @@ pub trait ScriptSession: Send + Sync {
     fn abort(&self);
 }
 
+/// Tab owner. Dropping or disconnecting it closes the socket even while idle.
+/// The worker only borrows the slot; it cannot keep a closed tab alive.
+#[derive(Default)]
+pub struct TabSession {
+    session: std::sync::Mutex<Option<Arc<dyn ScriptSession>>>,
+}
+impl TabSession {
+    pub fn close(&self) {
+        if let Some(session) = self.session.lock().unwrap().take() {
+            session.abort();
+        }
+    }
+}
+impl Drop for TabSession {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 pub struct ScriptControl {
     cancel: tokio::sync::watch::Sender<bool>,
     finished: tokio::sync::watch::Sender<bool>,
@@ -75,6 +94,27 @@ pub async fn run_script(
     control: Arc<ScriptControl>,
     tx: flume::Sender<ScriptEvent>,
 ) {
+    run_script_inner(driver, statements, control, tx, None).await;
+}
+
+/// Execute on the same physical connection across successive tab runs.
+pub async fn run_tab_script(
+    driver: Arc<dyn DatabaseDriver>,
+    statements: Vec<String>,
+    control: Arc<ScriptControl>,
+    tx: flume::Sender<ScriptEvent>,
+    owner: std::sync::Weak<TabSession>,
+) {
+    run_script_inner(driver, statements, control, tx, Some(owner)).await;
+}
+
+async fn run_script_inner(
+    driver: Arc<dyn DatabaseDriver>,
+    statements: Vec<String>,
+    control: Arc<ScriptControl>,
+    tx: flume::Sender<ScriptEvent>,
+    owner: Option<std::sync::Weak<TabSession>>,
+) {
     struct CompletionGuard(Arc<ScriptControl>);
     impl Drop for CompletionGuard {
         fn drop(&mut self) {
@@ -82,10 +122,17 @@ pub async fn run_script(
         }
     }
     let _completion = CompletionGuard(control.clone());
+    let existing = owner
+        .as_ref()
+        .and_then(|o| o.upgrade())
+        .and_then(|o| o.session.lock().unwrap().clone());
     let opened = tokio::select! {
         biased;
         _ = control.cancelled() => None,
-        result = driver.open_script_session() => Some(result),
+        result = async {
+            if let Some(session) = existing { Ok(session) }
+            else { driver.open_script_session().await }
+        } => Some(result),
     };
     let session = match opened {
         None => {
@@ -113,13 +160,22 @@ pub async fn run_script(
         Some(Ok(session)) => session,
     };
     // Force-close on every exit path, including task abort or receiver loss.
-    struct SessionGuard(Arc<dyn ScriptSession>);
+    struct SessionGuard(Option<Arc<dyn ScriptSession>>);
     impl Drop for SessionGuard {
         fn drop(&mut self) {
-            self.0.abort();
+            if let Some(session) = &self.0 {
+                session.abort();
+            }
         }
     }
-    let _guard = SessionGuard(session.clone());
+    let mut guard = SessionGuard(Some(session.clone()));
+    if let Some(owner) = &owner {
+        if let Some(owner) = owner.upgrade() {
+            *owner.session.lock().unwrap() = Some(session.clone());
+        } else {
+            control.request_cancel();
+        }
+    }
     let mut outcome = ScriptOutcome::default();
     for sql in statements {
         if control.is_cancelled() {
@@ -175,6 +231,17 @@ pub async fn run_script(
         }
     }
     outcome.cancelled = control.is_cancelled();
+    if owner.as_ref().is_some_and(|o| o.strong_count() > 0)
+        && !outcome.cancelled
+        && outcome.cleanup_error.is_none()
+    {
+        guard.0 = None;
+        send(&tx, &control, ScriptEvent::Finished(outcome));
+        return;
+    }
+    if let Some(owner) = owner.and_then(|o| o.upgrade()) {
+        owner.session.lock().unwrap().take();
+    }
     send(&tx, &control, ScriptEvent::CleaningUp);
     let cleanup = match tokio::time::timeout(CLEANUP_TIMEOUT, session.finish()).await {
         Ok(Ok(())) => None,
@@ -317,6 +384,31 @@ mod tests {
                 _ => None,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn tab_session_reuses_connection_through_errors_and_closes_with_owner() {
+        crate::get_runtime().block_on(async {
+            let session = FakeSession::new(false, None);
+            let driver = fake_driver(session.clone());
+            let owner = Arc::new(super::TabSession::default());
+            for sql in ["first", "fail", "recover"] {
+                let (tx, rx) = flume::unbounded();
+                super::run_tab_script(
+                    driver.clone(),
+                    vec![sql.into()],
+                    Arc::new(ScriptControl::default()),
+                    tx,
+                    Arc::downgrade(&owner),
+                )
+                .await;
+                assert_eq!(outcome(&rx).error.is_some(), sql == "fail");
+            }
+            assert_eq!(driver.opens.load(Ordering::SeqCst), 1);
+            assert_eq!(*session.calls.lock().unwrap(), ["first", "fail", "recover"]);
+            drop(owner);
+            assert!(session.aborted.load(Ordering::SeqCst));
+        });
     }
 
     #[test]

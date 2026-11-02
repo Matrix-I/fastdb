@@ -9,4 +9,7 @@ pub use parser::*;
 pub use schema_cache::*;
 
 pub mod script;
-pub use script::{format_sql, split_script, split_script_with_transactions};
+pub use script::{
+    format_sql, session_transaction_transition, split_script, split_script_with_transactions,
+    split_session_script,
+};

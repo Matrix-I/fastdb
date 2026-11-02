@@ -21,16 +21,20 @@ impl Workspace {
         else {
             return;
         };
+        if tab.transaction_state == "Session closed" {
+            tab.transaction_state = "Idle".into();
+        }
         tab.pending_statements.clear();
         tab.last_error = None;
         tab.export.message = None;
-        tab.script_status = Some("Opening dedicated script session…".into());
+        tab.script_status = Some("Opening tab session…".into());
         let (tx, rx) = flume::unbounded();
-        db_wire::get_runtime().spawn(db_wire::script::run_script(
+        db_wire::get_runtime().spawn(db_wire::script::run_tab_script(
             driver,
             statements,
             control.clone(),
             tx,
+            Arc::downgrade(&tab.tab_session),
         ));
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -65,6 +69,18 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    pub(super) fn transaction_command(&mut self, sql: &str, cx: &mut Context<Self>) {
+        if self.operations.is_running() {
+            return;
+        }
+        let index = self.active_tab;
+        if let Some(driver) = self.tab_session(index).driver.clone()
+            && driver.supports_script_session()
+        {
+            self.start_pinned_script(index, driver, vec![sql.into()], cx);
+        }
     }
 
     fn apply_pinned_script_event(
@@ -103,6 +119,12 @@ impl Workspace {
                 tab.script_status = Some("Running script on a dedicated session…".into());
             }
             ScriptEvent::Stream(event) => {
+                if matches!(event, StreamEvent::Completed { .. })
+                    && let Some(sql) = &tab.script_sql
+                    && let Some(state) = sql_intel::session_transaction_transition(sql)
+                {
+                    tab.transaction_state = state.into();
+                }
                 tab.apply_stream_event(event);
             }
             ScriptEvent::CleaningUp => {
@@ -110,7 +132,20 @@ impl Workspace {
                     Some("Closing script session and rolling back any open transaction…".into());
             }
             ScriptEvent::Finished(outcome) => {
-                let message = outcome_message(&outcome);
+                if outcome.cancelled || outcome.cleanup_error.is_some() {
+                    tab.transaction_state = "Session closed".into();
+                } else if outcome.error.is_some() && tab.transaction_state == "In transaction" {
+                    tab.transaction_state =
+                        "Transaction failed; Rollback or ROLLBACK TO required".into();
+                }
+                let message = if !outcome.cancelled
+                    && outcome.error.is_none()
+                    && outcome.cleanup_error.is_none()
+                {
+                    format!("Tab session open · {}", tab.transaction_state)
+                } else {
+                    format!("{} · {}", outcome_message(&outcome), tab.transaction_state)
+                };
                 if outcome.cancelled || outcome.error.is_some() || outcome.cleanup_error.is_some() {
                     tab.apply_stream_event(StreamEvent::Error(message.clone()));
                 }
@@ -123,7 +158,7 @@ impl Workspace {
 
 fn outcome_message(outcome: &ScriptOutcome) -> String {
     let mut message = match (&outcome.error, outcome.cancelled) {
-        (Some(error), _) => format!("Script stopped: {error}. Earlier committed/autocommit statements may remain applied"),
+        (Some(error), _) => format!("SQL stopped: {error}. Earlier committed/autocommit statements may remain applied"),
         (None, true) => "Script cancelled; session closed. Earlier committed/autocommit statements may remain applied".into(),
         (None, false) if outcome.cleanup_error.is_some() => "Script statements finished; session cleanup failed".into(),
         (None, false) => "Script complete; dedicated session closed".into(),

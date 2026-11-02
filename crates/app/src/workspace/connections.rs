@@ -346,6 +346,14 @@ impl Workspace {
     }
 
     pub fn disconnect_by_id(&mut self, conn_id: &str) {
+        for tab in &mut self.tabs {
+            if tab.connection_id.as_deref() == Some(conn_id) {
+                tab.tab_session.close();
+                tab.tab_session = Arc::default();
+                tab.transaction_state = "Session closed".into();
+                tab.script_status = Some("Session closed by disconnect".into());
+            }
+        }
         if let Some(operation) = self
             .operations
             .active()

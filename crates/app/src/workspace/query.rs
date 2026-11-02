@@ -79,6 +79,23 @@ impl Workspace {
         if self.tabs.is_empty() {
             return;
         }
+        if self.tabs[index].is_script()
+            && let Some(driver) = self.tab_session(index).driver.clone()
+            && driver.supports_script_session()
+        {
+            let sql = self.tabs[index].editor.active_statement();
+            match sql_intel::split_session_script(&sql) {
+                Ok(statements) if !statements.is_empty() => {
+                    self.start_pinned_script(index, driver, statements, cx)
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.tabs[index].last_error = Some(error);
+                    cx.notify();
+                }
+            }
+            return;
+        }
         if let Some(tab) = self.tabs.get_mut(index) {
             tab.fetch.commit_size_text();
             if tab.is_script() {
@@ -123,8 +140,7 @@ impl Workspace {
             return;
         };
         if driver.supports_script_session() {
-            let parsed =
-                sql_intel::split_script_with_transactions(&self.tabs[index].editor.buffer.text());
+            let parsed = sql_intel::split_session_script(&self.tabs[index].editor.buffer.text());
             match parsed {
                 Ok(statements) if !statements.is_empty() => {
                     self.start_pinned_script(index, driver, statements, cx)
