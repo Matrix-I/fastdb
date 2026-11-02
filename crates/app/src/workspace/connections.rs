@@ -381,6 +381,7 @@ impl Workspace {
         }
         if let Some(session) = self.connections.sessions.get_mut(conn_id) {
             session.driver = None;
+            session.metadata_generation = session.metadata_generation.wrapping_add(1);
         }
     }
 
@@ -557,6 +558,7 @@ impl Workspace {
         ));
         session.schema_tree = Arc::new(tree);
         session.properties = properties;
+        session.metadata_generation = session.metadata_generation.wrapping_add(1);
         let owner = Some(connection_id);
         for tab in &mut self.tabs {
             if tab.connection_id.as_deref() == owner {

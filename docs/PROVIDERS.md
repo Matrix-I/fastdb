@@ -296,3 +296,28 @@ Automated PostgreSQL fixtures cover rename/Unicode comments, NULL vs removed
 defaults, NOT NULL/type-conversion rollback, concurrent changes, dropped/recreated
 columns, specialized read-only columns and session isolation. GUI acceptance is
 pending the user's manual test. See the implementation plan for further scope.
+
+
+## PostgreSQL read-only catalog sections
+
+Dependencies/References use direct pg_depend links, including constraints/defaults
+and view rewrite dependencies. Relation targets come from catalog OIDs; the UI
+does not parse object names/DDL. Lists include internal objects and do not claim
+transitive dependency closure. Partitions exposes direct children and parent
+relations with native bounds; navigation supports drilling through nested trees.
+Triggers excludes internal constraint triggers; Rules includes view return rules.
+Policies shows roles/commands/USING/WITH CHECK plus enabled/forced RLS flags.
+Permissions uses aclexplode for stored/default owner table ACLs and explicit
+column ACLs. Effective role membership and RLS access are not computed.
+
+Each section loads on a dedicated read-only repeatable-read connection, uses a
+10-second statement timeout and preserves TLS/hostname verification. Per-tab
+caches are invalidated by metadata generations; stale replies after
+refresh/reconnect/disconnect/close are ignored. Unsupported providers return None,
+distinct from a successful empty list. Source copy is read-only; relation
+navigation is offered only for real relation targets.
+
+Live PostgreSQL fixtures validate all seven sections, FK/view targets,
+partition parent/bounds, user triggers/rules, RLS roles/flags, table/column grants
+and empty/missing relations. Other-provider defaults are covered by SQLite tests.
+GUI acceptance is pending at the user's request.

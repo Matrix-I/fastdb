@@ -205,6 +205,16 @@ pub struct ForeignKey {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    /// None is unsupported; Some(empty) is a successfully loaded empty catalog.
+    async fn load_catalog_section(
+        &self,
+        _schema: &str,
+        _table: &str,
+        _section: crate::catalog::CatalogSection,
+    ) -> Result<Option<Vec<crate::catalog::CatalogRow>>> {
+        Ok(None)
+    }
+
     async fn load_column(
         &self,
         _schema: &str,

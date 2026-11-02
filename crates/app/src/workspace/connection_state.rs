@@ -64,6 +64,7 @@ impl Default for NavigatorState {
 }
 
 pub(super) struct ConnectionSession {
+    pub metadata_generation: u64,
     pub diagram: Arc<super::diagram_model::DiagramModel>,
     pub kind: DbDriverKind,
     pub schema_tree: Arc<std::collections::BTreeMap<String, Vec<TableSummary>>>,
@@ -79,6 +80,7 @@ impl Default for ConnectionSession {
     fn default() -> Self {
         Self {
             diagram: Arc::default(),
+            metadata_generation: 0,
             kind: DbDriverKind::Postgres,
             schema_tree: Arc::new(std::collections::BTreeMap::new()),
             properties: HashMap::new(),

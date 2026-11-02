@@ -14,6 +14,7 @@ pub struct TabState {
     /// Stable identity, so async query results land in the right tab after tabs move or close
     pub id: u64,
     pub title: String,
+    pub(super) catalog: super::catalog_panel::CatalogCache,
     pub(super) column_editor: Option<super::column_editor::ColumnEditor>,
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
@@ -248,6 +249,7 @@ impl TabState {
             id,
             title: String::new(),
             column_editor: None,
+            catalog: Default::default(),
             schema_name: None,
             table_name: None,
             filter_sql: String::new(),

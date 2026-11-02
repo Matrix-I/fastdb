@@ -19,3 +19,19 @@ GUI acceptance remains pending for the user.
 
 Sources: PostgreSQL 17 catalogs pg_depend/pg_policy and system-information
 functions (pg_describe_object, aclexplode); use catalog identities, never parse DDL.
+
+## Verification
+
+Implemented all seven provider catalog sections and asynchronous per-tab cache
+loading with metadata-generation/connection identity checks. Real relation
+navigation, source copy, retry and distinct unsupported/empty/error states are
+wired. Virtual remains explicitly not implemented. Definitions/ACL lists are
+read-only and scoped to direct catalog relationships/default/direct grants.
+
+Formatting, workspace clippy with warnings denied and the full workspace suite
+with PostgreSQL 16 passed. New live fixtures cover all seven sections, FK/view
+navigation, parent/partition bounds, user trigger/rule source, RLS policy roles,
+table/column ACLs, empty/missing relations and unsupported provider defaults.
+A cache-generation unit test covers invalidating loaded and in-flight sections.
+The app built successfully; isolated startup smoke is included. Manual GUI
+acceptance is pending for the user, as requested.

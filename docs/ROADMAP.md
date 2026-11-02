@@ -24,10 +24,10 @@ Paths below are relative to `crates/app/src/workspace/` unless linked otherwise.
 
 | Surface | Status and evidence | Required result before closing |
 | :--- | :--- | :--- |
-| Properties: Dependencies, References | **UI only**: [`properties_panel.rs`](../crates/app/src/workspace/properties_panel.rs), fallback match arm always renders metadata unavailable. | Outgoing dependencies and incoming references from catalogs, with object navigation and refresh. |
-| Properties: Partitions | **UI only**: same fallback. PostgreSQL header/DDL partition information does not populate this section. | Parent/child hierarchy, bounds and provider-specific details from catalogs. |
-| Properties: Triggers, Rules, Policies | **UI only**: same fallback, even though PostgreSQL DDL can contain these definitions. | Real lists and definitions; add enable/disable/edit actions separately with execution feedback. |
-| Properties: Permissions | **UI only**: same fallback. Grants in generated DDL are not a permissions editor. | Grantee/privilege rows, then separately scoped grant/revoke execution and refresh. |
+| Properties: Dependencies, References | **Implemented for PostgreSQL**: direct catalog dependencies/dependents, relation navigation and refresh; GUI acceptance pending. | Transitive dependency visualization remains separate. |
+| Properties: Partitions | **Implemented for PostgreSQL**: direct parent/child links and native bounds; GUI acceptance pending. | Partition mutation actions remain separate. |
+| Properties: Triggers, Rules, Policies | **Read-only readers implemented for PostgreSQL**: native definitions, enabled states and RLS details. | Mutation actions remain separate. |
+| Properties: Permissions | **Read-only ACL reader implemented for PostgreSQL**. | Effective privileges and grant/revoke UI remain separate. |
 | Properties: Virtual | **UI only**: same fallback; no virtual-key/relationship workflow. | Persist user-defined keys/relationships and use them in navigation/editing with explicit semantics. |
 | Table toolbar: `⛶` | **UI only**: [`table_view.rs`](../crates/app/src/workspace/table_view.rs), pointer/hover styling without a handler. | Define and implement expand/maximize behavior, or remove/disable the affordance. |
 | Table toolbar: filter funnel `∇` | **UI only**: same file, no handler. The text filter and Execute/Clear/Refresh are wired. | Criteria builder producing SQL that is actually executed and reflected in rows. |
@@ -60,7 +60,7 @@ Priorities below are proposed implementation order, not release dates. PostgreSQ
 ### P0 — Make the existing UI truthful and finish its result paths
 
 - [ ] **P0-01 — Capability states.** Disable/hide unsupported controls with an explanation; distinguish not implemented, provider unsupported, permission denied, empty and failed metadata. Eliminate clickable no-op controls listed above. Acceptance: audit each visible control on supported and unsupported providers.
-- [ ] **P0-02 — Missing Properties readers.** Implement Dependencies, References, Partitions, Triggers, Rules, Policies and Permissions for PostgreSQL. Acceptance: catalog fixtures with real objects produce navigable rows; empty/error states and refresh work. Keep mutation actions a separate milestone.
+- [x] **P0-02 — Missing Properties readers (implemented; GUI acceptance pending).** Implement Dependencies, References, Partitions, Triggers, Rules, Policies and Permissions for PostgreSQL. Acceptance: catalog fixtures with real objects produce navigable rows; empty/error states and refresh work. Keep mutation actions a separate milestone.
 - [ ] **P0-03 — Filter workflow.** Implement criteria builder and per-tab history; define expand behavior. Acceptance: generated predicate/order, executed SQL and returned rows agree; back/forward and refresh retain the intended state.
 - [x] **P0-04 — ER relationships (implemented; GUI acceptance pending).** Replace the single entity preview with a usable FK diagram. Acceptance: composite/self-referencing/incoming/outgoing FKs render correctly and open the right connection/schema/table; layout and viewport remain responsive.
 - [ ] **P0-05 — Workflow acceptance matrix.** Record connect → browse → run → edit/save/read-back → export/read-back → cancel/disconnect for each claimed provider. Include multi-connection identity, stale async completion, pending edits and failed transaction recovery. Never promote skipped live tests to validated support.

@@ -9,6 +9,7 @@ use ui_editor::SqlEditorView;
 use ui_grid::VirtualDataGrid;
 
 mod about_dialog;
+mod catalog_panel;
 mod column_editor;
 mod column_menu;
 mod connection_config;

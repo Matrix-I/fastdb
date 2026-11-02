@@ -7,6 +7,7 @@ impl Workspace {
         active_tab_idx: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        self.ensure_catalog_section(active_tab_idx, cx);
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
@@ -32,8 +33,6 @@ impl Workspace {
                     vec![],
                 ))
             });
-        let t_name = model.table.as_str();
-        let s_name = model.schema.as_str();
         let mut prop_container = div()
             .id("properties-main-container")
             .flex()
@@ -257,51 +256,20 @@ impl Workspace {
             PropertySection::Statistics => {
                 right_content = right_content.child(model.render_statistics(theme));
             }
+            section if section.catalog().is_some() => {
+                right_content = right_content.child(self.render_catalog_section(
+                    active_tab_idx,
+                    section.catalog().unwrap(),
+                    cx,
+                ));
+            }
             _ => {
-                let sec_title = match active_property_sec {
-                    PropertySection::Dependencies => "Dependencies",
-                    PropertySection::References => "References",
-                    PropertySection::Partitions => "Partitions",
-                    PropertySection::Triggers => "Triggers",
-                    PropertySection::Rules => "Rules",
-                    PropertySection::Policies => "Policies",
-                    PropertySection::Permissions => "Permissions",
-                    PropertySection::Virtual => "Virtual",
-                    _ => "Details",
-                };
-
-                let empty_view = div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .h_full()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .h(px(24.0))
-                            .bg(theme.bg_grid_header)
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .px_2()
-                            .text_size(px(11.0))
-                            .text_color(theme.text_secondary)
-                            .child(format!("{} metadata", sec_title)),
-                    )
-                    .child(
-                        div()
-                            .p_6()
-                            .text_size(px(11.5))
-                            .text_color(theme.text_muted)
-                            .child(format!(
-                                "{} metadata is unavailable for table {}.{}.",
-                                sec_title.to_lowercase(),
-                                s_name,
-                                t_name
-                            )),
-                    );
-
-                right_content = right_content.child(empty_view);
+                right_content = right_content.child(
+                    div()
+                        .p_4()
+                        .text_color(theme.text_muted)
+                        .child("Virtual keys/relationships are not implemented yet."),
+                );
             }
         }
 

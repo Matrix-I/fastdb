@@ -1,4 +1,5 @@
 pub mod binary_decoder;
+mod catalog;
 mod column;
 mod metadata;
 mod script;
@@ -206,6 +207,15 @@ impl DatabaseDriver for PostgresDriver {
             task,
             self.config.clone(),
         )))
+    }
+
+    async fn load_catalog_section(
+        &self,
+        schema: &str,
+        table: &str,
+        section: crate::catalog::CatalogSection,
+    ) -> Result<Option<Vec<crate::catalog::CatalogRow>>> {
+        self.catalog_section(schema, table, section).await
     }
 
     async fn load_column(
