@@ -12,6 +12,7 @@ pub(super) struct SchemaMetadata {
     indexes: Vec<(String, String, String)>,
     details: Vec<(String, String, db_wire::TableDetails)>,
     details_error: Option<String>,
+    foreign_keys: Result<Option<Vec<db_wire::ForeignKey>>, String>,
 }
 
 /// Loads tables, then columns, constraints and indexes in batch; only a failed
@@ -27,6 +28,10 @@ async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMeta
         .err()
         .map(|e| format!("Table details unavailable: {e}"));
     Ok(SchemaMetadata {
+        foreign_keys: driver
+            .list_foreign_keys()
+            .await
+            .map_err(|e| format!("Foreign keys unavailable: {e}")),
         tables,
         columns: driver.list_all_columns().await.unwrap_or_default(),
         constraints: driver.list_all_constraints().await.unwrap_or_default(),
@@ -493,8 +498,30 @@ impl Workspace {
             .with_metadata(details.remove(&key), metadata.details_error.clone());
             properties.insert(key, Arc::new(model));
         }
+        let (foreign_keys, notice) = match metadata.foreign_keys {
+            Ok(Some(keys)) => (keys, None),
+            Ok(None) => (
+                Vec::new(),
+                Some("Foreign-key relationships unavailable for this provider".into()),
+            ),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        session.diagram = Arc::new(super::diagram_model::DiagramModel::build(
+            &session.tables,
+            &session.table_columns,
+            foreign_keys,
+            notice,
+        ));
         session.schema_tree = Arc::new(tree);
         session.properties = properties;
+        let owner = self.connections.active_connection_id.as_deref();
+        for tab in &mut self.tabs {
+            if tab.connection_id.as_deref() == owner {
+                tab.diagram.selected_edge = None;
+                tab.diagram.selected_column = None;
+                tab.diagram.pan = None;
+            }
+        }
     }
 
     pub fn open_new_connection_dialog(&mut self) {

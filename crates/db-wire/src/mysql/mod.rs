@@ -347,6 +347,33 @@ impl DatabaseDriver for MySqlDriver {
         Ok(map.into_iter().map(|((s, t), cols)| (s, t, cols)).collect())
     }
 
+    async fn list_foreign_keys(&self) -> Result<Option<Vec<crate::ForeignKey>>> {
+        let rows: Vec<(String, String, String, String, String, String, String)> = self
+            .query_rows(
+                "SELECT constraint_name, table_schema, table_name, column_name,
+                        referenced_table_schema, referenced_table_name, referenced_column_name
+                 FROM information_schema.key_column_usage
+                 WHERE referenced_table_name IS NOT NULL
+                 ORDER BY table_schema, table_name, constraint_name, ordinal_position"
+                    .to_string(),
+                (),
+            )
+            .await?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|r| crate::ForeignKey {
+                    name: r.0,
+                    source_schema: r.1,
+                    source_table: r.2,
+                    source_column: r.3,
+                    target_schema: r.4,
+                    target_table: r.5,
+                    target_column: r.6,
+                })
+                .collect(),
+        ))
+    }
+
     async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
         let sql = r#"
             SELECT table_schema, table_name, constraint_name, constraint_type

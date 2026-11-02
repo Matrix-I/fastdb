@@ -252,3 +252,19 @@ error/cancellation cleanup, no leakage to row-edit/normal sessions, and terminal
 connection loss without replay. TLS tests cover private CA/hostname validation,
 encrypted sessions and session-local cancellation. Environment-based skipping
 and the existing CI requirement flags remain unchanged.
+
+
+## ER diagram relationships
+
+PostgreSQL loads ordered FK column pairs from pg_constraint/pg_attribute, including
+self references and cross-schema targets. MySQL/MariaDB uses
+information_schema.key_column_usage with ordinal_position. SQLite uses the
+table-valued pragma_foreign_key_list and resolves omitted target columns against
+the ordered primary key; its diagram covers the main database. SQLite's generated
+fk_<id> labels identify constraints within their source table, not stored names.
+
+Relationship loading runs during connection/schema refresh. Catalog errors and
+unsupported ODBC providers are shown explicitly rather than interpreted as no
+relationships. Target tables outside the loaded catalog appear with unavailable
+columns. Diagrams retain qualified identities and never infer FKs from names or
+parse DDL. SQL-tab temporary tables are outside this connection metadata view.

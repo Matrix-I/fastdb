@@ -191,6 +191,18 @@ pub struct ConstraintDetails {
     pub validated: bool,
 }
 
+/// One ordered column mapping in a foreign-key constraint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKey {
+    pub name: String,
+    pub source_schema: String,
+    pub source_table: String,
+    pub source_column: String,
+    pub target_schema: String,
+    pub target_table: String,
+    pub target_column: String,
+}
+
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
     /// Whether Run script can lease an isolated physical connection.
@@ -267,6 +279,11 @@ pub trait DatabaseDriver: Send + Sync {
     /// Batch list all constraints across all tables: (schema, table, constraint_name, constraint_type)
     async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
         Ok(Vec::new())
+    }
+
+    /// None means unsupported, distinct from a supported catalog with no FKs.
+    async fn list_foreign_keys(&self) -> Result<Option<Vec<ForeignKey>>> {
+        Ok(None)
     }
 
     /// Batch list all indexes across all tables: (schema, table, index_name)

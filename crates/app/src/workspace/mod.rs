@@ -18,6 +18,8 @@ use connection_state::{ConnectionFormState, ConnectionManager, ConnectionSession
 mod data_edit;
 mod data_panel;
 mod ddl;
+mod diagram_gestures;
+mod diagram_model;
 mod diagram_panel;
 mod export;
 mod fetch_plan;
@@ -151,6 +153,7 @@ pub struct Workspace {
     /// Cached views of the window regions, created on the first render
     pub panes: Option<Panes>,
     updates: Entity<UpdateController>,
+    _diagram_gestures: diagram_gestures::Monitor,
     _update_changed: Subscription,
     _restart_requested: Subscription,
     pub show_about_dialog: bool,
@@ -208,6 +211,7 @@ impl Workspace {
             save_queue,
             credential_warning,
             updates,
+            _diagram_gestures: diagram_gestures::install(cx),
             _update_changed: update_changed,
             _restart_requested: restart_requested,
             script_request_id: 0,

@@ -445,7 +445,7 @@ impl Workspace {
                         center_col = center_col.child(self.render_properties_panel(active_tab_idx, cx));
                     }
                     TableSubTab::Diagram => {
-                        center_col = center_col.child(self.render_diagram_panel(active_tab_idx));
+                        center_col = center_col.child(self.render_diagram_panel(active_tab_idx, cx));
                     }
                 }
 

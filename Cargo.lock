@@ -2121,12 +2121,15 @@ name = "fastdb-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "block",
  "chrono",
+ "cocoa 0.26.0",
  "db-wire",
  "flume",
  "futures",
  "gpui",
  "mem-engine",
+ "objc",
  "platform-hal",
  "rust-embed",
  "semver",

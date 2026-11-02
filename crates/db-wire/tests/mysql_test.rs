@@ -120,3 +120,27 @@ fn test_mysql_running_query_can_be_cancelled() {
         assert!(event_rx.drain().any(|e| matches!(e, StreamEvent::Error(_))));
     });
 }
+
+#[test]
+fn mysql_foreign_keys_preserve_composite_order() {
+    let Some(cfg) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let database = cfg.database.clone();
+        let driver = MySqlDriver::new(cfg);
+        let parent = format!("fastdb_er_parent_{}", std::process::id());
+        let child = format!("fastdb_er_child_{}", std::process::id());
+        driver.execute_query(&format!("CREATE TABLE {parent} (a INTEGER, b INTEGER, PRIMARY KEY(a,b))")).await.unwrap();
+        driver.execute_query(&format!("CREATE TABLE {child} (x INTEGER, y INTEGER, FOREIGN KEY(x,y) REFERENCES {parent}(a,b))")).await.unwrap();
+        let keys = driver.list_foreign_keys().await.unwrap().unwrap();
+        let keys: Vec<_> = keys.iter().filter(|k| k.source_schema == database && k.source_table == child).collect();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].name, keys[1].name);
+        assert_eq!((&*keys[0].source_column, &*keys[0].target_column), ("x", "a"));
+        assert_eq!((&*keys[1].source_column, &*keys[1].target_column), ("y", "b"));
+        assert!(keys.iter().all(|k| k.target_schema == database && k.target_table == parent));
+        driver.execute_query(&format!("DROP TABLE {child}")).await.unwrap();
+        driver.execute_query(&format!("DROP TABLE {parent}")).await.unwrap();
+    });
+}

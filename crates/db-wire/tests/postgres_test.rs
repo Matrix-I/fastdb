@@ -438,3 +438,28 @@ fn test_postgres_ddl_round_trip() {
         task.abort();
     });
 }
+
+#[test]
+fn postgres_foreign_keys_preserve_schema_identity_and_composite_mapping() {
+    let Some(cfg) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver = PostgresDriver::new(cfg);
+        let schema = format!("fastdb_er_{}", std::process::id());
+        driver.execute_query(&format!("CREATE SCHEMA {schema}")).await.unwrap();
+        for sql in [
+            format!("CREATE TABLE {schema}.parent (a integer, b integer, PRIMARY KEY(a,b))"),
+            format!("CREATE TABLE {schema}.child (x integer, y integer, CONSTRAINT composite_fk FOREIGN KEY(x,y) REFERENCES {schema}.parent(a,b))"),
+            format!("CREATE TABLE {schema}.self_ref (id integer PRIMARY KEY, parent integer REFERENCES {schema}.self_ref(id))"),
+        ] { driver.execute_query(&sql).await.unwrap(); }
+        let keys = driver.list_foreign_keys().await.unwrap().unwrap();
+        let mappings: Vec<_> = keys.iter().filter(|k| k.source_schema == schema && k.source_table == "child").collect();
+        assert_eq!(mappings.len(), 2);
+        assert_eq!((&*mappings[0].source_column, &*mappings[0].target_column), ("x", "a"));
+        assert_eq!((&*mappings[1].source_column, &*mappings[1].target_column), ("y", "b"));
+        assert!(mappings.iter().all(|k| k.target_schema == schema && k.target_table == "parent" && k.name == "composite_fk"));
+        assert!(keys.iter().any(|k| k.source_schema == schema && k.source_table == "self_ref" && k.target_table == "self_ref"));
+        driver.execute_query(&format!("DROP SCHEMA {schema} CASCADE")).await.unwrap();
+    });
+}

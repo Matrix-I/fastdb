@@ -200,3 +200,49 @@ async fn planned_row_changes_execute_transactionally_on_sqlite() {
         Some(b"it's after".as_slice())
     );
 }
+
+#[tokio::test]
+async fn sqlite_foreign_keys_preserve_composite_order_and_implicit_primary_keys() {
+    let driver = SqliteDriver::new_memory();
+    for sql in [
+        "CREATE TABLE parent (first INTEGER, second INTEGER, PRIMARY KEY(first, second))",
+        "CREATE TABLE child (a INTEGER, b INTEGER, FOREIGN KEY(a,b) REFERENCES parent)",
+        "CREATE TABLE self_ref (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES self_ref(id))",
+        "CREATE TABLE \"quoted parent\" (\"quoted id\" INTEGER PRIMARY KEY)",
+        "CREATE TABLE \"quoted child\" (value INTEGER REFERENCES \"quoted parent\"(\"quoted id\"))",
+        r#"CREATE TABLE "quote""inside" ("odd""id" INTEGER PRIMARY KEY)"#,
+    ] {
+        driver.execute_query(sql).await.unwrap();
+    }
+    let columns = driver.list_all_columns().await.unwrap();
+    assert!(
+        columns
+            .iter()
+            .any(|(_, table, cols)| table == "quoted parent"
+                && cols.iter().any(|c| c.name == "quoted id"))
+    );
+    let keys = driver.list_foreign_keys().await.unwrap().unwrap();
+    let composite: Vec<_> = keys.iter().filter(|k| k.source_table == "child").collect();
+    assert_eq!(composite.len(), 2);
+    assert_eq!(composite[0].name, composite[1].name);
+    assert_eq!(
+        (&*composite[0].source_column, &*composite[0].target_column),
+        ("a", "first")
+    );
+    assert_eq!(
+        (&*composite[1].source_column, &*composite[1].target_column),
+        ("b", "second")
+    );
+    assert!(
+        keys.iter()
+            .any(|k| k.source_table == "self_ref" && k.target_table == "self_ref")
+    );
+    assert!(
+        keys.iter()
+            .any(|k| k.source_table == "quoted child" && k.target_column == "quoted id")
+    );
+    assert!(
+        keys.iter()
+            .all(|k| k.source_schema == "main" && k.target_schema == "main")
+    );
+}

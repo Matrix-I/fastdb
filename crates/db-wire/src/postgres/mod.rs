@@ -313,6 +313,42 @@ impl DatabaseDriver for PostgresDriver {
         metadata::columns(&client, None, None).await
     }
 
+    async fn list_foreign_keys(&self) -> Result<Option<Vec<crate::ForeignKey>>> {
+        let client = self.get_or_connect().await?;
+        let rows = client
+            .query(
+                "SELECT c.conname, ns.nspname, src.relname, sa.attname,
+                    nt.nspname, dst.relname, ta.attname
+             FROM pg_constraint c
+             JOIN pg_class src ON src.oid = c.conrelid
+             JOIN pg_namespace ns ON ns.oid = src.relnamespace
+             JOIN information_schema.tables visible
+               ON visible.table_schema = ns.nspname AND visible.table_name = src.relname
+             JOIN pg_class dst ON dst.oid = c.confrelid
+             JOIN pg_namespace nt ON nt.oid = dst.relnamespace
+             CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY k(s,t,n)
+             JOIN pg_attribute sa ON sa.attrelid = src.oid AND sa.attnum = k.s
+             JOIN pg_attribute ta ON ta.attrelid = dst.oid AND ta.attnum = k.t
+             WHERE c.contype = 'f' AND ns.nspname NOT IN ('pg_catalog','information_schema')
+             ORDER BY ns.nspname, src.relname, c.conname, k.n",
+                &[],
+            )
+            .await?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|r| crate::ForeignKey {
+                    name: r.get(0),
+                    source_schema: r.get(1),
+                    source_table: r.get(2),
+                    source_column: r.get(3),
+                    target_schema: r.get(4),
+                    target_table: r.get(5),
+                    target_column: r.get(6),
+                })
+                .collect(),
+        ))
+    }
+
     async fn list_all_constraints(&self) -> Result<Vec<(String, String, String, String)>> {
         let client = self.get_or_connect().await?;
         let sql = r#"

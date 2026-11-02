@@ -88,6 +88,25 @@ impl Workspace {
             return;
         }
 
+        if !self.form.show_connection_modal
+            && self.menus.grid_context_menu.is_none()
+            && self.menus.column_menu.is_none()
+            && self.menus.nav_context_menu.is_none()
+            && (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && let Some(factor) = super::diagram_model::zoom_shortcut(&event.keystroke.key)
+            && let Some(tab) = self.tabs.get_mut(self.active_tab)
+            && tab.active_subtab == TableSubTab::Diagram
+        {
+            tab.diagram.zoom_to(if factor == 0.0 {
+                1.0
+            } else {
+                tab.diagram.zoom * factor
+            });
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+
         // Cmd+] (macOS) / Ctrl+] opens a new SQL script, as in DBeaver
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key == "]"

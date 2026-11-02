@@ -179,9 +179,9 @@ impl DatabaseDriver for SqliteDriver {
 
     async fn list_columns(&self, _schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{table}\");"))?;
+        let mut stmt = conn.prepare("SELECT * FROM pragma_table_info(?1)")?;
 
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map([table], |row| {
             let name: String = row.get(1)?;
             let dtype_str: String = row.get(2)?;
             let notnull: i32 = row.get(3)?;
@@ -197,6 +197,33 @@ impl DatabaseDriver for SqliteDriver {
             cols.push(r?);
         }
         Ok(cols)
+    }
+
+    async fn list_foreign_keys(&self) -> Result<Option<Vec<crate::ForeignKey>>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock();
+            let mut stmt = conn.prepare(
+                r#"SELECT m.name, f.id, f."from", f."table",
+                        COALESCE(f."to", (SELECT p.name FROM pragma_table_info(f."table") p
+                            WHERE p.pk = f.seq + 1), 'PRIMARY KEY')
+                 FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
+                 WHERE m.type = 'table' ORDER BY m.name, f.id, f.seq"#,
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok(crate::ForeignKey {
+                    name: format!("fk_{}", r.get::<_, i64>(1)?),
+                    source_schema: "main".into(),
+                    source_table: r.get(0)?,
+                    source_column: r.get(2)?,
+                    target_schema: "main".into(),
+                    target_table: r.get(3)?,
+                    target_column: r.get(4)?,
+                })
+            })?;
+            Ok(Some(rows.collect::<rusqlite::Result<Vec<_>>>()?))
+        })
+        .await?
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
