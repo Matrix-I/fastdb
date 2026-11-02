@@ -172,5 +172,24 @@ pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDe
             });
         }
     }
+    match client.query(include_str!("ddl.sql"), &[]).await {
+        Ok(rows) => {
+            for row in rows {
+                if let Some(table) =
+                    tables.get_mut(&(row.get::<_, String>(0), row.get::<_, String>(1)))
+                {
+                    table.ddl = row.get(2);
+                }
+            }
+        }
+        Err(error) => {
+            // An older catalog or concurrent schema change must not discard the
+            // independently loaded Properties metadata or expose a partial script.
+            let message = super::pg_error_message(&error).replace(['\r', '\n'], " ");
+            for table in tables.values_mut() {
+                table.ddl = Some(format!("-- PostgreSQL DDL unavailable: {message}\n"));
+            }
+        }
+    }
     Ok(tables.into_iter().map(|((s, t), d)| (s, t, d)).collect())
 }

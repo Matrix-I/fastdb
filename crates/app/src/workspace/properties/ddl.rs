@@ -1,15 +1,80 @@
 use super::model::TableProperties;
 use crate::workspace::Workspace;
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
-    pub(in crate::workspace) fn render_ddl(
+    pub(in crate::workspace) fn render_ddl_toolbar(
         &self,
         theme: &Theme,
         cx: &mut Context<Workspace>,
     ) -> AnyElement {
+        let ddl_copy = self.ddl.clone();
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(px(28.0))
+            .flex_shrink_0()
+            .px_3()
+            .bg(theme.bg_surface)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .items_center()
+                    .gap_1p5()
+                    .child(img("icons/sql_script.svg").w(px(13.0)).h(px(13.0)))
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_secondary)
+                            .child(
+                                if self.details.as_ref().and_then(|d| d.ddl.as_ref()).is_some() {
+                                    "PostgreSQL DDL"
+                                } else {
+                                    "DDL Metadata Preview"
+                                },
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("copy-ddl-btn")
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_xs()
+                    .bg(theme.bg_editor)
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_size(px(11.0))
+                    .text_color(theme.text_primary)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_surface_hover))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(ddl_copy.clone()));
+                        cx.notify();
+                    }))
+                    .child("📋 Copy DDL"),
+            )
+            .w_full()
+            .min_w_0()
+            .into_any_element()
+    }
+
+    pub(in crate::workspace) fn render_ddl(&self, theme: &Theme, selected: bool) -> AnyElement {
         let ddl_code = self.ddl.clone();
-        let ddl_copy = ddl_code.clone();
         // Reserve the intrinsic width of the monospaced lines inside the shared viewport.
         let code_width = ddl_code
             .lines()
@@ -27,54 +92,6 @@ impl TableProperties {
             .w(px(code_width))
             .whitespace_nowrap()
             .bg(theme.bg_editor)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(px(28.0))
-                    .flex_shrink_0()
-                    .px_3()
-                    .bg(theme.bg_surface)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .child(img("icons/sql_script.svg").w(px(13.0)).h(px(13.0)))
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.text_secondary)
-                                    .child("DDL Metadata Preview"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("copy-ddl-btn")
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_xs()
-                            .bg(theme.bg_editor)
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_size(px(11.0))
-                            .text_color(theme.text_primary)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_surface_hover))
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(ddl_copy.clone()));
-                                cx.notify();
-                            }))
-                            .child("📋 Copy DDL"),
-                    ),
-            )
             .child(
                 div()
                     .flex()
@@ -114,6 +131,7 @@ impl TableProperties {
                                         } else {
                                             rgb(0x9cdcfe)
                                         })
+                                        .when(selected, |line| line.bg(theme.bg_surface_selected))
                                         .child(line.to_string()),
                                 )
                         }),

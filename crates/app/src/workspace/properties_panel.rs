@@ -42,6 +42,7 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .h_full()
+            .w_full()
             .overflow_hidden()
             .bg(theme.bg_editor);
 
@@ -177,6 +178,9 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
                             t.active_property_section = sec;
+                            t.ddl_selected_all = false;
+                            this.input.is_filter_focused = false;
+                            this.input.is_fetch_size_focused = false;
                             t.properties_scroll.set_offset(point(px(0.0), px(0.0)));
                             cx.notify();
                         }
@@ -228,7 +232,21 @@ impl Workspace {
                 right_content = right_content.child(model.render_indexes(theme));
             }
             PropertySection::Ddl => {
-                right_content = right_content.child(model.render_ddl(theme, cx));
+                right_content = right_content
+                    .cursor_text()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.input.is_filter_focused = false;
+                            this.input.is_fetch_size_focused = false;
+                            if let Some(tab) = this.tabs.get_mut(this.active_tab) {
+                                tab.ddl_selected_all = false;
+                            }
+                            window.focus(&this.focus_handle);
+                            cx.notify();
+                        }),
+                    )
+                    .child(model.render_ddl(theme, tab.ddl_selected_all));
             }
             PropertySection::Statistics => {
                 right_content = right_content.child(model.render_statistics(theme));
@@ -281,14 +299,18 @@ impl Workspace {
             }
         }
 
+        let mut detail = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden();
+        if active_property_sec == PropertySection::Ddl {
+            detail = detail.child(model.render_ddl_toolbar(theme, cx));
+        }
         master_detail = master_detail.child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .overflow_hidden()
+            detail
                 .child(
                     div()
                         .flex()

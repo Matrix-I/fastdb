@@ -17,7 +17,46 @@ Vacuum/analyze timestamps come from `pg_stat_all_tables` and may be unknown or
 reset. These are read-only catalog queries; FastDB does not run COUNT, ANALYZE or
 VACUUM to populate Properties. Catalog visibility follows `information_schema`;
 metadata failures appear in the Properties header and Statistics section without
-preventing table browsing. The DDL tab is still a partial preview.
+preventing table browsing.
+
+### PostgreSQL DDL
+
+Properties → DDL / Copy DDL exports executable structural SQL from one catalog
+query snapshot during metadata refresh. It supports ordinary and partitioned
+tables, partition attachment, zero-column tables and views. Output preserves:
+
+- Native types/typmods, collations, defaults, NOT NULL, stored/virtual generated
+  expressions and ALWAYS/BY DEFAULT identity options and sequence names.
+- Owned serial sequences (type, increment, limits, start, cache and cycle), with
+  ownership and comments. Current sequence values are intentionally excluded.
+- PK/unique/check/exclusion/foreign-key definitions, validation and deferrability;
+  standalone expression/partial/INCLUDE indexes without duplicating constraint
+  indexes. Invalid indexes are warned about and omitted.
+- Table/view/column/constraint/index/sequence comments, persistence, table access
+  method, explicit tablespace, relation options, column storage/compression and
+  statistics targets, extended statistics, replica identity and ownership.
+- RLS flags/policies, user triggers and rules (including enable modes), explicit
+  table/column/sequence grants and grant options. ACL grantor identities and
+  target-environment default privileges are not reconstructed.
+
+Schemas, roles, extensions, collations, custom types, functions, external/shared
+sequences, referenced tables and partition parents must already exist. Create
+partition parents before children. An attached partition may inherit constraints,
+indexes and triggers from its parent. The script captures the source search path
+for deparsed expressions and assumes compatible PostgreSQL and dependency
+versions. This is single-object structural SQL, not a full database dump: data,
+sequence current values, child partitions, incoming foreign keys, publications,
+security labels and extension membership are outside its scope. Inheritance,
+typed, temporary and foreign tables return an explicit unavailable message.
+Other providers keep their partial metadata preview. Catalog DDL is tested on
+PostgreSQL 16; catalog fields require PostgreSQL 14 or later.
+
+Run the DDL round-trip test (creates, exports, drops, recreates and compares
+catalog output, including quoted identifiers and partitions):
+
+```bash
+FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --test postgres_test test_postgres_ddl_round_trip
+```
 
 Run the metadata integration test against a disposable database with schema/table
 creation privileges:
@@ -156,7 +195,7 @@ architecture requirements and the Db2 image's setup workaround.
 
 Table browsing and row edits share provider-aware identifier quoting and pagination in `db-wire::sql`. SQL Server identifiers use brackets and string literals preserve Unicode. Default-only row inserts are rejected for Oracle and Db2 until their provider-specific behavior has live coverage; enter at least one column instead. Generated row edits still run through the driver's exactly-one-row transactional contract.
 
-DDL in Properties is a partial metadata preview, not an exact reconstruction. Incomplete native column types make the preview unavailable; index and constraint names without definitions appear only as comments. SQL planning has deterministic unit coverage for all presets. Unit coverage does not replace the configured live provider and TLS tests described above.
+For providers other than PostgreSQL, DDL in Properties remains a partial metadata preview, not an exact reconstruction. Incomplete native column types make the preview unavailable; index and constraint names without definitions appear only as comments. SQL planning has deterministic unit coverage for all presets. Unit coverage does not replace the configured live provider and TLS tests described above.
 
 ## Visual query plans
 

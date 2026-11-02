@@ -155,7 +155,7 @@ impl Workspace {
         } else if self
             .tabs
             .get(self.active_tab)
-            .is_some_and(|t| t.grid.editing_cell.is_some())
+            .is_some_and(|t| t.active_subtab == TableSubTab::Data && t.grid.editing_cell.is_some())
         {
             self.handle_cell_edit_key(event, cx);
         } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
@@ -176,6 +176,8 @@ impl Workspace {
             && event.keystroke.key.eq_ignore_ascii_case("f")
         {
             self.format_script(cx);
+        } else if self.handle_ddl_key(&event.keystroke, cx) {
+            cx.notify();
         } else if !self.tabs.is_empty() {
             let quote = if matches!(
                 self.tab_provider(self.active_tab),
@@ -290,6 +292,39 @@ impl Workspace {
                 cx.notify();
             }
         }
+    }
+
+    fn handle_ddl_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return false;
+        };
+        if tab.active_subtab != TableSubTab::Properties
+            || tab.active_property_section != PropertySection::Ddl
+            || self.input.is_filter_focused
+            || self.input.is_fetch_size_focused
+        {
+            return false;
+        }
+        let cmd = key.modifiers.platform || key.modifiers.control;
+        if cmd && key.key.eq_ignore_ascii_case("a") {
+            self.tabs[self.active_tab].ddl_selected_all = true;
+        } else if cmd && key.key.eq_ignore_ascii_case("c") {
+            if tab.ddl_selected_all {
+                let schema = tab.schema_name.clone().unwrap_or_default();
+                let table = tab.table_name.clone().unwrap_or_default();
+                if let Some(model) = self
+                    .tab_session(self.active_tab)
+                    .properties
+                    .get(&(schema, table))
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(model.ddl.clone()));
+                }
+            }
+        } else if key.key == "escape" {
+            self.tabs[self.active_tab].ddl_selected_all = false;
+        }
+        // Read-only pane: never route its keystrokes to the hidden data grid/editor.
+        true
     }
 
     /// Keys while a grid cell is edited in place: Enter keeps the text, Escape drops it,

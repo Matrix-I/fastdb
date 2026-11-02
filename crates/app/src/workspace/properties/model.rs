@@ -121,7 +121,9 @@ impl TableProperties {
         details: Option<db_wire::TableDetails>,
         error: Option<String>,
     ) -> Self {
-        if let Some(details) = &details {
+        if let Some(ddl) = details.as_ref().and_then(|d| d.ddl.as_ref()) {
+            self.ddl = ddl.clone();
+        } else if let Some(details) = &details {
             self.ddl = self
                 .ddl
                 .lines()
@@ -199,6 +201,27 @@ mod tests {
                 .contains("-- Catalog index: CREATE INDEX idx ON public.items (id)")
         );
         assert!(!model.ddl.lines().any(|line| line.starts_with("ON public")));
+    }
+
+    #[test]
+    fn catalog_ddl_replaces_the_partial_preview_verbatim() {
+        let ddl = "CREATE TABLE \"schema\".\"table\" ();\n-- catalog output\n";
+        let model = TableProperties::new(
+            DbDriverKind::Postgres,
+            "schema".into(),
+            "table".into(),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .with_metadata(
+            Some(db_wire::TableDetails {
+                ddl: Some(ddl.into()),
+                ..Default::default()
+            }),
+            None,
+        );
+        assert_eq!(model.ddl, ddl);
     }
 
     #[test]

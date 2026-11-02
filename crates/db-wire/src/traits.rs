@@ -148,6 +148,8 @@ pub struct TableSummary {
 /// Optional catalog data. None means unknown or inapplicable, never zero/false.
 #[derive(Debug, Clone, Default)]
 pub struct TableDetails {
+    /// Catalog-derived structural DDL; dependencies must already exist.
+    pub ddl: Option<String>,
     pub object_id: Option<String>,
     pub owner: Option<String>,
     pub tablespace: Option<String>,
