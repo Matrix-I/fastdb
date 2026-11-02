@@ -346,6 +346,14 @@ impl Workspace {
     }
 
     pub fn disconnect_by_id(&mut self, conn_id: &str) {
+        if let Some(operation) = self
+            .operations
+            .active()
+            .filter(|op| op.connection_id == conn_id)
+            && let Some(control) = &operation.script_control
+        {
+            control.request_cancel();
+        }
         if let Some(session) = self.connections.sessions.get_mut(conn_id) {
             session.driver = None;
         }

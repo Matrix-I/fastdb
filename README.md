@@ -68,7 +68,10 @@ What exists today that these targets build on: a paged result store with an LRU 
 - Table names completed after `FROM` / `JOIN` get an alias (`"featureFlag" f`), and `f.` completes that table's columns.
 - **Selection and clipboard**: drag, Shift-click or Shift + navigation keys to select text; `Cmd/Ctrl + A/C/X/V` selects all, copies, cuts or pastes. Typing replaces the selection; undo/redo restores edits.
 - `Cmd/Ctrl + Enter` runs the selected SQL, or the statement under the caret; its rows stream into the grid below the editor.
-- **Run script** (`Cmd/Ctrl + Shift + Enter`) executes ordinary semicolon-delimited statements sequentially, exactly once, stopping on the first error or Cancel. Each statement streams its full result into the paged/spilling store. Transaction control, unquoted procedural blocks and vendor batch directives (`GO`, `DELIMITER`) are rejected before execution; quoted literals/comments and PostgreSQL dollar-quoted bodies preserve embedded semicolons. Backslash string escapes, MySQL hash/executable comments are also rejected because their parsing depends on session settings. Session state across statements is not guaranteed with pooled providers.
+- **Run script** (`Cmd/Ctrl + Shift + Enter`) executes semicolon-delimited statements sequentially, exactly once, stopping on the first error or Cancel. Each statement streams its full result into the paged/spilling store, retaining the latest 20 results.
+  - **PostgreSQL** uses one dedicated physical connection for the entire run, separate from browsing/metadata and row-edit Save. Temporary tables and `SET` / `SET LOCAL` settings remain available across that run's statements. Explicit `BEGIN` / `START TRANSACTION`, `COMMIT` / `END` and `ROLLBACK` / `ABORT` are supported; BEGIN/COMMIT/ROLLBACK/END/ABORT accept optional WORK or TRANSACTION. All transaction blocks must close within the script and are validated before any statement executes. Nested blocks, BEGIN options, savepoints, chaining and prepared transactions are rejected; use `SET TRANSACTION` inside a block for transaction settings. No implicit transaction is added.
+  - PostgreSQL errors/Cancel stop the remaining statements, roll back any currently open transaction and close the dedicated session. Earlier committed blocks and autocommit writes remain applied. Session loss is terminal: no reconnect, replay or automatic COMMIT retry. Cancellation and cleanup retain run ownership until complete, with status/errors in the result footer. A lost COMMIT acknowledgement can mean an uncertain commit outcome. Session state does not persist into the next Run script or standalone `Cmd/Ctrl + Enter`.
+  - Other providers retain ordinary-script execution and reject explicit transactions; pooled providers do not guarantee session state across statements. Unquoted procedural blocks and vendor batch directives (`GO`, `DELIMITER`) remain unsupported. Quoted literals/comments and PostgreSQL dollar-quoted bodies preserve embedded semicolons. Backslash string escapes and MySQL hash/executable comments remain rejected because their parsing depends on session settings.
 - **Result tabs** retain the latest 20 statement results per script, including each result's SQL, grid, selection, fetch state and errors. Switch results after execution completes; older results are released automatically.
 - **Format** (`Cmd/Ctrl + Shift + F`) lays out the selection, or the whole script, as one undoable edit. Formatting preserves token/literal/comment bytes and adds line breaks at top-level clauses; it does not rewrite dialect-specific SQL.
 - **History** lists up to 100 unique recent executions per connection, newest first; click an entry to insert it at the caret or replace selected text without executing it. History persists under `<config dir>/query-history` as plaintext SQL; queries larger than 64 KiB are omitted.
@@ -122,7 +125,7 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 These are goals of the project, but they are not available in the app today:
 
-- **Advanced script execution.** Pinned sessions/explicit transaction scripts and vendor procedural/batch syntax are not supported by Run script yet.
+- **Advanced script execution.** Persistent per-tab sessions, savepoints, transaction chaining, pinned sessions/transaction scripts for other providers, and vendor procedural/batch syntax remain unsupported. PostgreSQL Run script now has a dedicated session and closed explicit transaction blocks.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
 - **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. PostgreSQL DDL uses catalog definitions for tables and views (see provider documentation for scope); other providers retain a partial preview. The status bar's "120 FPS" label is static text.
 - **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
@@ -334,7 +337,8 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] Row insertion, duplication and deletion with transactional Save / Cancel
 - [x] Keychain-backed connection passwords and migration from plaintext config
 - [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
-- [ ] Advanced script execution with pinned sessions, explicit transactions and provider-specific procedural/batch syntax
+- [x] PostgreSQL Run script with an isolated connection, explicit closed transaction blocks, temporary tables and session settings
+- [ ] Persistent per-tab sessions, savepoints, pinned scripts for other providers and provider-specific procedural/batch syntax
 - [x] Grid selection copy as TSV, CSV and provider-aware SQL `INSERT`
 - [x] Export to CSV / SQL from the UI
 - [x] PostgreSQL table statistics and catalog metadata in Properties

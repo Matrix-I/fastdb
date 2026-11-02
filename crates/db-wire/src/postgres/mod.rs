@@ -1,5 +1,6 @@
 pub mod binary_decoder;
 mod metadata;
+mod script;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -119,6 +120,14 @@ impl PostgresDriver {
     }
 
     async fn connect_raw(config: ConnectionConfig) -> Result<Client> {
+        Self::connect_with_task(config)
+            .await
+            .map(|(client, _task)| client)
+    }
+
+    async fn connect_with_task(
+        config: ConnectionConfig,
+    ) -> Result<(Client, tokio::task::JoinHandle<()>)> {
         let mut pg_config = tokio_postgres::Config::new();
         pg_config.user(&config.user);
         if let Some(ref pw) = config.password {
@@ -135,16 +144,10 @@ impl PostgresDriver {
         };
 
         if let Some(socket_path) = unix_socket {
-            info!(
-                "Connecting to PostgreSQL via Unix Domain Socket: {}",
-                socket_path.display()
-            );
+            info!("Connecting to PostgreSQL via Unix domain socket");
             pg_config.host_path(socket_path);
         } else {
-            info!(
-                "Connecting to PostgreSQL via TCP {}:{}",
-                config.host, config.port
-            );
+            info!("Connecting to PostgreSQL via TCP");
             pg_config.host(&config.host);
             pg_config.port(config.port);
         }
@@ -160,12 +163,12 @@ impl PostgresDriver {
                         config.host, config.port
                     )
                 })?;
-            crate::get_runtime().spawn(async move {
+            let task = crate::get_runtime().spawn(async move {
                 if let Err(e) = connection.await {
                     warn!("PostgreSQL connection error: {}", e);
                 }
             });
-            client
+            (client, task)
         } else {
             pg_config.ssl_mode(tokio_postgres::config::SslMode::Disable);
             let (client, connection) = pg_config.connect(NoTls).await.with_context(|| {
@@ -174,12 +177,12 @@ impl PostgresDriver {
                     config.host, config.port
                 )
             })?;
-            crate::get_runtime().spawn(async move {
+            let task = crate::get_runtime().spawn(async move {
                 if let Err(e) = connection.await {
                     warn!("PostgreSQL connection error: {}", e);
                 }
             });
-            client
+            (client, task)
         };
 
         Ok(client)
@@ -188,6 +191,22 @@ impl PostgresDriver {
 
 #[async_trait]
 impl DatabaseDriver for PostgresDriver {
+    fn supports_script_session(&self) -> bool {
+        true
+    }
+
+    async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
+        let config = self.config.clone();
+        let (client, task) =
+            crate::run_on_shared_runtime(async move { Self::connect_with_task(config).await })
+                .await?;
+        Ok(Arc::new(script::PostgresScriptSession::new(
+            client,
+            task,
+            self.config.clone(),
+        )))
+    }
+
     async fn ping(&self) -> Result<()> {
         let client = self.get_or_connect().await?;
         client.simple_query("SELECT 1;").await?;
@@ -208,42 +227,7 @@ impl DatabaseDriver for PostgresDriver {
         // Update cancel token for this connection
         *self.cancel_token.lock() = Some(client.cancel_token());
 
-        let statement = client.prepare(sql).await.map_err(|e| {
-            report_error(
-                &event_tx,
-                format!("SQL Preparation Error: {}", pg_error_message(&e)),
-            )
-        })?;
-
-        let columns: Vec<ColumnMeta> = statement
-            .columns()
-            .iter()
-            .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
-            .collect();
-        let mut sink = RowSink::start(columns, event_tx, start_time)?;
-
-        let row_stream = client
-            .query_raw(&statement, std::iter::empty::<i32>())
-            .await
-            .map_err(|e| sink.fail(format!("Query execution error: {}", pg_error_message(&e))))?;
-        futures::pin_mut!(row_stream);
-
-        while let Some(row_res) = row_stream.next().await {
-            let row = row_res
-                .map_err(|e| sink.fail(format!("Row stream error: {}", pg_error_message(&e))))?;
-            for (col_idx, cell) in sink.cells_mut().iter_mut().enumerate() {
-                *cell = decode_pg_cell(&row, col_idx);
-            }
-            sink.commit_row()?;
-        }
-
-        let total_rows = sink.finish();
-        debug!(
-            "Postgres query streaming completed: {} rows in {}ms",
-            total_rows,
-            start_time.elapsed().as_millis()
-        );
-        Ok(())
+        stream_client(&client, sql, event_tx, start_time).await
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
@@ -362,6 +346,50 @@ impl DatabaseDriver for PostgresDriver {
     async fn list_table_details(&self) -> Result<Vec<(String, String, crate::TableDetails)>> {
         metadata::load(self.get_or_connect().await?.as_ref()).await
     }
+}
+
+async fn stream_client(
+    client: &Client,
+    sql: &str,
+    event_tx: flume::Sender<StreamEvent>,
+    start_time: Instant,
+) -> Result<()> {
+    let statement = client.prepare(sql).await.map_err(|e| {
+        report_error(
+            &event_tx,
+            format!("SQL Preparation Error: {}", pg_error_message(&e)),
+        )
+    })?;
+
+    let columns: Vec<ColumnMeta> = statement
+        .columns()
+        .iter()
+        .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
+        .collect();
+    let mut sink = RowSink::start(columns, event_tx, start_time)?;
+
+    let row_stream = client
+        .query_raw(&statement, std::iter::empty::<i32>())
+        .await
+        .map_err(|e| sink.fail(format!("Query execution error: {}", pg_error_message(&e))))?;
+    futures::pin_mut!(row_stream);
+
+    while let Some(row_res) = row_stream.next().await {
+        let row = row_res
+            .map_err(|e| sink.fail(format!("Row stream error: {}", pg_error_message(&e))))?;
+        for (col_idx, cell) in sink.cells_mut().iter_mut().enumerate() {
+            *cell = decode_pg_cell(&row, col_idx);
+        }
+        sink.commit_row()?;
+    }
+
+    let total_rows = sink.finish();
+    debug!(
+        "Postgres query streaming completed: {} rows in {}ms",
+        total_rows,
+        start_time.elapsed().as_millis()
+    );
+    Ok(())
 }
 
 #[cfg(test)]

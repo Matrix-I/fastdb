@@ -193,6 +193,15 @@ pub struct ConstraintDetails {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    /// Whether Run script can lease an isolated physical connection.
+    fn supports_script_session(&self) -> bool {
+        false
+    }
+
+    async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
+        anyhow::bail!("Pinned script sessions are not supported by this provider")
+    }
+
     /// Test connection to verify credentials and connectivity
     async fn ping(&self) -> Result<()>;
 

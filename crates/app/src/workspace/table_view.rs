@@ -494,6 +494,8 @@ impl Workspace {
         );
         let summary = if let Some(message) = &tab.export.message {
             message.clone()
+        } else if let Some(status) = &tab.script_status {
+            status.clone()
         } else if is_appending {
             "Fetching next rows…".to_string()
         } else {

@@ -210,3 +210,45 @@ currently expose plans only through manually entered provider-specific SQL.
 
 PostgreSQL integration tests also accept `FASTDB_TEST_PG_PASSWORD` when the local
 test server requires password authentication. Leave it unset for trust/peer setups.
+
+
+## PostgreSQL script sessions
+
+Run script leases a dedicated PostgreSQL connection for one complete run. The
+connection uses the saved session's TLS/root CA/hostname validation and socket
+policy, with its own cancellation token. Metadata, browsing and transactional
+row-edit Save use the original driver connection. The script never reconnects
+silently or retries statements/COMMIT after connection loss.
+
+Temporary tables and session settings persist between statements in that run.
+Support includes BEGIN / START TRANSACTION, COMMIT / END, ROLLBACK / ABORT and
+optional WORK / TRANSACTION on the single-keyword controls. Preflight requires
+balanced, non-nested blocks before any SQL executes. BEGIN options, chaining,
+savepoints and prepared transactions are not supported yet; SET TRANSACTION
+inside a block is allowed. Standalone statement execution and subsequent script
+runs do not share this session.
+
+Scripts stop at the first failure or Cancel. The runner drops the current query
+future before sending its session-local cancellation, waits for cancellation,
+then attempts ROLLBACK and closes/discards the session. Cancel and cleanup each
+have a five-second bound; a cleanup failure is reported separately. Earlier
+commits/autocommit statements are not undone, and a connection loss during COMMIT
+may have an uncertain outcome. Run ownership stays active through cleanup, so a
+late cancel cannot affect a new statement/run. Closing a tab/disconnecting cancels
+the run; Quit waits for bounded cleanup after the existing autosave barrier.
+
+Other providers retain their ordinary-script policy and default to no dedicated
+session capability. No provider is selected through workspace-specific SQL cases.
+
+```bash
+FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --test script_session_test
+# TLS settings are normally supplied by ci/test-tls.sh:
+FASTDB_TLS_PG_PORT=5433 FASTDB_TLS_CA=/path/to/ca.pem \
+  cargo test -p db-wire --test tls_test postgres_pinned_script_session
+```
+
+Live tests cover backend identity, temporary tables/settings, commit/rollback,
+error/cancellation cleanup, no leakage to row-edit/normal sessions, and terminal
+connection loss without replay. TLS tests cover private CA/hostname validation,
+encrypted sessions and session-local cancellation. Environment-based skipping
+and the existing CI requirement flags remain unchanged.

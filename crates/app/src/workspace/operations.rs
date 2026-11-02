@@ -4,6 +4,7 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OperationKind {
     Query,
+    Script,
     Save,
 }
 
@@ -14,6 +15,7 @@ pub(super) struct Operation {
     pub driver: Arc<dyn DatabaseDriver>,
     pub kind: OperationKind,
     pub cancel_requested: bool,
+    pub script_control: Option<Arc<db_wire::script::ScriptControl>>,
 }
 
 #[derive(Default)]
@@ -47,9 +49,22 @@ impl Operations {
             driver,
             kind,
             cancel_requested: false,
+            script_control: None,
         });
         Some(id)
     }
+    pub fn begin_script(
+        &mut self,
+        tab_id: u64,
+        connection_id: String,
+        driver: Arc<dyn DatabaseDriver>,
+        control: Arc<db_wire::script::ScriptControl>,
+    ) -> Option<u64> {
+        let id = self.begin(tab_id, connection_id, driver, OperationKind::Script)?;
+        self.active.as_mut()?.script_control = Some(control);
+        Some(id)
+    }
+
     pub fn matches(&self, id: u64, tab_id: u64) -> bool {
         self.active
             .as_ref()
@@ -125,5 +140,47 @@ mod tests {
         assert!(runs.matches(second, 8));
         assert!(runs.request_cancel().is_none());
         assert!(runs.finish(second));
+    }
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::{OperationKind, Operations};
+    use db_wire::{ConnectionConfig, DbDriverKind, create_driver, script::ScriptControl};
+    use std::sync::Arc;
+
+    #[test]
+    fn a_script_holds_ownership_until_cleanup_and_retains_its_cancel_control() {
+        let driver = create_driver(ConnectionConfig {
+            driver: DbDriverKind::Sqlite,
+            database: ":memory:".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let control = Arc::new(ScriptControl::default());
+        let mut runs = Operations::default();
+        let run = runs
+            .begin_script(7, "source".into(), driver.clone(), control.clone())
+            .unwrap();
+        assert_eq!(runs.active().unwrap().kind, OperationKind::Script);
+        assert!(Arc::ptr_eq(
+            runs.active().unwrap().script_control.as_ref().unwrap(),
+            &control
+        ));
+        assert!(
+            runs.begin(8, "other".into(), driver.clone(), OperationKind::Query)
+                .is_none()
+        );
+        runs.request_cancel().unwrap();
+        control.request_cancel();
+        assert!(runs.is_running()); // Completion of a statement/cancel RPC does not release ownership.
+        assert!(!runs.finish(run + 1));
+        assert!(runs.finish(run));
+        let next = runs
+            .begin(8, "other".into(), driver, OperationKind::Query)
+            .unwrap();
+        assert!(runs.matches(next, 8));
+        assert!(runs.active().unwrap().script_control.is_none());
+        assert!(!runs.finish(run));
     }
 }

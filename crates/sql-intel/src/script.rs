@@ -121,6 +121,79 @@ fn dollar_tag(sql: &str) -> Option<&str> {
 /// Semicolon-delimited statements; client directives and procedural blocks without
 /// dollar quoting are rejected. This deliberately does not guess at vendor batch syntax.
 pub fn split_script(sql: &str) -> Result<Vec<String>, String> {
+    split_script_policy(sql, false)
+}
+
+/// PostgreSQL run-scoped sessions: validate all explicit transaction boundaries
+/// before executing any statement. Other providers keep the conservative policy.
+pub fn split_script_with_transactions(sql: &str) -> Result<Vec<String>, String> {
+    let statements = split_script_policy(sql, true)?;
+    let mut in_transaction = false;
+    for statement in &statements {
+        let scanned = tokens(statement)?;
+        let significant: Vec<_> = scanned
+            .iter()
+            .filter(|t| t.kind != Kind::Comment && t.text != ";")
+            .collect();
+        let words: Vec<_> = significant
+            .iter()
+            .map(|t| t.text.to_ascii_uppercase())
+            .collect();
+        let first = words.first().map(String::as_str).unwrap_or("");
+        let starts = matches!(first, "BEGIN" | "START");
+        let ends = matches!(first, "COMMIT" | "END" | "ROLLBACK" | "ABORT");
+        if starts || ends {
+            let ordinary = significant.iter().all(|t| t.kind == Kind::Word);
+            let valid_form = if first == "START" {
+                words == ["START", "TRANSACTION"]
+            } else {
+                words.len() == 1
+                    || (words.len() == 2 && matches!(words[1].as_str(), "WORK" | "TRANSACTION"))
+            };
+            if !ordinary || !valid_form {
+                return Err("Unsupported transaction form: use BEGIN / START TRANSACTION, COMMIT or ROLLBACK (optional WORK / TRANSACTION); options, chaining, savepoints and prepared transactions are not supported".into());
+            }
+            if starts {
+                if in_transaction {
+                    return Err("Nested BEGIN is not supported in Run script".into());
+                }
+                in_transaction = true;
+            } else {
+                if !in_transaction {
+                    return Err(
+                        "COMMIT / ROLLBACK requires a preceding BEGIN in this script".into(),
+                    );
+                }
+                in_transaction = false;
+            }
+        } else if matches!(first, "SAVEPOINT" | "RELEASE")
+            || words
+                .get(0..2)
+                .is_some_and(|w| w == ["PREPARE", "TRANSACTION"])
+        {
+            return Err(
+                "Savepoints and prepared transactions are not supported by Run script".into(),
+            );
+        } else if significant.iter().any(|t| {
+            t.kind == Kind::Word
+                && matches!(
+                    t.text.to_ascii_uppercase().as_str(),
+                    "BEGIN" | "COMMIT" | "ROLLBACK"
+                )
+        }) {
+            return Err("Unquoted procedural blocks are not supported by Run script".into());
+        }
+    }
+    if in_transaction {
+        return Err(
+            "Transaction left open: end each BEGIN with COMMIT or ROLLBACK within the script"
+                .into(),
+        );
+    }
+    Ok(statements)
+}
+
+fn split_script_policy(sql: &str, transactions: bool) -> Result<Vec<String>, String> {
     let tokens = tokens(sql)?;
     let mut start = 0;
     let mut has_code = false;
@@ -130,17 +203,13 @@ pub fn split_script(sql: &str) -> Result<Vec<String>, String> {
             let upper = token.text.to_ascii_uppercase();
             if matches!(
                 upper.as_str(),
-                "DELIMITER"
-                    | "GO"
-                    | "BEGIN"
-                    | "COMMIT"
-                    | "ROLLBACK"
-                    | "SAVEPOINT"
-                    | "TRANSACTION"
-                    | "PROCEDURE"
-                    | "TRIGGER"
-                    | "DECLARE"
-            ) {
+                "DELIMITER" | "GO" | "PROCEDURE" | "TRIGGER" | "DECLARE"
+            ) || (!transactions
+                && matches!(
+                    upper.as_str(),
+                    "BEGIN" | "COMMIT" | "ROLLBACK" | "SAVEPOINT" | "TRANSACTION"
+                ))
+            {
                 return Err("Run script supports ordinary statements and dollar-quoted function bodies. Execute transaction control, procedural blocks and vendor batch directives as individual statements.".into());
             }
         }
@@ -257,5 +326,41 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(format_sql(&formatted).unwrap(), formatted);
+    }
+}
+
+#[cfg(test)]
+mod transaction_tests {
+    use super::{split_script, split_script_with_transactions as split};
+
+    #[test]
+    fn closed_blocks_aliases_and_session_sql_are_validated_together() {
+        let sql = "SET application_name = 'BEGIN; COMMIT'; -- boundary\n BEGIN WORK; CREATE TEMP TABLE t (v text); INSERT INTO t VALUES ($q$ROLLBACK; BEGIN$q$); COMMIT TRANSACTION; START TRANSACTION; SET LOCAL statement_timeout = '1s'; ROLLBACK WORK; BEGIN TRANSACTION; SELECT 1; END; BEGIN; ABORT;";
+        assert_eq!(split(sql).unwrap().len(), 13);
+        assert!(split_script(sql).is_err());
+        assert!(split("SELECT 'BEGIN;'; SELECT 1 AS \"ROLLBACK\";").is_ok());
+    }
+
+    #[test]
+    fn all_boundaries_are_rejected_before_any_script_execution() {
+        for sql in [
+            "INSERT INTO t VALUES (1); BEGIN;",
+            "BEGIN; BEGIN; COMMIT; COMMIT;",
+            "COMMIT;",
+            "ROLLBACK;",
+            "START;",
+            "BEGIN ISOLATION LEVEL SERIALIZABLE; COMMIT;",
+            "BEGIN; COMMIT AND CHAIN;",
+            "BEGIN; ROLLBACK TO point;",
+            "BEGIN; SAVEPOINT p; COMMIT;",
+            "RELEASE p;",
+            "PREPARE TRANSACTION 'id';",
+            "COMMIT PREPARED 'id';",
+            "BEGIN; GO; COMMIT;",
+            "BEGIN; SELECT 'unterminated",
+            "BEGIN; SELECT 'a\\b'; COMMIT;",
+        ] {
+            assert!(split(sql).is_err(), "accepted unsupported script: {sql}");
+        }
     }
 }

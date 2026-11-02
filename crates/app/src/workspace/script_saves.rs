@@ -240,10 +240,28 @@ impl Workspace {
             AfterSave::Close(ids) => self.close_saved_tabs(&ids, cx),
             AfterSave::Quit | AfterSave::Restart => {
                 let restart = matches!(action, AfterSave::Restart);
+                let script = self
+                    .operations
+                    .active()
+                    .and_then(|op| op.script_control.clone());
+                if script.is_some() {
+                    self.cancel_running_query(cx);
+                }
                 let flushed = self.save_queue.flush();
                 cx.spawn(async move |this, cx| {
                     if !matches!(flushed.recv_async().await, Ok(Ok(()))) {
                         return;
+                    }
+                    if let Some(script) = script {
+                        let _ = db_wire::run_on_shared_runtime(async move {
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(15),
+                                script.wait_finished(),
+                            )
+                            .await?;
+                            Ok(())
+                        })
+                        .await;
                     }
                     let _ = this.update(cx, |this, cx| {
                         if this.tabs.iter().any(|t| t.is_dirty()) {

@@ -84,6 +84,7 @@ impl Workspace {
             if tab.is_script() {
                 let statement = tab.editor.active_statement();
                 tab.pending_statements.clear();
+                tab.script_status = None;
                 if statement.trim().is_empty() {
                     return;
                 }
@@ -115,7 +116,29 @@ impl Workspace {
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
             return;
         };
+        let Some(driver) = self.tab_session(index).driver.clone() else {
+            let owner = self.tabs[index].connection_id.clone();
+            self.edit_saved_connection(owner.as_deref());
+            cx.notify();
+            return;
+        };
+        if driver.supports_script_session() {
+            let parsed =
+                sql_intel::split_script_with_transactions(&self.tabs[index].editor.buffer.text());
+            match parsed {
+                Ok(statements) if !statements.is_empty() => {
+                    self.start_pinned_script(index, driver, statements, cx)
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.tabs[index].last_error = Some(error);
+                    cx.notify();
+                }
+            }
+            return;
+        }
         let tab = &mut self.tabs[index];
+        tab.script_status = None;
         match sql_intel::split_script(&tab.editor.buffer.text()) {
             Ok(statements) => {
                 tab.pending_statements = statements.into();
@@ -307,6 +330,15 @@ impl Workspace {
         let Some((generation, driver)) = self.operations.request_cancel() else {
             return;
         };
+        if let Some(control) = self
+            .operations
+            .active()
+            .and_then(|op| op.script_control.clone())
+        {
+            control.request_cancel();
+            cx.notify();
+            return;
+        }
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result =

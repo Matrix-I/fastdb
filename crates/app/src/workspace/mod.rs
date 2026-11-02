@@ -30,6 +30,7 @@ mod navigator;
 mod operations;
 mod panel_resize;
 mod panes;
+mod pinned_script;
 mod properties;
 mod properties_panel;
 mod query;

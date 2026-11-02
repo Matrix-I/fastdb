@@ -56,9 +56,10 @@ fn postgres_tls_verifies_identity_and_cancels() {
     };
     db_wire::get_runtime().block_on(async {
         let driver = Arc::new(PostgresDriver::new(config.clone()));
-        let (pager, rows, _) = driver.execute_query("SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid()").await.unwrap();
+        let (pager, rows, _) = driver.execute_query("SELECT ssl::text, pg_backend_pid()::text FROM pg_stat_ssl WHERE pid = pg_backend_pid()").await.unwrap();
         assert_eq!(rows, 1);
         assert_eq!(pager.get_cell(0, 0).unwrap(), b"true");
+        let backend_pid = String::from_utf8(pager.get_cell(0, 1).unwrap()).unwrap();
 
         let mut untrusted = config.clone();
         untrusted.tls_ca_cert = None;
@@ -74,7 +75,7 @@ fn postgres_tls_verifies_identity_and_cancels() {
         let observer = PostgresDriver::new(config);
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let (p, _, _) = observer.execute_query("SELECT count(*)::text FROM pg_stat_activity WHERE query = 'SELECT pg_sleep(30)' AND state = 'active'").await.unwrap();
+                let (p, _, _) = observer.execute_query(&format!("SELECT count(*)::text FROM pg_stat_activity WHERE pid = {backend_pid} AND query = 'SELECT pg_sleep(30)' AND state = 'active'")).await.unwrap();
                 if p.get_cell(0, 0).unwrap() != b"0" { break; }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -134,5 +135,58 @@ fn postgres_tls_refuses_plaintext_server() {
         config.tls_enabled = false;
         config.use_unix_socket = false;
         ping(config).await.unwrap();
+    });
+}
+
+#[test]
+fn postgres_pinned_script_session_verifies_tls_and_cancels_its_own_backend() {
+    use db_wire::{
+        StreamEvent,
+        script::{ScriptControl, ScriptEvent},
+    };
+    let Some(config) = config(DbDriverKind::Postgres) else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver = Arc::new(PostgresDriver::new(config.clone()));
+        let mut untrusted = config.clone();
+        untrusted.tls_ca_cert = None;
+        assert!(PostgresDriver::new(untrusted).open_script_session().await.is_err());
+        let mut wrong_host = config.clone();
+        wrong_host.host = "127.0.0.1".into();
+        assert!(PostgresDriver::new(wrong_host).open_script_session().await.is_err());
+        let name = format!("fastdb_tls_script_{}", std::process::id());
+        let control = Arc::new(ScriptControl::default());
+        let (tx, rx) = flume::unbounded();
+        let task = tokio::spawn(db_wire::script::run_script(driver.clone(), vec![
+            format!("SET application_name = '{name}'"),
+            "SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid()".into(),
+            "SELECT pg_sleep(30)".into(),
+            "SELECT 'must not run'".into(),
+        ], control.clone(), tx));
+        let observer = PostgresDriver::new(config);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let (p, _, _) = observer.execute_query(&format!("SELECT count(*) FROM pg_stat_activity WHERE application_name = '{name}' AND state = 'active' AND query = 'SELECT pg_sleep(30)'" )).await.unwrap();
+                if p.get_cell(0, 0).unwrap() != b"0" { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        control.request_cancel();
+        let mut pagers = Vec::new();
+        let outcome = tokio::time::timeout(Duration::from_secs(12), async {
+            loop {
+                match rx.recv_async().await.unwrap() {
+                    ScriptEvent::Stream(StreamEvent::SchemaReady(pager)) => pagers.push(pager),
+                    ScriptEvent::Finished(outcome) => break outcome,
+                    ScriptEvent::StatementStarted { sql } => assert!(!sql.contains("must not run")),
+                    _ => {},
+                }
+            }
+        }).await.unwrap();
+        task.await.unwrap();
+        assert!(outcome.cancelled && outcome.cleanup_error.is_none(), "{outcome:?}");
+        assert!(pagers.iter().any(|p| p.num_cols() == 1 && p.get_cell(0, 0).as_deref() == Some(b"true".as_slice())));
+        driver.ping().await.unwrap();
     });
 }
