@@ -14,9 +14,11 @@ pub struct TabState {
     /// Stable identity, so async query results land in the right tab after tabs move or close
     pub id: u64,
     pub title: String,
+    pub(super) column_editor: Option<super::column_editor::ColumnEditor>,
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
     pub filter_sql: String,
+    pub(super) schema_stale: bool,
     pub filter_history: LineHistory,
     pub active_subtab: TableSubTab,
     pub active_property_section: PropertySection,
@@ -232,21 +234,24 @@ impl TabState {
         }
     }
     pub fn is_dirty(&self) -> bool {
-        self.script_path.is_some() && self.editor.buffer.revision() != self.saved_revision
+        self.column_editor.as_ref().is_some_and(|c| c.dirty())
+            || (self.script_path.is_some() && self.editor.buffer.revision() != self.saved_revision)
     }
 
     /// Whether this tab runs SQL typed in its editor rather than reading a table
     pub fn is_script(&self) -> bool {
-        self.table_name.is_none()
+        self.column_editor.is_none() && self.table_name.is_none()
     }
 
     fn blank(id: u64) -> Self {
         Self {
             id,
             title: String::new(),
+            column_editor: None,
             schema_name: None,
             table_name: None,
             filter_sql: String::new(),
+            schema_stale: false,
             filter_history: Default::default(),
             active_subtab: TableSubTab::Data,
             active_property_section: PropertySection::Columns,
@@ -376,6 +381,7 @@ impl TabState {
     pub fn apply_stream_event(&mut self, event: StreamEvent) -> QueryStatus {
         match event {
             StreamEvent::SchemaReady(pager) => {
+                self.schema_stale = false;
                 self.fetch.schema_ready_at = Some(Instant::now());
                 if let Some(ref mut append) = self.fetch.append {
                     append.pager = Some(pager);

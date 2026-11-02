@@ -164,8 +164,8 @@ impl Workspace {
         match action {
             NavMenuAction::EditConnection => self.edit_saved_connection(Some(conn_id)),
             NavMenuAction::Connect => self.connect_saved_by_id(conn_id, cx),
-            NavMenuAction::Disconnect => self.disconnect_by_id(conn_id),
-            NavMenuAction::Delete => self.delete_saved_connection(conn_id),
+            NavMenuAction::Disconnect => self.disconnect_by_id(conn_id, cx),
+            NavMenuAction::Delete => self.delete_saved_connection(conn_id, cx),
             NavMenuAction::Refresh => {
                 // Refresh acts on the active connection, so switch to a parked one first
                 self.connect_saved_by_id(conn_id, cx);

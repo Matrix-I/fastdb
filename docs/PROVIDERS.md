@@ -268,3 +268,31 @@ unsupported ODBC providers are shown explicitly rather than interpreted as no
 relationships. Target tables outside the loaded catalog appear with unavailable
 columns. Diagrams retain qualified identities and never infer FKs from names or
 parse DDL. SQL-tab temporary tables are outside this connection metadata view.
+
+
+## PostgreSQL column drafts
+
+Column definitions use dedicated connections with a pg_catalog search path and
+stable database/table-OID/attribute identity. Mutations require an owned ordinary
+local column outside inheritance/partition trees; identity/generated columns are
+read-only. Name, native type, nullable, default and comment changes generate a
+reviewable DDL sequence. Defaults are dropped/reapplied around type changes;
+renames run last. No conversion or CASCADE is invented. Type candidates include
+catalog base/domain/enum types; explicit native declarations retain typmods and
+arrays. Edited fragments reject statement separators, comments, dollar quoting
+and session-dependent backslash escapes; unchanged catalog expressions survive.
+
+Persist uses a new physical connection, 3-second lock timeout, 15-second statement
+timeout, ACCESS EXCLUSIVE table lock and an original-snapshot comparison inside a
+transaction. A pre-commit error rolls back all changes. Commit acknowledgement or
+read-back failures require explicit Refresh before another attempt. Refresh uses
+the stable catalog identity, including after a successful rename. SQL-tab
+transactions are independent. Reconnect/configuration changes require reloading
+the column snapshot. Schema-cache refreshes address the owning connection even
+if the user switches tabs. Existing row edits are retained but blocked from Save
+until the table result is reloaded.
+
+Automated PostgreSQL fixtures cover rename/Unicode comments, NULL vs removed
+defaults, NOT NULL/type-conversion rollback, concurrent changes, dropped/recreated
+columns, specialized read-only columns and session isolation. GUI acceptance is
+pending the user's manual test. See the implementation plan for further scope.

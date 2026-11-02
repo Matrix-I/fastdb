@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 
+pub mod column;
 pub mod export;
 pub mod mysql;
 pub mod odbc;

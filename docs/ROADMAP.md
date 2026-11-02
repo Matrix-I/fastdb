@@ -32,7 +32,7 @@ Paths below are relative to `crates/app/src/workspace/` unless linked otherwise.
 | Table toolbar: `⛶` | **UI only**: [`table_view.rs`](../crates/app/src/workspace/table_view.rs), pointer/hover styling without a handler. | Define and implement expand/maximize behavior, or remove/disable the affordance. |
 | Table toolbar: filter funnel `∇` | **UI only**: same file, no handler. The text filter and Execute/Clear/Refresh are wired. | Criteria builder producing SQL that is actually executed and reflected in rows. |
 | Table toolbar: history `◀` / `▶` | **UI only**: same file, no handlers. SQL execution History is a separate working feature. | Per-tab filter history, back/forward state and rerun behavior. |
-| Diagram | **Partial**: [`diagram_panel.rs`](../crates/app/src/workspace/diagram_panel.rs) draws one table box and columns only. | Multiple entities, real FK edges, incoming/outgoing relationships, navigation, layout, zoom/pan and export. |
+| Diagram | **Partial**: [`diagram_panel.rs`](../crates/app/src/workspace/diagram_panel.rs) renders cached multi-table PK/FK graphs with column links, two-axis scrollbars, zoom/pinch and navigation; GUI acceptance pending. | Multiple entities, real FK edges, incoming/outgoing relationships, navigation, layout, zoom/pan and export. |
 | SSH | **Backend stub**: [`ssh_tunnel.rs`](../crates/db-wire/src/ssh_tunnel.rs) binds a local listener but has no accept/forward loop; [`connection_state.rs`](../crates/app/src/workspace/connection_state.rs) sets `ssh_tunnel: None`. | Connection dialog, verified host keys/authentication, actual forwarding, lifetime management, failures and database round-trip through the tunnel. |
 | Light theme | **Backend only**: [`theme.rs`](../crates/ui-core/src/theme.rs) has a palette; workspace initializes `Theme::dark()`. | Settings action, live propagation to every pane, persistence and restart verification. |
 
@@ -55,18 +55,18 @@ Paths below are relative to `crates/app/src/workspace/` unless linked otherwise.
 
 ## Delivery order
 
-Priorities below are proposed implementation order, not release dates. PostgreSQL is first for catalog and administration work; provider expansion follows capability tests. Every unchecked item is still open even if part of its UI exists.
+Priorities below are proposed implementation order, not release dates. PostgreSQL is first for catalog and administration work; provider expansion follows capability tests. Every unchecked item is still open even if part of its UI exists. Checkboxes track implementation and automated validation; manual GUI acceptance is separately marked pending at the user’s request.
 
 ### P0 — Make the existing UI truthful and finish its result paths
 
 - [ ] **P0-01 — Capability states.** Disable/hide unsupported controls with an explanation; distinguish not implemented, provider unsupported, permission denied, empty and failed metadata. Eliminate clickable no-op controls listed above. Acceptance: audit each visible control on supported and unsupported providers.
 - [ ] **P0-02 — Missing Properties readers.** Implement Dependencies, References, Partitions, Triggers, Rules, Policies and Permissions for PostgreSQL. Acceptance: catalog fixtures with real objects produce navigable rows; empty/error states and refresh work. Keep mutation actions a separate milestone.
 - [ ] **P0-03 — Filter workflow.** Implement criteria builder and per-tab history; define expand behavior. Acceptance: generated predicate/order, executed SQL and returned rows agree; back/forward and refresh retain the intended state.
-- [ ] **P0-04 — ER relationships.** Replace the single entity preview with a usable FK diagram. Acceptance: composite/self-referencing/incoming/outgoing FKs render correctly and open the right connection/schema/table; layout and viewport remain responsive.
+- [x] **P0-04 — ER relationships (implemented; GUI acceptance pending).** Replace the single entity preview with a usable FK diagram. Acceptance: composite/self-referencing/incoming/outgoing FKs render correctly and open the right connection/schema/table; layout and viewport remain responsive.
 - [ ] **P0-05 — Workflow acceptance matrix.** Record connect → browse → run → edit/save/read-back → export/read-back → cancel/disconnect for each claimed provider. Include multi-connection identity, stale async completion, pending edits and failed transaction recovery. Never promote skipped live tests to validated support.
 
 - [ ] **P0-06 — Columns metadata layout and interaction.** Fix reported overlapping native type text; verify narrow/HiDPI layouts, add full-value access and double-click/Enter object navigation. The single-line clipping patch requires desktop acceptance.
-- [ ] **P0-07 — Column object editor and schema drafts.** Open a dedicated column tab with actual native attributes; edit name/type/nullability/default/comment with capability gating, Save SQL preview, Persist, Revert and catalog read-back. Include dirty-close handling, conflicts and failure recovery. See the [field and lifecycle contract](DBEAVER_WORKFLOWS.md). Keep identity/generated/storage/permissions transitions separately capability-tested.
+- [x] **P0-07 — Column object editor and schema drafts (implemented; GUI acceptance pending).** Open a dedicated column tab with actual native attributes; edit name/type/nullability/default/comment with capability gating, Save SQL preview, Persist, Revert and catalog read-back. Include dirty-close handling, conflicts and failure recovery. See the [field and lifecycle contract](DBEAVER_WORKFLOWS.md). Keep identity/generated/storage/permissions transitions separately capability-tested.
 - [ ] **P0-08 — Reliable application Quit.** Defer global menu dispatch to reach save-before-quit; verify Cmd+Q/menu Quit from every focus context, pending saves and save failures. Source patch exists; desktop acceptance remains open.
 
 ### P1 — Daily database development workflows

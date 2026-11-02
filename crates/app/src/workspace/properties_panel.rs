@@ -220,7 +220,13 @@ impl Workspace {
 
         match active_property_sec {
             PropertySection::Columns => {
-                right_content = right_content.child(model.render_columns(theme));
+                let pick = self.column_open_pick(
+                    tab.connection_id.clone().unwrap_or_default(),
+                    model.schema.clone(),
+                    model.table.clone(),
+                    cx,
+                );
+                right_content = right_content.child(model.render_columns(theme, pick));
             }
             PropertySection::Constraints => {
                 right_content = right_content.child(model.render_constraints(theme));

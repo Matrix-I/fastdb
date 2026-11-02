@@ -3,7 +3,11 @@ use crate::workspace::ddl::render_dbeaver_col_badge;
 use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
-    pub(in crate::workspace) fn render_columns(&self, theme: &Theme) -> AnyElement {
+    pub(in crate::workspace) fn render_columns(
+        &self,
+        theme: &Theme,
+        pick: crate::workspace::column_editor::ColumnPick,
+    ) -> AnyElement {
         let columns_vec = &self.columns;
 
         let mut col_grid = div()
@@ -118,7 +122,15 @@ impl TableProperties {
             let dtype_disp = c.display_type();
             let is_not_null = !c.nullable;
 
+            let pick = pick.clone();
+            let name = c.name.clone();
             let row = div()
+                .id(("column-property", idx))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    pick(name.clone(), event.click_count, window, cx);
+                    cx.stop_propagation();
+                })
                 .flex()
                 .items_center()
                 .min_h(px(26.0))

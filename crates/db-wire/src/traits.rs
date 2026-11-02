@@ -205,6 +205,32 @@ pub struct ForeignKey {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    async fn load_column(
+        &self,
+        _schema: &str,
+        _table: &str,
+        _column: &str,
+    ) -> Result<crate::column::ColumnDefinition> {
+        anyhow::bail!("Column editor is available for PostgreSQL only")
+    }
+    async fn reload_column(
+        &self,
+        original: &crate::column::ColumnDefinition,
+    ) -> Result<crate::column::ColumnDefinition> {
+        self.load_column(&original.schema, &original.table, &original.name)
+            .await
+    }
+    async fn list_column_types(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    async fn apply_column(
+        &self,
+        _original: &crate::column::ColumnDefinition,
+        _draft: &crate::column::ColumnDraft,
+    ) -> crate::column::ColumnApplyOutcome {
+        crate::column::ColumnApplyOutcome::Rejected("Column editing unsupported by provider".into())
+    }
+
     /// Whether Run script can lease an isolated physical connection.
     fn supports_script_session(&self) -> bool {
         false

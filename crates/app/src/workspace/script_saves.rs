@@ -151,6 +151,10 @@ pub(super) enum AfterSave {
     Close(Vec<u64>),
     Quit,
     Restart,
+    RefreshColumn(u64),
+    RefreshConnection(String),
+    Disconnect(String),
+    DeleteConnection(String),
 }
 
 use super::{Context, Workspace};
@@ -174,6 +178,9 @@ impl Workspace {
         .detach();
     }
     pub(super) fn save_then(&mut self, ids: Vec<u64>, action: AfterSave, cx: &mut Context<Self>) {
+        if self.guard_column_action(&ids, &action, cx) {
+            return;
+        }
         let requests: Vec<_> = self
             .tabs
             .iter()
@@ -234,6 +241,10 @@ impl Workspace {
     fn after_save(&mut self, action: AfterSave, cx: &mut Context<Self>) {
         match action {
             AfterSave::None => {}
+            AfterSave::RefreshColumn(id) => self.load_column_tab(id, cx),
+            AfterSave::RefreshConnection(owner) => self.refresh_connection_for(&owner, cx),
+            AfterSave::Disconnect(owner) => self.disconnect_by_id_now(&owner),
+            AfterSave::DeleteConnection(owner) => self.delete_saved_connection_now(&owner),
             AfterSave::Run(id) => self.run_saved_query(id, cx),
             AfterSave::RunScript(id) => self.run_saved_script(id, cx),
             AfterSave::Explain(id, analyze) => self.explain_saved_statement(id, analyze, cx),

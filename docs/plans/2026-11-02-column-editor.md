@@ -29,3 +29,28 @@ then commit implementation after checks at the user's request.
 
 Reference: https://www.postgresql.org/docs/17/sql-altertable.html (type USING does
 not convert defaults; inheritance/partition restrictions and locking apply).
+
+
+## Implementation and verification
+
+Implemented PostgreSQL native snapshots, OID/attribute identity, catalog type
+suggestions, typed drafts and quoted DDL preview/Persist. Applied edits run in a
+dedicated locked transaction and preserve unrelated SQL-tab transactions.
+Catalog conflicts reject the draft; uncertain commit/read-back outcomes require
+Refresh. Specialized columns/properties remain explicitly read-only as scoped.
+
+Added column tabs from Properties/Navigator double-click or selected-row Enter,
+multiline field editing, default/comment enable/removal, Save/Revert/preview and
+dirty-action guards for close/refresh/disconnect/delete/Quit. Connection generation
+checks reject stale loads or Persist after reconnect. Refresh routes to the owning
+connection; staged row edits are preserved but blocked from Save until reload.
+
+Formatting, workspace clippy with warnings denied and the full workspace suite
+with live PostgreSQL 16 passed. Live fixtures verify quoted rename, Unicode and
+multiline/backslash comments, NULL/removal defaults, NOT NULL/type-error rollback,
+catalog conflicts, dropped/recreated identity, inherited/generated/identity
+restrictions and unrelated transaction isolation. Unit tests cover fragment
+boundaries, quoted preview, dirty/preview state and multiline draft values.
+The debug app built; isolated startup smoke testing is included. Manual GUI
+acceptance remains pending for the user, as requested, and is not a blocker to
+continuing subsequent implementation milestones.

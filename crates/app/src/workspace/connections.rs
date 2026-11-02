@@ -350,11 +350,23 @@ impl Workspace {
         true
     }
 
-    pub fn disconnect_by_id(&mut self, conn_id: &str) {
+    pub fn disconnect_by_id(&mut self, conn_id: &str, cx: &mut Context<Self>) {
+        let ids = self
+            .tabs
+            .iter()
+            .filter(|t| t.connection_id.as_deref() == Some(conn_id))
+            .map(|t| t.id)
+            .collect();
+        self.save_then(ids, AfterSave::Disconnect(conn_id.to_string()), cx);
+    }
+    pub(super) fn disconnect_by_id_now(&mut self, conn_id: &str) {
         for tab in &mut self.tabs {
             if tab.connection_id.as_deref() == Some(conn_id) {
                 tab.tab_session.close();
                 tab.tab_session = Arc::default();
+                if let Some(c) = &mut tab.column_editor {
+                    c.source_driver = None;
+                }
                 tab.transaction_state = "Session closed".into();
                 tab.script_status = Some("Session closed by disconnect".into());
             }
@@ -374,15 +386,28 @@ impl Workspace {
 
     pub fn disconnect(&mut self) {
         if let Some(id) = self.connections.active_connection_id.clone() {
-            self.disconnect_by_id(&id);
+            self.disconnect_by_id_now(&id);
         }
     }
 
     pub fn refresh_connection(&mut self, cx: &mut Context<Self>) {
+        let Some(owner) = self.connections.active_connection_id.clone() else {
+            return;
+        };
+        let ids = self
+            .tabs
+            .iter()
+            .filter(|t| t.connection_id.as_deref() == Some(&owner))
+            .map(|t| t.id)
+            .collect();
+        self.save_then(ids, AfterSave::RefreshConnection(owner), cx);
+    }
+    pub(super) fn refresh_connection_for(&mut self, owner: &str, cx: &mut Context<Self>) {
+        let owner = owner.to_string();
         if self.form.is_connecting {
             return;
         }
-        let Some(driver) = self.connections.active().driver.clone() else {
+        let Some(driver) = self.connections.session(&owner).driver.clone() else {
             return;
         };
         cx.notify();
@@ -406,18 +431,25 @@ impl Workspace {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                // Ignore a result that arrives after a disconnect or a switch to another connection
+                // Ignore a result after this specific connection was disconnected/replaced.
                 if !this
                     .connections
-                    .active()
+                    .session(&owner)
                     .driver
                     .as_ref()
                     .is_some_and(|d| Arc::ptr_eq(d, &driver))
                 {
                     return;
                 }
-                if let Ok(metadata) = result {
-                    this.apply_schema_metadata(metadata);
+                match result {
+                    Ok(metadata)=>this.apply_schema_metadata_for(&owner,metadata),
+                    Err(error)=>{
+                        for tab in &mut this.tabs {
+                            if tab.connection_id.as_deref()==Some(&owner) {
+                                tab.last_error=Some(format!("Metadata refresh failed: {error}. Refresh again to update cached properties"));
+                            }
+                        }
+                    }
                 }
                 cx.notify();
             });
@@ -427,29 +459,38 @@ impl Workspace {
 
     /// Replaces the cached tables, columns, constraints and indexes of the open connection
     fn apply_schema_metadata(&mut self, metadata: SchemaMetadata) {
-        let _ = self.connections.active().schema_cache.clear();
+        if let Some(owner) = self.connections.active_connection_id.clone() {
+            self.apply_schema_metadata_for(&owner, metadata);
+        }
+    }
+    fn apply_schema_metadata_for(&mut self, connection_id: &str, metadata: SchemaMetadata) {
+        let _ = self.connections.session(connection_id).schema_cache.clear();
         for t in &metadata.tables {
-            let _ =
-                self.connections
-                    .active()
-                    .schema_cache
-                    .add_table(&t.schema, &t.name, &t.table_type);
+            let _ = self
+                .connections
+                .session(connection_id)
+                .schema_cache
+                .add_table(&t.schema, &t.name, &t.table_type);
         }
 
         let mut col_map = HashMap::new();
         for (schema, table, cols) in metadata.columns {
             for c in &cols {
-                let _ = self.connections.active().schema_cache.add_column(
-                    &schema,
-                    &table,
-                    &c.name,
-                    c.data_type.display_name(),
-                    c.is_primary_key,
-                );
+                let _ = self
+                    .connections
+                    .session(connection_id)
+                    .schema_cache
+                    .add_column(
+                        &schema,
+                        &table,
+                        &c.name,
+                        c.data_type.display_name(),
+                        c.is_primary_key,
+                    );
             }
             col_map.insert((schema, table), cols);
         }
-        self.connections.active_mut().table_columns = col_map;
+        self.connections.session_mut(connection_id).table_columns = col_map;
 
         let mut constr_map = HashMap::new();
         for (schema, table, cname, ctype) in metadata.constraints {
@@ -458,7 +499,9 @@ impl Workspace {
                 .or_insert_with(Vec::new)
                 .push((cname, ctype));
         }
-        self.connections.active_mut().table_constraints = constr_map;
+        self.connections
+            .session_mut(connection_id)
+            .table_constraints = constr_map;
 
         let mut idx_map = HashMap::new();
         for (schema, table, iname) in metadata.indexes {
@@ -467,10 +510,10 @@ impl Workspace {
                 .or_insert_with(Vec::new)
                 .push(iname);
         }
-        self.connections.active_mut().table_indexes = idx_map;
+        self.connections.session_mut(connection_id).table_indexes = idx_map;
 
-        self.connections.active_mut().tables = metadata.tables;
-        let session = self.connections.active_mut();
+        self.connections.session_mut(connection_id).tables = metadata.tables;
+        let session = self.connections.session_mut(connection_id);
         let mut tree = BTreeMap::<String, Vec<TableSummary>>::new();
         let mut properties = HashMap::new();
         let mut details: HashMap<_, _> = metadata
@@ -514,7 +557,7 @@ impl Workspace {
         ));
         session.schema_tree = Arc::new(tree);
         session.properties = properties;
-        let owner = self.connections.active_connection_id.as_deref();
+        let owner = Some(connection_id);
         for tab in &mut self.tabs {
             if tab.connection_id.as_deref() == owner {
                 tab.diagram.selected_edge = None;
@@ -597,7 +640,17 @@ impl Workspace {
         true
     }
 
-    pub fn delete_saved_connection(&mut self, conn_id: &str) {
+    pub fn delete_saved_connection(&mut self, conn_id: &str, cx: &mut Context<Self>) {
+        let ids = self
+            .tabs
+            .iter()
+            .filter(|t| t.connection_id.as_deref() == Some(conn_id))
+            .map(|t| t.id)
+            .collect();
+        self.save_then(ids, AfterSave::DeleteConnection(conn_id.to_string()), cx);
+    }
+    pub(super) fn delete_saved_connection_now(&mut self, conn_id: &str) {
+        self.disconnect_by_id_now(conn_id);
         self.connections
             .saved_connections
             .retain(|c| c.id != conn_id);

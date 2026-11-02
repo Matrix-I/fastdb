@@ -54,7 +54,7 @@ impl Workspace {
             }
             return cleared;
         }
-        if tab.is_script()
+        if (tab.is_script() || tab.column_editor.is_some())
             && tab.editor_focused
             && !tab.file_busy
             && tab.editor.buffer.selection().is_some()

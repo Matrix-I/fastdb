@@ -120,12 +120,6 @@ impl ConnectionManager {
             .and_then(|id| self.sessions.get(id))
             .unwrap_or(&self.empty)
     }
-    pub fn active_mut(&mut self) -> &mut ConnectionSession {
-        match self.active_connection_id.as_ref() {
-            Some(id) => self.sessions.entry(id.clone()).or_default(),
-            None => &mut self.empty,
-        }
-    }
     pub fn navigator(&self) -> &NavigatorState {
         self.active_connection_id
             .as_ref()
@@ -170,6 +164,9 @@ impl ConnectionFormState {
     }
 }
 impl ConnectionManager {
+    pub fn session_mut(&mut self, id: &str) -> &mut ConnectionSession {
+        self.sessions.entry(id.to_string()).or_default()
+    }
     pub fn session(&self, id: &str) -> &ConnectionSession {
         self.sessions.get(id).unwrap_or(&self.empty)
     }

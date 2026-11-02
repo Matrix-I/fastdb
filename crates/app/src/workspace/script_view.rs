@@ -349,7 +349,7 @@ impl Workspace {
     }
 
     /// Click handler for the characters of a script tab's editor
-    fn script_editor_pick(&self, tab_idx: usize, cx: &mut Context<Self>) -> EditorPick {
+    pub(super) fn script_editor_pick(&self, tab_idx: usize, cx: &mut Context<Self>) -> EditorPick {
         let workspace = cx.entity().downgrade();
         Rc::new(move |line, col, kind, window, cx| {
             let _ = workspace.update(cx, |this, cx| {

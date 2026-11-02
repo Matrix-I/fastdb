@@ -78,6 +78,16 @@ impl Workspace {
                 } else {
                     for c in cols {
                         let col_name = c.name.clone();
+                        let pick = self.column_open_pick(
+                            self.connections
+                                .active_connection_id
+                                .clone()
+                                .unwrap_or_default(),
+                            table_schema.clone(),
+                            table_name.clone(),
+                            cx,
+                        );
+                        let picked_name = col_name.clone();
                         let is_pk = c.is_primary_key;
                         let type_str = c.data_type.display_name().to_lowercase();
                         let is_nullable = c.nullable;
@@ -88,6 +98,10 @@ impl Workspace {
                                     format!("nav-col-{}-{}-{}", table_schema, table_name, col_name)
                                         .into(),
                                 ))
+                                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                    pick(picked_name.clone(), event.click_count, window, cx);
+                                    cx.stop_propagation();
+                                })
                                 .flex()
                                 .items_center()
                                 .justify_between()

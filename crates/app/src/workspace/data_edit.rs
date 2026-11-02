@@ -259,6 +259,14 @@ impl Workspace {
     /// Writes the staged edits of the active tab to the database in one transaction,
     /// then reloads the rows (Save button / Cmd+S)
     pub(super) fn save_pending_edits(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab)
+            && tab.schema_stale
+        {
+            tab.last_error =
+                Some("Schema changed; cancel staged row edits and reload before saving".into());
+            cx.notify();
+            return;
+        }
         self.commit_cell_edit();
         let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
             return;

@@ -47,6 +47,8 @@ impl Workspace {
                                 .child("Click a table in the Database Navigator on the left to open and view data.")
                         )
                         .into_any_element()
+                } else if self.tabs[active_tab_idx].column_editor.is_some() {
+                    self.render_column_editor(active_tab_idx, window, cx).into_any_element()
                 } else if self.tabs[active_tab_idx].is_script() {
                     self.render_script_view(active_tab_idx, window, cx).into_any_element()
                 } else {

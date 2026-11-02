@@ -9,6 +9,7 @@ use ui_editor::SqlEditorView;
 use ui_grid::VirtualDataGrid;
 
 mod about_dialog;
+mod column_editor;
 mod column_menu;
 mod connection_config;
 mod connection_dialog;
@@ -136,6 +137,8 @@ pub struct Workspace {
     tab_scroll: ScrollHandle,
     revealed_tab: Option<(u64, usize, usize)>,
     operations: Operations,
+    column_pending: Option<column_editor::PendingColumn>,
+    column_pick: Option<(String, String, String, String)>,
     pub next_tab_id: u64,
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
@@ -203,6 +206,8 @@ impl Workspace {
             tab_scroll: ScrollHandle::new(),
             revealed_tab: None,
             operations: Operations::default(),
+            column_pending: None,
+            column_pick: None,
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),
             query_history: query_history::QueryHistory::new(
@@ -330,6 +335,10 @@ impl Render for Workspace {
             .bg(theme.bg_app)
             .text_color(theme.text_primary)
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.column_pick = None),
+            )
             .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| {
                 this.trigger_update_check(true, cx);
             }))
@@ -482,6 +491,13 @@ impl Render for Workspace {
         }
         if self.updates.read(cx).is_open() {
             root = root.child(self.updates.clone());
+        }
+        if self
+            .column_pending
+            .as_ref()
+            .is_some_and(|p| !p.awaiting_save)
+        {
+            root = root.child(self.render_column_prompt(cx));
         }
         if self.show_about_dialog {
             root = root.child(self.render_about_dialog(cx));

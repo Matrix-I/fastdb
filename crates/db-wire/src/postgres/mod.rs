@@ -1,4 +1,5 @@
 pub mod binary_decoder;
+mod column;
 mod metadata;
 mod script;
 
@@ -205,6 +206,31 @@ impl DatabaseDriver for PostgresDriver {
             task,
             self.config.clone(),
         )))
+    }
+
+    async fn load_column(
+        &self,
+        schema: &str,
+        table: &str,
+        column: &str,
+    ) -> Result<crate::column::ColumnDefinition> {
+        self.read_column_definition(schema, table, column).await
+    }
+    async fn reload_column(
+        &self,
+        original: &crate::column::ColumnDefinition,
+    ) -> Result<crate::column::ColumnDefinition> {
+        self.reload_column_identity(original).await
+    }
+    async fn list_column_types(&self) -> Result<Vec<String>> {
+        self.column_type_choices().await
+    }
+    async fn apply_column(
+        &self,
+        original: &crate::column::ColumnDefinition,
+        draft: &crate::column::ColumnDraft,
+    ) -> crate::column::ColumnApplyOutcome {
+        self.persist_column(original, draft).await
     }
 
     async fn ping(&self) -> Result<()> {

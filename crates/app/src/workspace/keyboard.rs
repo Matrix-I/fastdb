@@ -19,6 +19,7 @@ impl Workspace {
         self.handle_workspace_key_down(event, cx);
         if let Some((id, revision)) = before
             && let Some(tab) = self.tabs.iter().find(|t| t.id == id)
+            && tab.is_script()
             && tab.editor.buffer.revision() != revision
         {
             self.schedule_autosave(id, tab.editor.buffer.revision(), cx);
@@ -34,6 +35,18 @@ impl Workspace {
         }
 
         if self.show_about_dialog {
+            if self
+                .column_pending
+                .as_ref()
+                .is_some_and(|p| !p.awaiting_save)
+            {
+                if event.keystroke.key == "escape" {
+                    self.column_pending = None;
+                    cx.notify();
+                }
+                return;
+            }
+
             if event.keystroke.key == "escape"
                 || ((event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                     && event.keystroke.key.eq_ignore_ascii_case("w"))
@@ -107,6 +120,28 @@ impl Workspace {
             return;
         }
 
+        if !self.form.show_connection_modal
+            && self.column_pending.is_none()
+            && !event.keystroke.modifiers.platform
+            && !event.keystroke.modifiers.control
+            && matches!(event.keystroke.key.as_str(), "enter" | "return")
+            && let Some((owner, schema, table, column)) = self.column_pick.take()
+        {
+            self.open_column(owner, schema, table, column, cx);
+            return;
+        }
+        if !self.form.show_connection_modal
+            && self.column_pending.is_none()
+            && self.menus.grid_context_menu.is_none()
+            && self.menus.column_menu.is_none()
+            && self.menus.nav_context_menu.is_none()
+            && self.handle_column_key(event, cx)
+        {
+            return;
+        }
+        if self.column_pending.is_some() {
+            return;
+        }
         // Cmd+] (macOS) / Ctrl+] opens a new SQL script, as in DBeaver
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key == "]"

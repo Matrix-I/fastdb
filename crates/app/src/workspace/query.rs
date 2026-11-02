@@ -8,7 +8,8 @@ fn table_tab_index(
     table: &str,
 ) -> Option<usize> {
     tabs.iter().position(|tab| {
-        tab.connection_id.as_deref() == Some(connection_id)
+        tab.column_editor.is_none()
+            && tab.connection_id.as_deref() == Some(connection_id)
             && tab.schema_name.as_deref() == Some(schema)
             && tab.table_name.as_deref() == Some(table)
     })
@@ -184,6 +185,7 @@ impl Workspace {
         };
         if self.operations.is_running()
             || self.tab_session(self.active_tab).driver.is_none()
+            || tab.schema_stale
             || !tab.fetch.has_more
             || tab.grid.pager.is_none()
         {
