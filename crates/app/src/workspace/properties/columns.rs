@@ -31,6 +31,7 @@ impl TableProperties {
                     .w(px(280.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .border_r_1()
                     .border_color(theme.border)
                     .child("Column Name"),
@@ -41,6 +42,7 @@ impl TableProperties {
                     .w(px(40.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .border_r_1()
                     .border_color(theme.border)
                     .child("#"),
@@ -51,6 +53,7 @@ impl TableProperties {
                     .w(px(180.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .border_r_1()
                     .border_color(theme.border)
                     .child("Data type"),
@@ -61,6 +64,7 @@ impl TableProperties {
                     .w(px(80.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .border_r_1()
                     .border_color(theme.border)
                     .child("Identity"),
@@ -71,6 +75,7 @@ impl TableProperties {
                     .w(px(90.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .border_r_1()
                     .border_color(theme.border)
                     .child("Collation"),
@@ -81,6 +86,7 @@ impl TableProperties {
                     .w(px(90.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .border_r_1()
                     .border_color(theme.border)
                     .child("Default"),
@@ -91,6 +97,7 @@ impl TableProperties {
                     .w(px(80.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .border_r_1()
                     .border_color(theme.border)
                     .child("Not Null"),
@@ -101,6 +108,7 @@ impl TableProperties {
                     .min_w(px(100.0))
                     .px_2()
                     .overflow_hidden()
+                    .whitespace_nowrap()
                     .child("Comment"),
             );
 
@@ -113,7 +121,9 @@ impl TableProperties {
             let row = div()
                 .flex()
                 .items_center()
-                .min_h(px(22.0))
+                .min_h(px(26.0))
+                .py_1()
+                .line_height(px(18.0))
                 .flex_shrink_0()
                 .border_b_1()
                 .border_color(hsla(0.0, 0.0, 0.0, 0.04))
@@ -129,6 +139,7 @@ impl TableProperties {
                         .w(px(280.0))
                         .px_2()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .child(render_dbeaver_col_badge(&dtype_disp))
                         .child(
                             div()
@@ -145,6 +156,7 @@ impl TableProperties {
                         .w(px(40.0))
                         .px_2()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .text_color(theme.text_muted)
                         .child(format!("{}", idx + 1)),
                 )
@@ -155,6 +167,7 @@ impl TableProperties {
                         .w(px(180.0))
                         .px_2()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .text_color(theme.text_primary)
                         .child(dtype_disp),
                 )
@@ -165,6 +178,7 @@ impl TableProperties {
                         .w(px(80.0))
                         .px_2()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .text_color(theme.text_muted)
                         .child(""),
                 )
@@ -175,8 +189,8 @@ impl TableProperties {
                         .w(px(90.0))
                         .px_2()
                         .overflow_hidden()
-                        .text_color(rgb(0x58a6ff))
-                        .cursor_pointer()
+                        .whitespace_nowrap()
+                        .text_color(theme.text_secondary)
                         .child(c.collation.clone().unwrap_or_else(|| "default".to_string())),
                 )
                 // 6. Default
@@ -186,6 +200,7 @@ impl TableProperties {
                         .w(px(90.0))
                         .px_2()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .text_color(theme.text_muted)
                         .child(c.default_val.clone().unwrap_or_default()),
                 )
@@ -196,6 +211,7 @@ impl TableProperties {
                         .w(px(80.0))
                         .px_2()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .text_color(if is_not_null {
                             theme.text_primary
                         } else {
@@ -210,6 +226,7 @@ impl TableProperties {
                         .min_w(px(100.0))
                         .px_2()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .text_color(theme.text_muted)
                         .child(c.comment.clone().unwrap_or_default()),
                 );
