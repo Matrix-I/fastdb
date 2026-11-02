@@ -123,5 +123,41 @@ Begin/Commit/Rollback controls and savepoints. That is a separate lifecycle chan
 
 ## Status
 
-Planning only. No runtime code, roadmap completion flags or build artifacts changed.
-The user requested committing this plan separately. Implementation and push remain unrequested.
+The plan was committed separately at the user's request. The user subsequently
+authorized the dedicated Run script connection and BEGIN/COMMIT/ROLLBACK,
+temporary-table and session-setting support. That first delivery is implemented,
+including cancellation/cleanup needed to isolate the connection safely. Persistent
+per-tab sessions and the deferred transaction forms remain outside this delivery.
+Validation completed before the user requested implementation commits. No push or release is requested.
+
+## Implementation verification
+
+- Added a provider capability/session trait and an isolated PostgreSQL client with
+  a dedicated cancel token, shared binary streaming and no reconnect/replay path.
+- Added capability-aware preflight, balanced transaction blocks, ordered script
+  events and a run-owned cancellation/cleanup barrier. Session sockets are owned
+  by the shared Tokio runtime even for short-lived external caller runtimes.
+- Added script footer status, cleanup on close/disconnect and bounded cleanup on
+  Quit/Restart after the existing autosave barrier. Errors retain primary SQL and
+  cleanup diagnostics without claiming earlier commits were rolled back.
+- Formatting and workspace clippy with warnings denied passed.
+- `FASTDB_TEST_PG_PORT=55438 FASTDB_TLS_PG_PORT=55437
+  FASTDB_TLS_CA=/tmp/fastdb-script-tls-01a199d1/certs/ca.pem
+  cargo test --workspace --offline`: all 270 tests passed. PostgreSQL and configured
+  PostgreSQL TLS tests ran live on disposable PostgreSQL 16 servers. Other
+  provider/TLS/native-keychain tests retained their environment-based skips.
+- New coverage includes parser preflight, backend identity, temporary tables,
+  SET/SET LOCAL, explicit commit/rollback, first-error rollback, cancellation,
+  separate metadata/row-edit sessions, backend termination without reconnect,
+  caller runtime lifetime, fake-session ordering/cleanup failure/task abort,
+  operation ownership and private CA/hostname/TLS cancellation.
+- GUI acceptance is pending the user's manual test, following their request to
+  perform interactive checks themselves. A reusable smoke script is prepared at
+  `/tmp/fastdb-pinned-session-smoke.sql`.
+- Final disconnected-connection handling also passed all 270 workspace tests and
+  clippy; PostgreSQL TLS checks above were completed before that UI-only change.
+- `CARGO_NET_OFFLINE=true ./bundle_macos.sh --no-install` passed for the final
+  source. Updated `dist/FastDB.app`, DMG and ZIP are ready for review. Bundle
+  signature/plist and ZIP integrity verification passed. No installation occurred.
+- The extra disposable TLS server was stopped after validation; the existing
+  plain PostgreSQL test profile remains available for the user's GUI smoke test.
