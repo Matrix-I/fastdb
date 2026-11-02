@@ -9,6 +9,27 @@ impl Workspace {
         statements: Vec<String>,
         cx: &mut Context<Self>,
     ) {
+        self.start_pinned_execution(index, driver, statements, false, cx);
+    }
+
+    pub(super) fn start_pinned_plan(
+        &mut self,
+        index: usize,
+        driver: Arc<dyn DatabaseDriver>,
+        sql: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_pinned_execution(index, driver, vec![sql], true, cx);
+    }
+
+    fn start_pinned_execution(
+        &mut self,
+        index: usize,
+        driver: Arc<dyn DatabaseDriver>,
+        statements: Vec<String>,
+        plan_requested: bool,
+        cx: &mut Context<Self>,
+    ) {
         let control = Arc::new(ScriptControl::default());
         let tab = &mut self.tabs[index];
         let tab_id = tab.id;
@@ -42,7 +63,7 @@ impl Workspace {
             while let Ok(event) = rx.recv_async().await {
                 finished = matches!(event, ScriptEvent::Finished(_));
                 let applied = this.update(cx, |this, cx| {
-                    this.apply_pinned_script_event(run, tab_id, event, &control);
+                    this.apply_pinned_script_event(run, tab_id, event, &control, plan_requested);
                     this.notify_result(cx);
                 });
                 if applied.is_err() {
@@ -63,6 +84,7 @@ impl Workspace {
                             ..Default::default()
                         }),
                         &control,
+                        plan_requested,
                     );
                     this.notify_result(cx);
                 });
@@ -89,6 +111,7 @@ impl Workspace {
         tab_id: u64,
         event: ScriptEvent,
         control: &ScriptControl,
+        plan_requested: bool,
     ) {
         if !self.operations.matches(run, tab_id) {
             control.request_cancel();
@@ -114,8 +137,7 @@ impl Workspace {
                 if let Some(connection) = &tab.connection_id {
                     self.query_history.record(connection.clone(), sql.clone());
                 }
-                tab.new_script_result(sql);
-                tab.begin_fetch(false, false);
+                tab.begin_session_statement(sql, plan_requested);
                 tab.script_status = Some("Running script on a dedicated session…".into());
             }
             ScriptEvent::Stream(event) => {

@@ -216,8 +216,11 @@ test server requires password authentication. Leave it unset for trust/peer setu
 
 Execute and Run script share one dedicated physical PostgreSQL connection per
 SQL tab. TLS/root CA/hostname validation and socket policy apply, with a separate
-cancellation token. Metadata, browsing, row-edit Save and Explain/Analyze use the
-original driver connection. A lost tab session never reconnects or retries SQL.
+cancellation token. Explain/Analyze use the same tab session, so plans can access temporary tables,
+session settings and uncommitted writes. Analyze executes SQL in the current
+transaction; SQL errors allow savepoint/rollback recovery. Cancel uses that
+session's cancellation token, then rolls back and closes it. Metadata, browsing
+and row-edit Save use the original driver connection. A lost tab session never reconnects or retries SQL.
 
 Temporary tables, settings and transactions survive successive runs. Begin,
 Commit and Rollback toolbar controls execute on the tab session. SQL supports

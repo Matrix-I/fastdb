@@ -38,16 +38,13 @@ impl Workspace {
         let statement = tab.editor.active_statement();
         match db_wire::query_plan::explain_sql(kind, &statement, analyze) {
             Ok(sql) => {
-                self.tabs[index].pending_statements.clear();
-                self.tabs[index].new_script_result(sql.clone());
-                self.start_query(index, sql, false, false, cx);
-                if self
-                    .operations
-                    .active()
-                    .is_some_and(|op| op.tab_id == self.tabs[index].id)
-                {
-                    self.tabs[index].plan_requested = true;
-                }
+                let Some(driver) = self.tab_session(index).driver.clone() else {
+                    let owner = self.tabs[index].connection_id.clone();
+                    self.edit_saved_connection(owner.as_deref());
+                    cx.notify();
+                    return;
+                };
+                self.start_pinned_plan(index, driver, sql, cx);
             }
             Err(error) => self.tabs[index].last_error = Some(error.to_string()),
         }

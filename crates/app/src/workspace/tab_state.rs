@@ -351,6 +351,13 @@ impl TabState {
             .unwrap_or(0)
     }
 
+    /// Run intent belongs to the newly initialized result, not the previous one.
+    pub(super) fn begin_session_statement(&mut self, sql: String, plan_requested: bool) {
+        self.new_script_result(sql);
+        self.begin_fetch(false, false);
+        self.plan_requested = plan_requested;
+    }
+
     /// Marks the start of a run; `append` keeps the current rows and adds the new ones after them
     pub fn begin_fetch(&mut self, paged: bool, append: bool) {
         self.query_plan = None;
@@ -962,6 +969,29 @@ mod query_plan_tests {
             total_rows: 1,
             elapsed_ms: 2,
         })
+    }
+
+    #[test]
+    fn session_plan_intent_survives_initialization_and_result_switching() {
+        let mut tab = tab();
+        tab.begin_session_statement("EXPLAIN (FORMAT JSON) SELECT 1".into(), true);
+        assert!(tab.plan_requested);
+        assert!(matches!(
+            complete_plan(&mut tab, br#"[{"Plan":{"Node Type":"Result"}}]"#),
+            QueryStatus::Done { .. }
+        ));
+        assert!(tab.show_plan);
+        tab.begin_session_statement("SELECT 2".into(), false);
+        assert!(!tab.plan_requested);
+        assert!(tab.query_plan.is_none());
+        tab.select_result(0);
+        assert!(tab.query_plan.is_some());
+        tab.select_result(1);
+        assert!(!tab.plan_requested);
+        tab.begin_session_statement("EXPLAIN SELECT missing".into(), true);
+        tab.apply_stream_event(StreamEvent::Error("relation missing".into()));
+        assert!(!tab.plan_requested);
+        assert!(!tab.show_plan);
     }
 
     #[test]
