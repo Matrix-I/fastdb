@@ -34,13 +34,20 @@ fn about(_: &About, cx: &mut App) {
 
 fn quit(_: &Quit, cx: &mut App) {
     info!("Closing FastDB via Quit action");
-    for handle in cx.windows() {
-        if let Some(handle) = handle.downcast::<Workspace>() {
-            let _ = handle.update(cx, |workspace, _, cx| workspace.request_quit(cx));
-            return;
+    // Menu dispatch still borrows the active window. Wait until it is released
+    // before entering the workspace's save-before-quit path.
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                if let Err(error) = handle.update(cx, |workspace, _, cx| workspace.request_quit(cx))
+                {
+                    tracing::warn!("Failed to request Quit: {error}");
+                }
+                return;
+            }
         }
-    }
-    cx.quit();
+        cx.quit();
+    });
 }
 
 fn check_for_updates(_: &CheckForUpdates, cx: &mut App) {
