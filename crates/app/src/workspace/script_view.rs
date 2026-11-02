@@ -97,30 +97,12 @@ impl Workspace {
             .child(tool("History").on_click(cx.listener(|this, _, _, cx| this.toggle_history(cx))))
             .when(supports_plan && !is_running_query, |toolbar| {
                 toolbar
-                    .child(
-                        div()
-                            .id("btn-explain")
-                            .px_2()
-                            .cursor_pointer()
-                            .text_size(px(11.5))
-                            .text_color(theme.text_secondary)
-                            .child("Explain")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.explain_active_statement(false, cx)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("btn-analyze")
-                            .px_2()
-                            .cursor_pointer()
-                            .text_size(px(11.5))
-                            .text_color(theme.text_secondary)
-                            .child("Analyze (executes SQL)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.explain_active_statement(true, cx)
-                            })),
-                    )
+                    .child(tool("Explain").id("btn-explain").on_click(
+                        cx.listener(|this, _, _, cx| this.explain_active_statement(false, cx)),
+                    ))
+                    .child(tool("Analyze (executes SQL)").id("btn-analyze").on_click(
+                        cx.listener(|this, _, _, cx| this.explain_active_statement(true, cx)),
+                    ))
             })
             .child(
                 tool("Rename")
