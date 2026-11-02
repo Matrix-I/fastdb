@@ -57,7 +57,7 @@ What exists today that these targets build on: a paged result store with an LRU 
   - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Save generates SQL and applies the changes in one transaction.
   - **Export CSV / Export SQL** in the result footer saves all currently loaded rows from table or script results through a native save dialog. Fetch more rows before exporting if needed. Save or cancel staged edits first. Export runs in the background with status/errors in the footer; an existing destination is replaced only after the complete file is ready. CSV includes column headers, with NULL written as an empty field. SQL writes one INSERT per row with provider-specific quoting, using the table's schema/name or `query_result` for script results (rename that target before importing). Values use the result's text representation; this is a data export, not a schema or binary-type backup.
 - **Properties**: a scrollable detail pane with visible horizontal/vertical scrollbars for every section; stable column widths and expanding detail rows keep metadata readable. The Columns list uses single-line clipped cells with explicit line height to prevent long native type names wrapping into adjacent rows. Columns (type, nullability, default, collation, PK), constraints, indexes, and a DDL pane with a fixed **Copy DDL** toolbar. In DDL, `Cmd/Ctrl + A` highlights all SQL and `Cmd/Ctrl + C` copies it without line numbers; Escape or clicking the SQL clears selection. PostgreSQL generates executable structural DDL for ordinary/partitioned tables and views: native column types/collations/defaults, identity/generated columns, owned serial sequences, constraints, indexes, comments, storage options, ownership, explicit grants, RLS/policies, triggers, rules and extended statistics. Partition DDL attaches to an existing parent. Referenced schemas, roles, types, functions and tables must already exist; data and current sequence values are excluded. Inheritance/typed/temporary/foreign tables are explicitly unavailable; invalid indexes are identified and omitted. Other providers retain a partial metadata preview. PostgreSQL also shows native type precision/length, column comments, owner, OID, effective tablespace, table comment, RLS flags, persistence, partition key, estimated rows, table/index/total bytes and vacuum/analyze timestamps. Index methods, ordered expressions/INCLUDE columns, uniqueness, validity, predicates and full constraint/foreign-key definitions come from PostgreSQL catalogs. Metadata refreshes with the connection's schema refresh; unsupported or unknown values remain unavailable.
-- **Diagram**: a simple entity box listing the table's columns.
+- **Diagram preview**: a single entity box listing the table's columns; relationship edges, multi-table ER diagrams and diagram actions are not implemented.
 
 ### SQL editor
 - **Shared text editing**: SQL, connection fields (including passwords), filter/fetch size, script search/rename and inline cell editors share command, clipboard and mouse selection handling. Esc clears the selection without moving the caret or changing text (press Esc again to dismiss a dialog or cancel a cell edit); Shift-click extends or shrinks from the original anchor; double-click selects a line (the full value in a one-line field). Copy/cut use the selected text and do nothing without a selection. Paste replaces the selection; one-line fields flatten pasted line breaks and numeric fields keep only digits.
@@ -125,11 +125,14 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 ## 🚧 Not built yet
 
-These are goals of the project, but they are not available in the app today:
+The [audited roadmap](docs/ROADMAP.md) separates working paths, partial features, UI-only controls and missing workflows. Major gaps include:
 
+- **UI-only controls and Properties sections.** Table-toolbar expand, filter criteria and filter-history arrows have no action handlers. Dependencies, References, Partitions, Triggers, Rules, Policies, Permissions and Virtual only show unavailable metadata; PostgreSQL DDL containing some of these objects does not make their detail panes functional.
+- **Column object editing.** Columns Properties is a read-only list; double-click-to-open attribute tabs, schema drafts, Save/Persist DDL and Revert are not implemented. The [GUI/business analysis](docs/DBEAVER_WORKFLOWS.md) specifies this workflow and broader screen coverage.
+- **Core DBeaver workflows.** Multi-table ER diagrams, object create/alter/drop UI, richer object navigation/search, SQL find/replace and parameter prompts, data import/transfer, structured value editing, backup/restore, session/lock monitoring and workspace restoration remain open. See the roadmap for scope and acceptance criteria.
 - **Advanced script execution.** Transaction chaining, pinned sessions/transaction scripts for other providers, and vendor procedural/batch syntax remain unsupported. PostgreSQL supports persistent tab sessions, transaction controls and SQL savepoints.
 - **SSH tunnels.** `ssh_tunnel.rs` is a stub: it does not forward traffic or verify host keys.
-- **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. PostgreSQL DDL uses catalog definitions for tables and views (see provider documentation for scope); other providers retain a partial preview. The status bar's "120 FPS" label is static text.
+- **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. PostgreSQL DDL uses catalog definitions for tables and views (see provider documentation for scope); other providers retain a partial preview.
 - **Light theme.** A light palette exists in `ui-core`, but there is no way to switch to it.
 - **Performance target validation.** The desktop regression suite measures startup, RSS, a million-row SQLite stream, scrolling and release executable size; cold-cache startup, live-provider latency and the original target claims still need separate measurements.
 
@@ -325,11 +328,15 @@ Packaging scripts live in [`ci/`](ci/):
 
 ## 🗺️ Roadmap
 
+See the **[full roadmap and source audit](docs/ROADMAP.md)** for UI-only findings, provider limits, prioritized missing DBeaver workflows and completion criteria. Checked items below denote the stated implementation scope, not full DBeaver parity or live acceptance on every provider.
+
 - [x] Workspace structure and GPUI window
 - [x] Slotted pages, LRU pager and LZ4 disk spill
 - [x] PostgreSQL, MySQL and SQLite drivers with streaming results and cancellation
 - [x] Complete PostgreSQL binary decoding (no false `NULL`s)
-- [x] DBeaver-style navigator and table tabs (data, properties, diagram)
+- [x] Basic table navigator, data tabs and supported read-only Properties
+- [ ] Complete Properties readers and wire or disable no-op toolbar controls
+- [ ] Multi-table ER diagram with relationships and navigation (current Diagram is a single-box preview)
 - [x] Virtualized grid with auto-fit and resizable columns
 - [x] CI with live PostgreSQL and MySQL
 - [x] SQL editor tabs with statement-at-cursor execution and autocompletion
@@ -339,7 +346,6 @@ Packaging scripts live in [`ci/`](ci/):
 - [x] Row insertion, duplication and deletion with transactional Save / Cancel
 - [x] Keychain-backed connection passwords and migration from plaintext config
 - [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
-- [x] PostgreSQL Run script with an isolated connection, explicit closed transaction blocks, temporary tables and session settings
 - [x] Persistent PostgreSQL SQL-tab sessions, Begin/Commit/Rollback controls and SQL savepoints
 - [ ] Pinned scripts for other providers and provider-specific procedural/batch syntax
 - [x] Grid selection copy as TSV, CSV and provider-aware SQL `INSERT`
@@ -359,7 +365,13 @@ Packaging scripts live in [`ci/`](ci/):
 - [ ] Validate original performance targets with cold-cache and live-provider measurements
 - [x] PostgreSQL visual query plan (`EXPLAIN ANALYZE`) viewer
 - [ ] Data diff and schema comparison
-- [ ] Theme switching
+- [ ] Theme switching and persisted workspace/preferences
+- [ ] Object explorer/search and create/alter/drop workflows
+- [ ] SQL find/replace, parameters, external files and execution log
+- [ ] Advanced grid operations, related-row navigation and structured value editing
+- [ ] Data import, full-source export and database-to-database transfer
+- [ ] Roles/permissions, routine editing, backup/restore and session/lock monitoring
+- [ ] Saved tasks and optional scheduling
 
 ---
 
