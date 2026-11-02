@@ -132,12 +132,26 @@ impl Workspace {
                             let theme_border = theme.border;
                             let view = cx.entity().downgrade();
                             let cell_view = view.clone();
-                            let on_cell_mouse_down: ui_grid::CellMouseDownHandler = std::rc::Rc::new(move |row, col, event, _window, app| {
+                            let on_cell_mouse_down: ui_grid::CellMouseDownHandler = std::rc::Rc::new(move |row, col, event, window, app| {
                                 let _ = cell_view.update(app, |this, cx| {
+                                    this.input.grid_drag = None;
+                                    window.focus(&this.focus_handle);
+                                    if event.button == MouseButton::Right {
+                                        this.open_grid_context_menu(active_tab_idx, row, col, event.position, cx);
+                                        return;
+                                    }
                                     this.select_grid_cell(row, col, event.modifiers.shift, cx);
                                     if event.click_count >= 2 && !event.modifiers.shift {
                                         this.begin_cell_edit(row, col);
+                                    } else {
+                                        this.input.grid_drag = super::grid_selection::GridDragSelection::begin(&this.tabs[active_tab_idx]);
                                     }
+                                });
+                            });
+                            let drag_view = view.clone();
+                            let on_cell_mouse_move: ui_grid::CellMouseMoveHandler = std::rc::Rc::new(move |row, col, _event, _window, app| {
+                                let _ = drag_view.update(app, |this, cx| {
+                                    this.extend_grid_drag(row, col, cx);
                                 });
                             });
                             // Ordering is added to the generated SELECT, so only table tabs offer it
@@ -154,7 +168,7 @@ impl Workspace {
                             let cell_editor = self.cell_editor_renderer(cx);
                             let tab = &mut self.tabs[active_tab_idx];
 
-                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), on_header_menu, cell_editor, move |col_idx, cur_width| {
+                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), Some(on_cell_mouse_move), on_header_menu, cell_editor, move |col_idx, cur_width| {
                                 let is_active = active_resizing_col == Some(col_idx);
                                 let bg_color = if is_active {
                                     Rgba { a: 0.85, ..theme_border_focused }

@@ -24,7 +24,7 @@ impl ExportFormat {
     }
 }
 
-fn sql_target(dialect: SqlDialect, schema: Option<&str>, table: Option<&str>) -> String {
+pub(super) fn sql_target(dialect: SqlDialect, schema: Option<&str>, table: Option<&str>) -> String {
     let table = table.unwrap_or("query_result");
     match schema.filter(|s| !s.is_empty()) {
         Some(schema) => dialect.qualified_table(schema, table),

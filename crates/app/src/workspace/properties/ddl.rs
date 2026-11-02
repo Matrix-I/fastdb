@@ -62,7 +62,8 @@ impl TableProperties {
                     .text_color(theme.text_primary)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_surface_hover))
-                    .on_click(cx.listener(move |_, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.clipboard_request_id += 1;
                         cx.write_to_clipboard(ClipboardItem::new_string(ddl_copy.clone()));
                         cx.notify();
                     }))

@@ -22,6 +22,8 @@ mod diagram_panel;
 mod export;
 mod fetch_plan;
 mod filter_suggest;
+mod grid_clipboard;
+mod grid_selection;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
@@ -139,6 +141,7 @@ pub struct Workspace {
     query_history: query_history::QueryHistory,
     script_action: Option<script_tools::ScriptAction>,
     script_request_id: u64,
+    clipboard_request_id: u64,
     pub(super) allow_quit: bool,
     /// "Choose SQL script" dialog, if open
     pub script_chooser: Option<ScriptChooser>,
@@ -207,6 +210,7 @@ impl Workspace {
             _update_changed: update_changed,
             _restart_requested: restart_requested,
             script_request_id: 0,
+            clipboard_request_id: 0,
             allow_quit: false,
             script_chooser: None,
             script_action: None,
@@ -226,6 +230,7 @@ impl Workspace {
                 fetch_size_anchor: None,
                 fetch_size_cursor: usize::MAX,
                 cell_edit_history: LineHistory::new(),
+                grid_drag: None,
             },
             layout: WorkspaceLayout {
                 resizing_column: None,
@@ -238,6 +243,7 @@ impl Workspace {
                 nav_context_menu: None,
                 tab_context_menu: None,
                 column_menu: None,
+                grid_context_menu: None,
             },
         };
 
@@ -324,6 +330,25 @@ impl Render for Workspace {
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 this.handle_key_down(event, cx);
+            }));
+
+        root = root
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.input.grid_drag = None;
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.input.grid_drag = None;
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
+                if event.pressed_button != Some(MouseButton::Left) {
+                    this.input.grid_drag = None;
+                }
             }));
 
         if self.layout.resizing_column.is_some() {
@@ -435,6 +460,9 @@ impl Render for Workspace {
         }
         if let Some(menu) = self.menus.column_menu.clone() {
             root = root.child(self.render_column_menu(menu, cx));
+        }
+        if let Some(menu) = self.menus.grid_context_menu.clone() {
+            root = root.child(self.render_grid_context_menu(menu, cx));
         }
 
         // 4. Modal Dialog: Database Connection Setup

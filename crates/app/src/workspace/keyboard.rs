@@ -6,6 +6,12 @@ impl Workspace {
     /// Handles every key press for the window: app shortcuts, the connection form,
     /// the filter bar and the SQL editor
     pub(super) fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && matches!(event.keystroke.key.as_str(), "c" | "x")
+        {
+            // A newer clipboard action supersedes any background grid copy.
+            self.clipboard_request_id += 1;
+        }
         let before = self
             .tabs
             .get(self.active_tab)
@@ -77,6 +83,14 @@ impl Workspace {
         {
             self.open_sql_script(None, cx);
             cx.notify();
+            return;
+        }
+
+        if self.menus.grid_context_menu.is_some() {
+            if event.keystroke.key == "escape" {
+                self.menus.grid_context_menu = None;
+                cx.notify();
+            }
             return;
         }
 

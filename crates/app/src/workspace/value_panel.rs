@@ -69,9 +69,12 @@ impl Workspace {
         {
             self.commit_cell_edit();
         }
+        self.input.is_filter_focused = false;
+        self.blur_fetch_size();
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
+        tab.editor_focused = false;
         let coord = ui_grid::GridCoord { row, col };
         let prev_col = tab.grid.selection.focus.map(|f| f.col);
         match tab.grid.selection.anchor {
@@ -273,9 +276,10 @@ impl Workspace {
                         .child(toolbar_button("btn-value-copy", "⧉", &theme).when_some(
                             copy_text,
                             |d, text| {
-                                d.on_click(move |_, _, cx| {
+                                d.on_click(cx.listener(move |this, _, _, cx| {
+                                    this.clipboard_request_id += 1;
                                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                                })
+                                }))
                             },
                         )),
                 )

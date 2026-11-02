@@ -43,7 +43,8 @@ pub fn export_to_csv_rows<W: Write>(
     Ok(total_rows)
 }
 
-fn write_csv_field<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<()> {
+/// Writes one RFC-style CSV field, quoting commas, quotes and CR/LF.
+pub fn write_csv_field<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<()> {
     let needs_quotes = bytes
         .iter()
         .any(|&b| b == b',' || b == b'"' || b == b'\n' || b == b'\r');

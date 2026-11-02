@@ -404,7 +404,8 @@ impl Workspace {
                                                     .text_size(px(10.5))
                                                     .text_color(theme.text_primary)
                                                     .cursor_pointer()
-                                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.clipboard_request_id += 1;
                                                         cx.write_to_clipboard(ClipboardItem::new_string(sql_clone.clone()));
                                                     }))
                                                     .child("📋 Copy")

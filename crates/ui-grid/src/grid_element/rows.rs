@@ -4,6 +4,7 @@ impl VirtualDataGrid {
         &self,
         total_width: f32,
         on_cell_mouse_down: Option<CellMouseDownHandler>,
+        on_cell_mouse_move: Option<CellMouseMoveHandler>,
         cell_editor: Option<(u64, usize, CellEditorRenderer)>,
     ) -> AnyElement {
         let theme = &self.theme;
@@ -110,8 +111,21 @@ impl VirtualDataGrid {
                                     .text_ellipsis();
 
                                 if let Some(handler) = on_cell_mouse_down.clone() {
-                                    cell_div = cell_div.on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                                        handler(r_u64, c, event, window, cx);
+                                    let right_handler = handler.clone();
+                                    cell_div = cell_div
+                                        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                            handler(r_u64, c, event, window, cx);
+                                        })
+                                        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                            right_handler(r_u64, c, event, window, cx);
+                                        });
+                                }
+
+                                if let Some(handler) = on_cell_mouse_move.clone() {
+                                    cell_div = cell_div.on_mouse_move(move |event, window, cx| {
+                                        if event.pressed_button == Some(MouseButton::Left) {
+                                            handler(r_u64, c, event, window, cx);
+                                        }
                                     });
                                 }
 

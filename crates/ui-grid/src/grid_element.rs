@@ -42,8 +42,11 @@ fn cell_measure_sample(text: &str) -> &str {
     }
 }
 
-/// Called with (row, col) when a data cell is pressed
+/// Called with (row, col) when a data cell is pressed with the left or right button
 pub type CellMouseDownHandler = Rc<dyn Fn(u64, usize, &MouseDownEvent, &mut Window, &mut App)>;
+
+/// Called with (row, col) while the left button moves over a data cell.
+pub type CellMouseMoveHandler = Rc<dyn Fn(u64, usize, &MouseMoveEvent, &mut Window, &mut App)>;
 
 /// Called with the column index when the dropdown arrow of a column header is pressed
 pub type HeaderMenuHandler = Rc<dyn Fn(usize, &MouseDownEvent, &mut Window, &mut App)>;
@@ -170,7 +173,7 @@ pub fn dbeaver_type_badge(data_type: mem_engine::DataType) -> &'static str {
 
 impl VirtualDataGrid {
     pub fn render_grid(&mut self) -> impl IntoElement + use<> {
-        self.render_grid_interactive(None, None, None, None, |_col_idx, _width| {
+        self.render_grid_interactive(None, None, None, None, None, |_col_idx, _width| {
             div()
                 .w(px(8.0))
                 .h_full()
@@ -183,6 +186,7 @@ impl VirtualDataGrid {
         &mut self,
         resizing_col: Option<usize>,
         on_cell_mouse_down: Option<CellMouseDownHandler>,
+        on_cell_mouse_move: Option<CellMouseMoveHandler>,
         on_header_menu: Option<HeaderMenuHandler>,
         cell_editor: Option<(u64, usize, CellEditorRenderer)>,
         make_resizer: F,
@@ -210,7 +214,12 @@ impl VirtualDataGrid {
             make_resizer,
         ));
 
-        scroller = scroller.child(self.render_rows(total_width, on_cell_mouse_down, cell_editor));
+        scroller = scroller.child(self.render_rows(
+            total_width,
+            on_cell_mouse_down,
+            on_cell_mouse_move,
+            cell_editor,
+        ));
 
         self.render_scrolled_area(scroller.into_any_element())
     }
