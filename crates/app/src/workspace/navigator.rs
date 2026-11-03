@@ -80,6 +80,12 @@ impl Workspace {
                     cx.listener(|this, _, window, cx| this.reveal_active_object(window, cx)),
                 ))
             })
+            .when(self.connections.active().driver.is_some(), |panel| {
+                panel.child(
+                    script_tools::tool("Browse catalog objects…")
+                        .on_click(cx.listener(|this, _, _, cx| this.open_object_browser(cx))),
+                )
+            })
             // Tree View Container with vertical scroll
             .child({
                 let mut nav_tree = div()

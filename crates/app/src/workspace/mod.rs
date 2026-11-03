@@ -35,6 +35,8 @@ mod keyboard;
 mod nav_context_menu;
 mod navigator;
 mod navigator_reveal;
+mod object_browser;
+mod object_favorites;
 mod object_search;
 mod operations;
 mod panel_resize;
@@ -163,6 +165,7 @@ pub struct Workspace {
     clipboard_request_id: u64,
     pub(super) allow_quit: bool,
     /// "Choose SQL script" dialog, if open
+    object_browser: Option<object_browser::ObjectBrowser>,
     object_search: Option<object_search::ObjectSearch>,
     pub script_chooser: Option<ScriptChooser>,
 
@@ -240,6 +243,7 @@ impl Workspace {
             script_request_id: 0,
             clipboard_request_id: 0,
             allow_quit: false,
+            object_browser: None,
             object_search: None,
             script_chooser: None,
             script_action: None,
@@ -519,6 +523,9 @@ impl Render for Workspace {
         }
 
         // 4. Modal Dialog: Database Connection Setup
+        if self.object_browser.is_some() {
+            root = root.child(self.render_object_browser(cx));
+        }
         if self.object_search.is_some() {
             root = root.child(self.render_object_search(cx));
         }

@@ -59,6 +59,19 @@ impl Workspace {
             return;
         }
 
+        if self.object_browser.is_some()
+            && !self.updates.read(cx).is_open()
+            && self.column_pending.is_none()
+        {
+            if event.keystroke.key == "escape"
+                || ((event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                    && event.keystroke.key.eq_ignore_ascii_case("w"))
+            {
+                self.object_browser = None;
+                cx.notify();
+            }
+            return;
+        }
         if self.object_search.is_some()
             && !self.updates.read(cx).is_open()
             && self.column_pending.is_none()
