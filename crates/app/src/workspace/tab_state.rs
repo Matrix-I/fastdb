@@ -63,6 +63,9 @@ pub struct TabState {
     pub(super) query_history: Arc<Vec<String>>,
     pub(super) file_busy: bool,
     pub(super) export: super::export::ExportState,
+    pub(super) saved_params: std::collections::HashMap<String, (sql_intel::ParamType, String)>,
+    pub(super) diagnostics: Vec<sql_intel::SqlDiagnostic>,
+    pub(super) diagnostics_revision: Option<u64>,
 }
 
 /// Inactive results own their grid, pager and fetch state; switching swaps the complete
@@ -294,6 +297,9 @@ impl TabState {
             query_history: Arc::new(Vec::new()),
             file_busy: false,
             export: Default::default(),
+            saved_params: Default::default(),
+            diagnostics: Vec::new(),
+            diagnostics_revision: None,
         }
     }
 

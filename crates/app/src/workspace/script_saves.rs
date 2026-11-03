@@ -303,6 +303,8 @@ impl Workspace {
         self.object_browser = None;
         self.object_search = None;
         self.schema_action_modal = None;
+        self.params_modal = None;
+        self.snippet_modal = None;
         self.script_search = None;
         self.filter_builder = None;
         self.script_chooser = None;

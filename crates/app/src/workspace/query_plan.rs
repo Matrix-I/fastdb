@@ -36,6 +36,11 @@ impl Workspace {
             return;
         };
         let statement = tab.editor.active_statement();
+        let params = sql_intel::extract_parameters(&statement);
+        if !params.is_empty() {
+            self.open_parameter_binding_modal(id, statement, true, analyze, cx);
+            return;
+        }
         match db_wire::query_plan::explain_sql(kind, &statement, analyze) {
             Ok(sql) => {
                 let Some(driver) = self.tab_session(index).driver.clone() else {

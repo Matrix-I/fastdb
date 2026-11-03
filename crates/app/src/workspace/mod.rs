@@ -41,6 +41,7 @@ mod object_search;
 mod operations;
 mod panel_resize;
 mod panes;
+mod params_modal;
 mod pinned_script;
 mod properties;
 mod properties_panel;
@@ -53,6 +54,7 @@ mod script_lines;
 mod script_search;
 mod script_tabs;
 mod script_tools;
+mod snippet_modal;
 mod tab_state;
 use operations::{OperationKind, Operations};
 mod script_chooser;
@@ -169,6 +171,8 @@ pub struct Workspace {
     object_browser: Option<object_browser::ObjectBrowser>,
     object_search: Option<object_search::ObjectSearch>,
     pub schema_action_modal: Option<schema_action_modal::SchemaActionModal>,
+    pub params_modal: Option<params_modal::ParameterBindingModal>,
+    pub snippet_modal: Option<snippet_modal::SnippetModal>,
     pub script_chooser: Option<ScriptChooser>,
 
     pub value_panel: ValuePanelState,
@@ -248,6 +252,8 @@ impl Workspace {
             object_browser: None,
             object_search: None,
             schema_action_modal: None,
+            params_modal: None,
+            snippet_modal: None,
             script_chooser: None,
             script_action: None,
             script_search: None,
@@ -534,6 +540,12 @@ impl Render for Workspace {
         }
         if self.schema_action_modal.is_some() {
             root = root.child(self.render_schema_action_modal(cx));
+        }
+        if self.params_modal.is_some() {
+            root = root.child(self.render_params_modal(cx));
+        }
+        if self.snippet_modal.is_some() {
+            root = root.child(self.render_snippet_modal(cx));
         }
         if self.filter_builder.is_some() {
             root = root.child(self.render_filter_builder(cx));

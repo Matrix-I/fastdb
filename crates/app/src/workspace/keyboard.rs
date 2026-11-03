@@ -31,6 +31,8 @@ impl Workspace {
             && event.keystroke.key.eq_ignore_ascii_case("q")
         {
             self.filter_builder = None;
+            self.params_modal = None;
+            self.snippet_modal = None;
             self.script_search = None;
             self.request_quit(cx);
             return;
@@ -84,6 +86,20 @@ impl Workspace {
             && self.column_pending.is_none()
         {
             self.schema_action_modal_key(&event.keystroke, cx);
+            return;
+        }
+        if self.params_modal.is_some()
+            && !self.updates.read(cx).is_open()
+            && self.column_pending.is_none()
+        {
+            self.handle_params_modal_key(&event.keystroke, cx);
+            return;
+        }
+        if self.snippet_modal.is_some()
+            && !self.updates.read(cx).is_open()
+            && self.column_pending.is_none()
+        {
+            self.handle_snippet_modal_key(&event.keystroke, cx);
             return;
         }
         if self.script_search.is_some() {

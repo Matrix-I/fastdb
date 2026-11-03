@@ -107,6 +107,10 @@ impl Workspace {
             })
             .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
             .child(
+                tool("Snippets…")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_snippet_modal(cx))),
+            )
+            .child(
                 tool("Import SQL copy…")
                     .on_click(cx.listener(|this, _, _, cx| this.import_script_file(cx))),
             )
@@ -218,6 +222,18 @@ impl Workspace {
         let show_plan = tab.show_plan && has_plan;
         let tab_id = tab.id;
 
+        let current_rev = tab.editor.buffer.revision();
+        if tab.diagnostics_revision != Some(current_rev) {
+            let script_text = tab.editor.buffer.text();
+            tab.diagnostics = if !script_text.trim().is_empty() {
+                sql_intel::diagnose_sql(&script_text)
+            } else {
+                Vec::new()
+            };
+            tab.diagnostics_revision = Some(current_rev);
+        }
+        let first_diag = tab.diagnostics.first().cloned();
+
         let mut column = div()
             .flex()
             .flex_col()
@@ -225,6 +241,28 @@ impl Workspace {
             .overflow_hidden()
             .child(toolbar)
             .child(editor);
+
+        if let Some(diag) = first_diag {
+            column = column.child(
+                div()
+                    .id("script-syntax-diagnostic")
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .bg(rgb(0x381a1a))
+                    .border_b_1()
+                    .border_color(rgb(0xf85149))
+                    .text_size(px(11.5))
+                    .text_color(rgb(0xffa198))
+                    .child("⚠")
+                    .child(format!(
+                        "Line {}, Col {}: {}",
+                        diag.line, diag.column, diag.message
+                    )),
+            );
+        }
         if let Some(history) = history {
             let mut list = div()
                 .id("query-history")
@@ -356,7 +394,7 @@ impl Workspace {
     }
 
     /// Gives the keyboard to the active script tab's editor (`true`) or to its result grid
-    fn focus_script_editor(&mut self, focused: bool) {
+    pub(super) fn focus_script_editor(&mut self, focused: bool) {
         if focused {
             self.commit_cell_edit();
             self.blur_fetch_size();

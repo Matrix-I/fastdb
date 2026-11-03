@@ -81,6 +81,14 @@ impl Workspace {
         if self.tabs.is_empty() {
             return;
         }
+        if self.tabs[index].is_script() {
+            let sql = self.tabs[index].editor.active_statement();
+            let params = sql_intel::extract_parameters(&sql);
+            if !params.is_empty() {
+                self.open_parameter_binding_modal(id, sql, false, false, cx);
+                return;
+            }
+        }
         if self.tabs[index].is_script()
             && let Some(driver) = self.tab_session(index).driver.clone()
             && driver.supports_script_session()
