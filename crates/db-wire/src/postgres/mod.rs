@@ -26,6 +26,13 @@ pub struct PostgresDriver {
     cancel_token: Arc<Mutex<Option<CancelToken>>>,
 }
 
+struct SocketGuard(tokio::task::JoinHandle<()>);
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Server errors carry the useful text in their DbError; the Display impl only says "db error"
 fn pg_error_message(e: &tokio_postgres::Error) -> String {
     match e.as_db_error() {
@@ -246,6 +253,18 @@ impl DatabaseDriver for PostgresDriver {
         object: &crate::objects::ObjectSummary,
     ) -> Result<Option<String>> {
         self.read_object_source(kind, object).await.map(Some)
+    }
+
+    async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
+        let (client, task) = Self::connect_with_task(self.config.clone()).await?;
+        let _guard = SocketGuard(task);
+        client
+            .batch_execute("SET statement_timeout='15s'; SET lock_timeout='5s'")
+            .await?;
+        client
+            .batch_execute(sql)
+            .await
+            .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))
     }
 
     async fn load_catalog_section(

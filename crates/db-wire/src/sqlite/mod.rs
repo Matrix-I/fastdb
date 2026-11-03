@@ -252,4 +252,10 @@ impl DatabaseDriver for SqliteDriver {
         }
         Ok(res)
     }
+
+    async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute_batch(sql)?;
+        Ok(())
+    }
 }

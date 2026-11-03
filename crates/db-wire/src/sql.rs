@@ -205,6 +205,8 @@ impl RowChanges {
 
 mod ddl;
 pub use ddl::generate_table_ddl;
+pub mod schema_ddl;
+pub use schema_ddl::{ColumnDef, SchemaAction, generate_schema_ddl, is_ddl_transactional};
 
 #[cfg(test)]
 mod tests {

@@ -249,6 +249,17 @@ impl DatabaseDriver for MySqlDriver {
         .await
     }
 
+    async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
+        let pool = self.get_pool()?;
+        let sql = sql.to_string();
+        crate::run_on_shared_runtime(async move {
+            let mut conn = pool.get_conn().await?;
+            conn.query_drop(&sql).await?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn execute_streaming(
         &self,
         sql: &str,

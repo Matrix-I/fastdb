@@ -223,6 +223,11 @@ pub trait DatabaseDriver: Send + Sync {
         Ok(None)
     }
 
+    /// Executes a schema DDL statement. Providers with transactional DDL run inside a transaction.
+    async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
+        self.execute_query(sql).await.map(|_| ())
+    }
+
     /// Declares implemented readers; availability does not imply permission or nonempty results.
     fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
         crate::metadata::MetadataCapabilities::default()

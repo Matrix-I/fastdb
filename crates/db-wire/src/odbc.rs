@@ -297,6 +297,16 @@ impl DatabaseDriver for OdbcDriver {
         Ok(())
     }
 
+    async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
+        let sql = executable_sql(self.config.driver, sql);
+        self.with_connection(move |conn, _| {
+            let mut statement = conn.preallocate()?;
+            statement.execute(&sql, ())?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn execute_streaming(
         &self,
         sql: &str,
