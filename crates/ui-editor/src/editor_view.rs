@@ -535,24 +535,62 @@ fn needs_quotes(name: &str) -> bool {
     !(starts_plain && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
 }
 
-/// Colour of a word in the simple keyword highlighter
+/// Colour of a word in the dialect-aware SQL syntax highlighter
 fn word_color(word: &str, theme: &Theme) -> Hsla {
-    let trimmed = word.trim().to_uppercase();
-    match trimmed.as_str() {
-        "SELECT" | "FROM" | "WHERE" | "JOIN" | "INNER" | "LEFT" | "RIGHT" | "ON" | "GROUP"
-        | "BY" | "ORDER" | "LIMIT" | "OFFSET" | "INSERT" | "INTO" | "VALUES" | "UPDATE" | "SET"
-        | "DELETE" | "AS" | "AND" | "OR" | "NOT" | "IN" | "IS" | "NULL" | "WITH" | "CREATE"
-        | "TABLE" | "DROP" | "ALTER" | "HAVING" | "DISTINCT" | "UNION" | "CASE" | "WHEN"
-        | "THEN" | "ELSE" | "END" => theme.text_accent.into(),
-        _ if word.starts_with('\'') || word.ends_with('\'') => theme.text_success.into(),
-        _ if trimmed
-            .trim_end_matches([',', ';', ')'])
-            .parse::<f64>()
-            .is_ok() =>
-        {
-            theme.text_warning.into()
-        }
-        _ if word.trim_start().starts_with("--") => theme.text_muted.into(),
+    let trimmed = word.trim();
+    if trimmed.starts_with("--") {
+        return theme.text_muted.into();
+    }
+    if trimmed.starts_with('\'') || trimmed.ends_with('\'') {
+        return theme.text_success.into();
+    }
+
+    // Parameters: :name, @name, $1, ?
+    let stripped_punct = trimmed
+        .trim_end_matches([',', ';', ')', ']'])
+        .trim_start_matches(['(', '[']);
+    if (stripped_punct.starts_with(':')
+        && !stripped_punct.starts_with("::")
+        && stripped_punct.len() > 1
+        && stripped_punct[1..]
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_'))
+        || (stripped_punct.starts_with('@')
+            && stripped_punct.len() > 1
+            && stripped_punct[1..]
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_'))
+        || (stripped_punct.starts_with('$')
+            && stripped_punct.len() > 1
+            && stripped_punct[1..].chars().all(|c| c.is_ascii_digit()))
+        || stripped_punct == "?"
+    {
+        return theme.text_warning.into();
+    }
+
+    let core_token = stripped_punct.to_uppercase();
+    match core_token.as_str() {
+        // ANSI / Standard SQL keywords
+        "SELECT" | "FROM" | "WHERE" | "JOIN" | "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS"
+        | "ON" | "GROUP" | "BY" | "ORDER" | "LIMIT" | "OFFSET" | "INSERT" | "INTO" | "VALUES"
+        | "UPDATE" | "SET" | "DELETE" | "AS" | "AND" | "OR" | "NOT" | "IN" | "IS" | "NULL"
+        | "WITH" | "RECURSIVE" | "CREATE" | "TABLE" | "DROP" | "ALTER" | "VIEW" | "INDEX"
+        | "TRIGGER" | "FUNCTION" | "PROCEDURE" | "SCHEMA" | "DATABASE" | "HAVING" | "DISTINCT"
+        | "UNION" | "ALL" | "EXCEPT" | "INTERSECT" | "CASE" | "WHEN" | "THEN" | "ELSE" | "END"
+        | "CAST" | "COALESCE" | "BETWEEN" | "LIKE" | "EXISTS" | "PRIMARY" | "KEY" | "FOREIGN"
+        | "REFERENCES" | "CHECK" | "UNIQUE" | "DEFAULT" | "CASCADE" | "RESTRICT"
+        // Transactions & Sessions
+        | "BEGIN" | "COMMIT" | "ROLLBACK" | "TRANSACTION" | "SAVEPOINT" | "RELEASE"
+        // Dialect-specific (PostgreSQL / MySQL / SQLite)
+        | "RETURNING" | "CONFLICT" | "DO" | "NOTHING" | "VACUUM" | "ANALYZE" | "EXPLAIN"
+        | "OVER" | "PARTITION" | "WINDOW" | "FILTER" | "ILIKE" | "SIMILAR" | "TRUE" | "FALSE"
+        | "BOOLEAN" | "SERIAL" | "BIGSERIAL" | "INTERVAL" | "REPLACE" | "AUTO_INCREMENT"
+        | "SHOW" | "DESCRIBE" | "USE" | "MODIFY" | "CHANGE" | "PRAGMA" | "ATTACH" | "DETACH"
+        | "AUTOINCREMENT" | "ROWID"
+        // Common aggregate & scalar functions
+        | "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "NOW" => theme.text_accent.into(),
+
+        _ if core_token.parse::<f64>().is_ok() => theme.text_warning.into(),
         _ => theme.text_primary.into(),
     }
 }
@@ -761,8 +799,8 @@ impl Render for SqlEditorView {
 #[cfg(test)]
 mod tests {
     // Not a glob: `super::*` brings in `gpui::test`, which shadows the built-in `#[test]`.
-    use super::{EditorPickKind, MAX_VISIBLE_COMPLETIONS, SqlEditorView};
-    use gpui::{Keystroke, Modifiers};
+    use super::{EditorPickKind, MAX_VISIBLE_COMPLETIONS, SqlEditorView, word_color};
+    use gpui::{Hsla, Keystroke, Modifiers};
     use sql_intel::SchemaCache;
     use std::sync::Arc;
     use ui_core::theme::Theme;
@@ -1158,5 +1196,47 @@ mod tests {
         assert_eq!(ed.active_statement(), "SELECT 1;");
         ed.buffer.set_cursor_line_col(1, 2);
         assert_eq!(ed.active_statement(), "SELECT 2;");
+    }
+
+    #[test]
+    fn word_color_recognizes_dialects_and_parameters() {
+        let theme = Theme::dark();
+        // Dialect keywords
+        assert_eq!(
+            word_color("RETURNING", &theme),
+            Hsla::from(theme.text_accent)
+        );
+        assert_eq!(
+            word_color("CONFLICT", &theme),
+            Hsla::from(theme.text_accent)
+        );
+        assert_eq!(word_color("PRAGMA", &theme), Hsla::from(theme.text_accent));
+        assert_eq!(
+            word_color("AUTO_INCREMENT", &theme),
+            Hsla::from(theme.text_accent)
+        );
+
+        // Parameters
+        assert_eq!(
+            word_color(":user_id", &theme),
+            Hsla::from(theme.text_warning)
+        );
+        assert_eq!(
+            word_color("(:user_id,", &theme),
+            Hsla::from(theme.text_warning)
+        );
+        assert_eq!(
+            word_color("@tenant", &theme),
+            Hsla::from(theme.text_warning)
+        );
+        assert_eq!(word_color("$1,", &theme), Hsla::from(theme.text_warning));
+        assert_eq!(word_color("?", &theme), Hsla::from(theme.text_warning));
+
+        // String literals & numbers
+        assert_eq!(
+            word_color("'hello'", &theme),
+            Hsla::from(theme.text_success)
+        );
+        assert_eq!(word_color("42.5", &theme), Hsla::from(theme.text_warning));
     }
 }
