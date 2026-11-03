@@ -1,6 +1,6 @@
 # FastDB
 
-Native Rust database client (GPUI UI, no JVM/JDBC) aiming to replace tools like DBeaver. Early prototype: see `README.md` for what works and what is not built yet, and `docs/PROVIDERS.md` for provider setup and live tests.
+Native Rust database client (GPUI UI, no JVM/JDBC) aiming to replace tools like DBeaver. Early prototype: see `README.md` for the overview and documentation index, `docs/guide/` for what works and what is not built yet, and `docs/PROVIDERS.md` for provider setup and live tests.
 
 ## Workspace layout
 
@@ -39,14 +39,14 @@ CI configuration lives in `ci/` and `.github/workflows/`. Live provider tests (`
 - Keep UI work off the render path: GPUI re-renders on every key press or hover, so avoid heavy work in `render`.
 - New database support goes through the `db-wire` traits (`traits.rs`) and a provider preset in the connection dialog, not special cases in the workspace code.
 - Match the surrounding code's style and comment density; run `cargo fmt` and `cargo clippy` before committing.
-- Saved connection passwords are currently stored in plain text (README, "Connections"); do not log connection details.
+- Saved connection passwords are currently stored in plain text (`docs/guide/connections.md`); do not log connection details.
 
 ## Implementing
 
 - For a feature that spans several crates or more than a few files, write a plan first in `docs/plans/YYYY-MM-DD-<topic>.md` and commit it on its own (`docs: add <topic> implementation plan`).
 - Add or update tests in the crate that owns the logic. Tests that need a live database must skip cleanly when the `FASTDB_TEST_*` variables are unset (CI sets `FASTDB_REQUIRE_DB_TESTS=1` to make them mandatory).
 - Before calling work done: `cargo fmt --all`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, and run the app for UI changes.
-- When user-visible behavior changes, update `README.md` ("What works today" / "Not built yet") in the same change; update `docs/PROVIDERS.md` for provider changes.
+- When user-visible behavior changes, update the matching page under `docs/guide/` (and `docs/guide/not-built-yet.md`) in the same change, and `README.md` only when its highlights or documentation index change; update `docs/PROVIDERS.md` for provider changes.
 
 ## Committing
 

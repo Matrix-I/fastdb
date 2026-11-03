@@ -1,0 +1,46 @@
+# Milestones
+
+See the **[full roadmap and source audit](../ROADMAP.md)** for UI-only findings, provider limits, prioritized missing DBeaver workflows and completion criteria. Checked items below denote the stated implementation scope, not full DBeaver parity or live acceptance on every provider.
+
+- [x] Workspace structure and GPUI window
+- [x] Slotted pages, LRU pager and LZ4 disk spill
+- [x] PostgreSQL, MySQL and SQLite drivers with streaming results and cancellation
+- [x] Complete PostgreSQL binary decoding (no false `NULL`s)
+- [x] Basic table navigator, data tabs and supported read-only Properties
+- [ ] Complete Properties readers and wire or disable no-op toolbar controls
+- [x] Multi-table ER diagram with relationships and navigation (manual GUI acceptance pending; export/manual positioning remain open)
+- [x] Virtualized grid with auto-fit and resizable columns
+- [x] CI with live PostgreSQL and MySQL
+- [x] SQL editor tabs with statement-at-cursor execution and autocompletion
+- [x] Per-connection SQL script files, autosave and script chooser
+- [x] In-app update checks, release notes and installer download
+- [x] Grid selection, TSV copy, and inline editing with `UPDATE` generation
+- [x] Row insertion, duplication and deletion with transactional Save / Cancel
+- [x] Keychain-backed connection passwords and migration from plaintext config
+- [x] SQL editor extras: sequential ordinary-script execution, multiple result tabs, text selection/copy, script rename/delete, query history and whitespace formatting
+- [x] Persistent PostgreSQL SQL-tab sessions, Begin/Commit/Rollback controls and SQL savepoints
+- [ ] Pinned scripts for other providers and provider-specific procedural/batch syntax
+- [x] Grid selection copy as TSV, CSV and provider-aware SQL `INSERT`
+- [x] Export to CSV / SQL from the UI
+- [x] PostgreSQL table statistics and catalog metadata in Properties
+- [ ] Rich table statistics and metadata for other providers
+- [x] PostgreSQL catalog-derived structural DDL for ordinary/partitioned tables and views
+- [ ] DDL for PostgreSQL inheritance/typed/temporary/foreign tables and complete DDL for other providers
+- [x] TLS for PostgreSQL and MySQL with certificate/hostname verification and optional root CA
+- [x] Provider picker with PostgreSQL, Db2 for LUW, MariaDB, MySQL, Oracle, SQL Server and SQLite
+- [x] MariaDB provider preset using the MySQL-compatible driver
+- [x] Db2 for LUW, Oracle and SQL Server connections and SQL execution through vendor ODBC drivers
+- [x] Local container validation of Oracle and SQL Server connections, SQL and row-edit transactions
+- [ ] Live Db2 validation and broader ODBC platform/TLS coverage (deferred; PostgreSQL is the priority)
+- [ ] SSH bastion / jump host tunneling
+- [x] Reproducible desktop regression benchmarks with a native Rust runner, versioned workloads, absolute budgets and same-host baseline thresholds
+- [ ] Validate original performance targets with cold-cache and live-provider measurements
+- [x] PostgreSQL visual query plan (`EXPLAIN ANALYZE`) viewer
+- [ ] Data diff and schema comparison
+- [ ] Theme switching and persisted workspace/preferences
+- [ ] Object explorer/search and create/alter/drop workflows
+- [ ] SQL find/replace, parameters, external files and execution log
+- [ ] Advanced grid operations, related-row navigation and structured value editing
+- [ ] Data import, full-source export and database-to-database transfer
+- [ ] Roles/permissions, routine editing, backup/restore and session/lock monitoring
+- [ ] Saved tasks and optional scheduling
