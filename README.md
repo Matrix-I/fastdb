@@ -43,6 +43,8 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 ### Database navigator
 
+- **Browse catalog objects** pages through PostgreSQL sequences, functions/procedures, user triggers and user-defined types, with on-demand read-only metadata/source (256 KiB limit). Other providers show unsupported status. Favorites persist by connection, schema, kind, name and signature, with explicit missing-object and save-error feedback.
+
 - **Reveal active object** expands and scrolls to the active relation tab in its owning live connection, including views and column tabs. Objects absent from loaded metadata cannot be revealed.
 
 - **Search objects** finds loaded tables/views by schema or relation name and columns by name in the selected connection. Enter runs a case-insensitive literal search. Click a result to open the relation or inspect the column’s cached native metadata. Use a qualified name to narrow the search. Results are capped at 50.

@@ -137,3 +137,57 @@ Self-review:
    existing query navigation remains the data execution entry point.
 
 Desktop acceptance remains incomplete. No commit or push was created for reveal.
+
+## Extended objects and favorites
+
+Approved scope includes PostgreSQL sequences, functions/procedures, triggers and
+types, read-only catalog/source, unsupported states for other providers, and
+persisted favorites qualified by connection/schema/kind/name. Add bounded,
+keyset-paged driver discovery with native OID identity and on-demand source.
+Load on a dedicated read-only connection with server/client deadlines. Keep
+existing relation browsing intact. Favorites must retain routine signatures to
+distinguish overloads, and missing/stale objects must have explicit feedback.
+Validate native fixtures, unsupported behavior, pagination, source identity,
+persistence failures and old config compatibility before closing P1-01.
+
+Extended catalog object browsing and persistent favorites are implemented.
+PostgreSQL keyset-pages sequences, functions/procedures, user triggers, and
+user-defined types using native OID order, with dedicated read-only connections,
+a 10-second server statement timeout, and a 15-second client deadline. On-demand
+source inspection validates current object identity and limits results to 256 KiB.
+Other providers cleanly return unsupported discovery status. Favorites persist in
+a dedicated favorites.json file under the application config directory with file
+locking, atomic tempfile replacement, routine signatures to distinguish overloads,
+and connection/schema qualification. Missing favorites and malformed/save-failed
+files provide explicit user feedback.
+
+Self-review:
+1. Correctness: tests assert discovery of all 4 object kinds, pagination bounds,
+   source verification, stale-object detection, overload separation, and missing
+   favorite handling.
+2. Performance: discovery is keyset-paged (100 objects max) outside the render
+   path; source is bounded to 256 KiB; favorite scans are bounded to 50 pages;
+   favorites file is limited to 1 MiB / 500 entries.
+3. Security: reads run in read-only repeatable-read transactions with a dedicated
+   connection; queries are parameterized with native OIDs; no passwords or secrets
+   are logged or stored in favorites.
+4. Robustness: connection changes and metadata invalidations cancel background tasks;
+   dedicated socket guards prevent leaked connections; file locking and atomic
+   persisting prevent corrupting favorites; empty/missing files start clean without
+   affecting connections.json.
+5. Syntax/naming: workspace formatter, Clippy, and app builds compile cleanly.
+6. Modern APIs: GPUI background executor, async tokio deadlines, and atomic file
+   persistence with tempfile are used according to conventions.
+7. Business clarity: unsupported providers display explicit status rather than
+   empty results; routine signatures differentiate overloaded functions.
+8. Coverage: unit tests in fastdb-app and live PostgreSQL catalog integration tests
+   in db-wire pass. GUI interactions and desktop styling remain pending manual
+   acceptance per user instruction.
+9. Design: driver trait methods separate object discovery from existing relation
+   trees; ObjectBrowser modal encapsulates browsing, source viewing, and favorite actions.
+
+Commands passed: cargo fmt --all --check,
+cargo clippy --workspace --all-targets --locked,
+cargo build -p fastdb-app --locked, cargo test --workspace --locked,
+and git diff --check. Manual app/GUI testing was skipped per explicit user instruction.
+No commits or pushes were made.

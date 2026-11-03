@@ -364,3 +364,18 @@ Optional batches load concurrently; there are no new catalog SQL queries.
 Catalog sections retain their existing dedicated read-only PG connection,
 server/client deadlines and connection-generation guards. Refresh retries failed
 metadata; unavailable readers are not called. UI acceptance is pending.
+
+## Extended catalog explorer
+
+PostgreSQL object discovery uses native OID keyset pages of at most 100 entries.
+Sequences, functions/procedures, user triggers and user-defined enum/domain/
+composite/range/multirange types are exposed outside system catalogs. Native
+identity and schema/name/signature are rechecked before source reads. Routine
+and trigger definitions come from PostgreSQL; sequences/types show catalog
+metadata. This is read-only inspection. Source exceeds 256 KiB is rejected.
+Requests use dedicated read-only repeatable-read connections, a 10-second
+statement deadline and a 15-second UI request deadline. Other providers report
+unsupported discovery. Favorites are stored separately in favorites.json under
+the application config directory, preserving existing connections.json files.
+Missing favorites and malformed/save-failed files have explicit feedback.
+Desktop acceptance remains pending.
