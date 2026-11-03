@@ -2,6 +2,10 @@ use super::model::TableProperties;
 use crate::workspace::ddl::render_dbeaver_col_badge;
 use gpui::*;
 use ui_core::theme::Theme;
+
+fn collation_label(column: &db_wire::ColumnMeta) -> &str {
+    column.collation.as_deref().unwrap_or("Not reported")
+}
 impl TableProperties {
     pub(in crate::workspace) fn selected_column_details(&self, name: &str) -> Option<String> {
         self.columns
@@ -16,6 +20,13 @@ impl TableProperties {
         pick: crate::workspace::column_editor::ColumnPick,
     ) -> AnyElement {
         let columns_vec = &self.columns;
+        if columns_vec.is_empty() {
+            return div()
+                .p_4()
+                .text_color(theme.text_muted)
+                .child("Columns loaded: no objects found.")
+                .into_any_element();
+        }
 
         let mut col_grid = div()
             .flex()
@@ -199,7 +210,7 @@ impl TableProperties {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_color(theme.text_muted)
-                        .child(""),
+                        .child("Not reported"),
                 )
                 // 5. Collation
                 .child(
@@ -210,7 +221,7 @@ impl TableProperties {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_color(theme.text_secondary)
-                        .child(c.collation.clone().unwrap_or_else(|| "default".to_string())),
+                        .child(collation_label(c).to_owned()),
                 )
                 // 6. Default
                 .child(
@@ -275,6 +286,16 @@ fn column_details(column: &db_wire::ColumnMeta) -> String {
 mod tests {
     use super::column_details;
     use db_wire::{ColumnMeta, DataType};
+
+    #[test]
+    fn missing_collation_does_not_claim_database_default() {
+        let column = ColumnMeta::new("value", DataType::Text);
+        assert_eq!(super::collation_label(&column), "Not reported");
+        assert_eq!(
+            super::collation_label(&column.with_collation("MixedCase")),
+            "MixedCase"
+        );
+    }
 
     #[test]
     fn details_preserve_full_native_values_and_unicode() {
