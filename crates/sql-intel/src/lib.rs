@@ -1,12 +1,18 @@
 pub mod alias;
 pub mod completion;
+pub mod diagnostics;
+pub mod params;
 pub mod parser;
 pub mod schema_cache;
+pub mod snippets;
 
 pub use alias::*;
 pub use completion::*;
+pub use diagnostics::*;
+pub use params::*;
 pub use parser::*;
 pub use schema_cache::*;
+pub use snippets::*;
 
 pub mod script;
 pub use script::{
