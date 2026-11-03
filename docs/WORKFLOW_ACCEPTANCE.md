@@ -1,6 +1,6 @@
 # Provider workflow acceptance
 
-Tracking date: 2026-11-03. Manual acceptance is **pending at the user's request**.
+Tracking date: 2026-11-03. Manual acceptance is **skipped for now at the user's request**.
 This matrix is a test protocol, not evidence of successful desktop workflows.
 Historical provider runs are recorded in [PROVIDERS.md](PROVIDERS.md); they do
 not replace acceptance on the current build.
@@ -12,7 +12,7 @@ not replace acceptance on the current build.
 | PostgreSQL | Pending | Pending | Pending | Pending | Pending |
 | MySQL | Pending | Pending | Pending | Pending | Pending |
 | MariaDB | Pending separately from MySQL | Pending | Pending | Pending | Pending |
-| SQLite | Pending | Pending | Pending | Pending | Pending |
+| SQLite | Automated in-memory browse/run | Automated planned edit and atomic rollback | Automated CSV output and SQL read-back | Existing driver cancellation tests; desktop disconnect pending | Skipped by user |
 | SQL Server | Pending; vendor ODBC required | Pending | Pending | Pending | Pending |
 | Oracle | Pending; vendor ODBC required | Pending | Pending | Pending | Pending |
 | Db2 LUW | Pending; vendor ODBC required | Pending | Pending | Pending | Pending; previous live validation incomplete |
@@ -68,6 +68,13 @@ quotes/newlines, an exact decimal and a foreign key; use native provider types.
   must keep the app open with feedback.
 
 ## Automated evidence boundaries
+
+`cargo test -p db-wire --test workflow_test --locked` exercises one connected
+in-memory SQLite fixture from metadata/streaming through planned edits, a failed
+multi-statement transaction, read-back, exact CSV bytes and SQL export into an
+independent database. It also verifies that a same-named table on another
+connection stays unchanged. It does not prove desktop routing, filesystem
+reconnection, cancellation/disconnect or other-provider compatibility.
 
 `cargo test --workspace --locked` runs deterministic unit tests and SQLite
 integration tests. Live tests often return early when their `FASTDB_TEST_*`
