@@ -46,3 +46,51 @@ confirm initial public Tables expansion without expanding Views. Re-review found
 no remaining actionable issue. `git diff --check` passed. Manual app/GUI testing
 was skipped per explicit user instruction; native display behavior is unverified.
 No commits or pushes were made for this delivery.
+
+## Search loaded metadata
+
+Search the selected connection's loaded relations by schema or name and its
+columns by name. Use a case-insensitive literal substring. Keep qualified
+identities through navigation, run the scan outside render, bound visible results
+and reject results after metadata replacement. Reuse the existing table/column
+open paths and shared single-line editing controls. Verify lookup, empty input,
+literal punctuation, duplicate names and the result limit before delivery.
+
+Search implementation now uses the selected connection's Arc-owned metadata.
+Enter starts a background scan, capped at 51 hits to detect overflow, and the
+dialog displays at most 50. Qualified names narrow repeated column names.
+Selecting a relation reuses existing query navigation. Selecting a column
+displays the existing cached native detail formatter within the dialog.
+Metadata replacement or connection changes invalidate result navigation.
+
+Independent review identified unsupported column-editor navigation and
+unreachable repeated column names. Both were addressed. A follow-up found
+unnecessary data queries for column inspection; final inspection reads cached
+metadata without creating a query. Re-review reported no actionable findings.
+
+Self-review:
+1. Correctness: tests assert schema/relation/column identity, qualified paths,
+   Unicode, literal punctuation, empty/missing input and overflow bounds.
+2. Performance: scans run on the background executor; render handles at most
+   50 results, and column metadata is shared through Arc rather than copied.
+3. Security: searches add no SQL, external calls, credentials or logging.
+4. Robustness: task ownership cancels replaced searches; owner and metadata
+   identity are checked before opening results; no dependencies are added.
+5. Syntax/naming: formatter, workspace Clippy and app build pass using existing
+   Rust/GPUI conventions.
+6. Modern APIs: existing GPUI tasks, Arc and shared line input are reused.
+7. Business clarity: user selected schema/relation and column names on the
+   active connection; literal substring matching and the cap are documented.
+8. Coverage: two search tests pass. Full workspace tests pass after rebuilding
+   stale xtask artifacts that embedded a removed integration-worktree path.
+   App startup with an isolated SQLite profile succeeded. Computer Use reported
+   permissions not granted, so clicking/searching/clipboard and layout acceptance
+   remain unverified. This feature is incomplete for desktop release acceptance.
+9. Design: one focused module owns search state, lookup and dialog behavior.
+
+Commands passed: cargo fmt --all --check,
+cargo clippy --workspace --all-targets --locked,
+cargo build -p fastdb-app --locked, cargo test --workspace --locked,
+and git diff --check. Unconfigured live-provider and keychain tests may return
+early; these are not live-provider validation. No search commits or pushes were
+created. The earlier P0 integration is on local main at 3924365.

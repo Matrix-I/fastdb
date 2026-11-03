@@ -513,7 +513,7 @@ impl Workspace {
             }
             col_map.insert((schema, table), cols);
         }
-        self.connections.session_mut(connection_id).table_columns = col_map;
+        self.connections.session_mut(connection_id).table_columns = Arc::new(col_map);
 
         let mut constr_map = HashMap::new();
         for (schema, table, cname, ctype) in metadata.constraints {

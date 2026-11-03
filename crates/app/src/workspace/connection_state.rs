@@ -1,5 +1,5 @@
 use super::{FormField, SavedConnection};
-use db_wire::{ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
+use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
 use sql_intel::SchemaCache;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -72,7 +72,7 @@ pub(super) struct ConnectionSession {
     pub driver: Option<Arc<dyn DatabaseDriver>>,
     pub schema_cache: Arc<SchemaCache>,
     pub tables: Vec<TableSummary>,
-    pub table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
+    pub table_columns: Arc<super::object_search::ColumnMap>,
     pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
     pub table_indexes: HashMap<(String, String), Vec<String>>,
 }
@@ -87,7 +87,7 @@ impl Default for ConnectionSession {
             driver: None,
             schema_cache: Arc::new(SchemaCache::new().expect("schema cache")),
             tables: Vec::new(),
-            table_columns: HashMap::new(),
+            table_columns: Arc::default(),
             table_constraints: HashMap::new(),
             table_indexes: HashMap::new(),
         }

@@ -1,4 +1,5 @@
 use super::*;
+use gpui::prelude::FluentBuilder;
 
 impl Workspace {
     /// DBeaver-style database navigator tree in the left sidebar
@@ -66,6 +67,14 @@ impl Workspace {
                         ),
                     ),
             )
+            .when(self.connections.active().driver.is_some(), |panel| {
+                panel.child(script_tools::tool("Search objects…").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.open_object_search(cx);
+                        window.focus(&this.focus_handle);
+                    },
+                )))
+            })
             // Tree View Container with vertical scroll
             .child({
                 let mut nav_tree = div()

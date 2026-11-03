@@ -34,6 +34,7 @@ mod grid_selection;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
+mod object_search;
 mod operations;
 mod panel_resize;
 mod panes;
@@ -159,6 +160,7 @@ pub struct Workspace {
     clipboard_request_id: u64,
     pub(super) allow_quit: bool,
     /// "Choose SQL script" dialog, if open
+    object_search: Option<object_search::ObjectSearch>,
     pub script_chooser: Option<ScriptChooser>,
 
     pub value_panel: ValuePanelState,
@@ -232,6 +234,7 @@ impl Workspace {
             script_request_id: 0,
             clipboard_request_id: 0,
             allow_quit: false,
+            object_search: None,
             script_chooser: None,
             script_action: None,
             script_search: None,
@@ -510,6 +513,9 @@ impl Render for Workspace {
         }
 
         // 4. Modal Dialog: Database Connection Setup
+        if self.object_search.is_some() {
+            root = root.child(self.render_object_search(cx));
+        }
         if self.filter_builder.is_some() {
             root = root.child(self.render_filter_builder(cx));
         }
