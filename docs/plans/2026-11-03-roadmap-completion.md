@@ -210,3 +210,22 @@ Independent re-review confirmed both file-lifecycle findings addressed. Startup
 with a temporary FASTDB_CONFIG_DIR outside the sandbox succeeded and remained
 running until Ctrl+C. Native-dialog/focus/close-during-dialog acceptance is pending.
 No commits or pushes were made.
+
+## Delivery 5: P1-03 SQL editing essentials completion
+
+Implemented the remaining scope of P1-03:
+1. Dialect syntax highlighting & diagnostics: Added dialect keywords for PostgreSQL,
+   MySQL, SQLite, and ANSI SQL. Highlighted parameter tokens (`:param`, `@param`, `$1`,
+   `?`) with parameter theme coloring. Real-time syntax diagnostics flag unterminated
+   string literals, unclosed block comments, unmatched brackets, and syntax parse errors.
+2. Snippets & templates: Added `sql-intel::snippets` with standard templates across
+   Query, DML, DDL, and Advanced categories. Integrated toolbar `Snippets…` modal with
+   filtering, preview, and undoable buffer insertion.
+3. Parameter binding & variable prompts: Added `sql-intel::params` with parameter
+   scanner, typed definitions (String, Integer, Float, Boolean, Date, Null, Raw), and
+   safe substitution. Added `ParameterBindingModal` in workspace, intercepting queries
+   containing unbound parameters, providing live SQL preview, tab-session parameter
+   persistence, and execution dispatch.
+
+Validation: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, and
+full workspace tests pass. Manual UI acceptance remains pending at user request.
