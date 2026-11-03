@@ -75,6 +75,11 @@ impl Workspace {
                     },
                 )))
             })
+            .when(self.active_reveal_target().is_some(), |panel| {
+                panel.child(script_tools::tool("Reveal active object").on_click(
+                    cx.listener(|this, _, window, cx| this.reveal_active_object(window, cx)),
+                ))
+            })
             // Tree View Container with vertical scroll
             .child({
                 let mut nav_tree = div()
@@ -83,6 +88,7 @@ impl Workspace {
                     .flex_col()
                     .flex_1()
                     .overflow_y_scroll()
+                    .track_scroll(&self.navigator_scroll)
                     .gap_0p5();
 
                 if self.connections.saved_connections.is_empty()
@@ -185,6 +191,7 @@ fn toggle_key(set: &mut HashSet<String>, key: &str) {
 mod connection;
 mod details;
 mod schema;
+pub(super) use schema::RelationGroup;
 mod table;
 
 pub(super) fn table_folder_key(schema: &str) -> String {

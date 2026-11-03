@@ -37,7 +37,7 @@ pub(super) struct NavigatorState {
     pub nav_tables_expanded: HashSet<String>,
     pub nav_table_expanded: HashSet<String>,
     pub nav_subfolder_expanded: HashSet<String>,
-    pub selected_table_name: Option<String>,
+    pub selected_relation: Option<(String, String)>,
 }
 impl Default for NavigatorState {
     fn default() -> Self {
@@ -58,7 +58,7 @@ impl Default for NavigatorState {
             },
             nav_table_expanded: HashSet::new(),
             nav_subfolder_expanded: HashSet::new(),
-            selected_table_name: None,
+            selected_relation: None,
         }
     }
 }

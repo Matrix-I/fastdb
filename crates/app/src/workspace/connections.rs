@@ -303,7 +303,7 @@ impl Workspace {
                             .navigator_mut()
                             .nav_subfolder_expanded
                             .clear();
-                        this.connections.navigator_mut().selected_table_name = None;
+                        this.connections.navigator_mut().selected_relation = None;
 
                         for t in this.connections.active().tables.clone() {
                             this.connections
@@ -363,7 +363,7 @@ impl Workspace {
             .is_some_and(|s| s.driver.is_some())
     }
 
-    fn activate_live_connection(&mut self, conn_id: &str) -> bool {
+    pub(super) fn activate_live_connection(&mut self, conn_id: &str) -> bool {
         if !self.is_connection_live(conn_id) {
             return false;
         }

@@ -34,6 +34,7 @@ mod grid_selection;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
+mod navigator_reveal;
 mod object_search;
 mod operations;
 mod panel_resize;
@@ -143,6 +144,8 @@ pub struct Workspace {
     pub active_tab: usize,
     pub tabs: Vec<TabState>,
     tab_scroll: ScrollHandle,
+    navigator_scroll: ScrollHandle,
+    navigator_anchor: ScrollAnchor,
     revealed_tab: Option<(u64, usize, usize)>,
     operations: Operations,
     column_pending: Option<column_editor::PendingColumn>,
@@ -209,12 +212,15 @@ impl Workspace {
                 );
             },
         );
+        let navigator_scroll = ScrollHandle::new();
         let workspace = Self {
             theme,
             focus_handle,
             active_tab: 0,
             tabs: Vec::new(),
             tab_scroll: ScrollHandle::new(),
+            navigator_anchor: ScrollAnchor::for_handle(navigator_scroll.clone()),
+            navigator_scroll,
             revealed_tab: None,
             operations: Operations::default(),
             column_pending: None,

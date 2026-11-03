@@ -43,6 +43,8 @@ What exists today that these targets build on: a paged result store with an LRU 
 
 ### Database navigator
 
+- **Reveal active object** expands and scrolls to the active relation tab in its owning live connection, including views and column tabs. Objects absent from loaded metadata cannot be revealed.
+
 - **Search objects** finds loaded tables/views by schema or relation name and columns by name in the selected connection. Enter runs a case-insensitive literal search. Click a result to open the relation or inspect the column’s cached native metadata. Use a qualified name to narrow the search. Results are capped at 50.
 - Relations are grouped into Tables, Views, Materialized Views and Other Relations using the provider's loaded metadata. Unknown relation kinds stay visible; each folder expands independently and opens the existing data/metadata workflow. Empty folders describe loaded metadata only. Providers that do not discover an object kind cannot populate that folder yet. Manual acceptance is deferred.
 - DBeaver-style tree: connection → databases → schemas → tables → columns, constraints, foreign keys, indexes.

@@ -94,3 +94,46 @@ cargo build -p fastdb-app --locked, cargo test --workspace --locked,
 and git diff --check. Unconfigured live-provider and keychain tests may return
 early; these are not live-provider validation. No search commits or pushes were
 created. The earlier P0 integration is on local main at 3924365.
+
+## Reveal active relation
+
+Add a navigator action that locates the active relation/column tab using its
+owning live connection and loaded metadata. Expand its schema and native relation
+folder, select by schema plus name, and scroll the row into view. Script tabs,
+disconnected sessions and objects absent from loaded metadata have no reveal
+action. Reuse live connection activation without running SQL. Keep existing
+selection/query behavior outside this navigation change.
+
+Reveal is wired for loaded relation/column tabs in live sessions. The action
+activates the owning session, expands the schema/native folder and anchors the
+qualified selected row. Selection now retains schema plus relation name for
+ordinary click/query navigation as well. No database query or reconnect is added
+by reveal. A shared ScrollAnchor waits for the expanded target's prepaint before
+scrolling, then notifies the cached navigator to repaint the new offset.
+
+Independent review found initial anchor scrolling used stale prepaint coordinates.
+Deferring it through the target's layout frame addressed this. Re-review found
+no further actionable issues. Two tests cover native/unknown folder kinds,
+ancestor expansion, preserving prior expanded schemas, qualified selection,
+duplicate relation names, absent objects and script tabs.
+
+Self-review:
+1. Correctness: owner session must be live and the qualified relation must exist
+   in loaded metadata; absent targets produce no action.
+2. Performance: target lookup scans cached relation names without database I/O;
+   render adds one target lookup and no metadata copying beyond the target row.
+3. Security: no SQL, credentials, logging or permission changes are added.
+4. Robustness: existing live activation and owned GPUI handles are reused; no new
+   network operation, resource acquisition or dependency is introduced.
+5. Syntax/naming: workspace formatter, Clippy and app build pass.
+6. Modern APIs: ScrollAnchor, on_next_frame and existing GPUI notifications are
+   used according to the bundled GPUI layout lifecycle.
+7. Business clarity: reveal targets the active tab's owning live connection and
+   cached relation, including its native folder; scripts have no relation target.
+8. Coverage: deterministic tests cover expansion/identity; isolated SQLite app
+   startup succeeds. GUI scroll, collapsed/distant rows and owner switching still
+   require desktop acceptance because Computer Use permissions are unavailable.
+9. Design: target resolution and expansion are isolated in navigator_reveal;
+   existing query navigation remains the data execution entry point.
+
+Desktop acceptance remains incomplete. No commit or push was created for reveal.

@@ -131,7 +131,7 @@ impl Workspace {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RelationGroup {
+pub(in crate::workspace) enum RelationGroup {
     Tables,
     Views,
     MaterializedViews,
@@ -147,7 +147,7 @@ impl RelationGroup {
         Self::MaterializedViews,
         Self::Other,
     ];
-    fn from_type(value: &str) -> Self {
+    pub(in crate::workspace) fn from_type(value: &str) -> Self {
         match value.trim().to_ascii_uppercase().as_str() {
             "BASE TABLE" | "TABLE" | "PARTITIONED TABLE" | "FOREIGN TABLE" => Self::Tables,
             "VIEW" => Self::Views,
@@ -163,7 +163,7 @@ impl RelationGroup {
             Self::Other => "Other Relations",
         }
     }
-    fn expansion_key(self, schema: &str) -> String {
+    pub(in crate::workspace) fn expansion_key(self, schema: &str) -> String {
         format!("{}:{}:{}", schema.len(), schema, self.label())
     }
 }
