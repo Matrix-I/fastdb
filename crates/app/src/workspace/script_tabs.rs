@@ -68,7 +68,12 @@ impl Workspace {
         })
         .detach();
     }
-    fn install_script_tab(&mut self, script: &ScriptFile, text: &str, cx: &mut Context<Self>) {
+    pub(super) fn install_script_tab(
+        &mut self,
+        script: &ScriptFile,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
         if !self
             .connections
             .saved_connections

@@ -47,6 +47,7 @@ pub struct TabState {
     pub editor_focused: bool,
     /// File a script tab is saved to
     pub script_path: Option<PathBuf>,
+    pub script_file_dialog_busy: bool,
     /// Saved connection a script tab runs on
     pub connection_id: Option<String>,
     /// Text last written to the script file, to tell whether the editor has unsaved changes
@@ -279,6 +280,7 @@ impl TabState {
             last_error: None,
             editor_focused: false,
             script_path: None,
+            script_file_dialog_busy: false,
             connection_id: None,
             saved_text: String::new(),
             saved_revision: 0,

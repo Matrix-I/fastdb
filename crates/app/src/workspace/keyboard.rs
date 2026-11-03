@@ -31,6 +31,7 @@ impl Workspace {
             && event.keystroke.key.eq_ignore_ascii_case("q")
         {
             self.filter_builder = None;
+            self.script_search = None;
             self.request_quit(cx);
             return;
         }
@@ -58,6 +59,10 @@ impl Workspace {
             return;
         }
 
+        if self.script_search.is_some() {
+            self.search_key(&event.keystroke, cx);
+            return;
+        }
         if self.filter_builder.is_some() {
             if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                 && event.keystroke.key == "w"

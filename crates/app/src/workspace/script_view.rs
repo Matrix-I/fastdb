@@ -106,6 +106,29 @@ impl Workspace {
                     ))
             })
             .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
+            .child(
+                tool("Import SQL copy…")
+                    .on_click(cx.listener(|this, _, _, cx| this.import_script_file(cx))),
+            )
+            .child(
+                tool("Save SQL copy…")
+                    .on_click(cx.listener(|this, _, _, cx| this.save_script_copy(cx))),
+            )
+            .child(
+                tool("Find / Replace")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_script_search(cx))),
+            )
+            .child(
+                tool("Comment / Uncomment").on_click(cx.listener(|this, _, _, cx| {
+                    this.edit_script_lines(super::script_lines::LineCommand::Comment, cx)
+                })),
+            )
+            .child(tool("Indent").on_click(cx.listener(|this, _, _, cx| {
+                this.edit_script_lines(super::script_lines::LineCommand::Indent, cx)
+            })))
+            .child(tool("Outdent").on_click(cx.listener(|this, _, _, cx| {
+                this.edit_script_lines(super::script_lines::LineCommand::Outdent, cx)
+            })))
             .child(tool("History").on_click(cx.listener(|this, _, _, cx| this.toggle_history(cx))))
             .when(supports_plan && !is_running_query, |toolbar| {
                 toolbar

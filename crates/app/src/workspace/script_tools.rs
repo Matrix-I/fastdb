@@ -37,6 +37,30 @@ pub(super) fn tool(label: &'static str) -> Stateful<Div> {
 }
 
 impl Workspace {
+    pub(super) fn edit_script_lines(
+        &mut self,
+        command: super::script_lines::LineCommand,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self
+            .tabs
+            .get_mut(self.active_tab)
+            .filter(|t| t.is_script() && !t.file_busy)
+        else {
+            return;
+        };
+        let before = tab.editor.buffer.revision();
+        super::script_lines::apply(&mut tab.editor.buffer, command);
+        tab.editor.hide_completions();
+        tab.editor.caret_moved = true;
+        tab.editor_focused = true;
+        if before != tab.editor.buffer.revision() {
+            let (id, revision) = (tab.id, tab.editor.buffer.revision());
+            self.schedule_autosave(id, revision, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn format_script(&mut self, cx: &mut Context<Self>) {
         let Some(tab) = self
             .tabs

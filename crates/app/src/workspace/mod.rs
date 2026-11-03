@@ -43,6 +43,9 @@ mod properties_panel;
 mod query;
 mod query_history;
 mod query_plan;
+mod script_files;
+mod script_lines;
+mod script_search;
 mod script_tabs;
 mod script_tools;
 mod tab_state;
@@ -151,6 +154,7 @@ pub struct Workspace {
     credential_warning: Option<String>,
     query_history: query_history::QueryHistory,
     script_action: Option<script_tools::ScriptAction>,
+    script_search: Option<script_search::Search>,
     script_request_id: u64,
     clipboard_request_id: u64,
     pub(super) allow_quit: bool,
@@ -230,6 +234,7 @@ impl Workspace {
             allow_quit: false,
             script_chooser: None,
             script_action: None,
+            script_search: None,
 
             value_panel: ValuePanelState::default(),
             panes: None,
@@ -516,6 +521,9 @@ impl Render for Workspace {
         }
         if self.script_action.is_some() {
             root = root.child(self.render_script_action(cx));
+        }
+        if self.script_search.is_some() {
+            root = root.child(self.render_script_search(cx));
         }
         if self.updates.read(cx).is_open() {
             root = root.child(self.updates.clone());
