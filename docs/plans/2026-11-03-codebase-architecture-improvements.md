@@ -1,7 +1,7 @@
 # Codebase Architecture, God Files, and Technical Debt Improvement Plan
 
 Date: 2026-11-03  
-Status: Documented / Backlog for Incremental Fixes
+Status: Triaged backlog. Section 5 distinguishes confirmed work from proposals that need evidence.
 
 ## 1. Goal
 
@@ -28,6 +28,98 @@ As of 2026-11-03, the FastDB repository contains **152 Rust source files** and *
 | `crates/ui-core` | 4 | 276 | Shared actions, undo/redo history stack, theme tokens |
 | **Total** | **152** | **40,569** | |
 
+### 2.2 System Architecture & Crate Dependency Hierarchy
+
+The following diagram illustrates the component layers, crate responsibilities, and directional dependencies across the workspace:
+
+```mermaid
+graph TD
+    subgraph UI_App["Application Shell Layer"]
+        App["crates/app<br/>(GPUI Composition Root, Window, Nav, Modals, Forms)"]
+        UICore["crates/ui-core<br/>(Theme Tokens, Actions, Undo/Redo)"]
+    end
+
+    subgraph UI_Components["Specialized UI Components"]
+        UIEditor["crates/ui-editor<br/>(Ropey Buffer, SQL View, Autocomplete UI)"]
+        UIGrid["crates/ui-grid<br/>(Virtualized Result Grid, Sizing, Changeset)"]
+    end
+
+    subgraph Intel["Intelligence & Syntax Layer"]
+        SQLIntel["crates/sql-intel<br/>(Tree-sitter Sequel, Statement Splitting, In-Memory SQLite Cache)"]
+    end
+
+    subgraph Drivers_Storage["Driver Wire & Memory Storage"]
+        DBWire["crates/db-wire<br/>(PostgreSQL, MySQL, SQLite, ODBC Drivers, Row Streaming)"]
+        MemEngine["crates/mem-engine<br/>(SlottedPage 64KB, LRU Page Cache, LZ4 Disk Spiller)"]
+    end
+
+    subgraph Platform_Automation["Platform & Verification"]
+        PlatformHAL["crates/platform-hal<br/>(OS Keychain via keyring, Paths, Unix Sockets)"]
+        XTask["xtask<br/>(Benchmark Harness: Startup, RSS, Throughput, Scroll Latency)"]
+    end
+
+    %% Dependency Arrows
+    App --> UICore
+    App --> UIEditor
+    App --> UIGrid
+    App --> SQLIntel
+    App --> DBWire
+    App --> PlatformHAL
+
+    UIEditor --> UICore
+    UIEditor --> SQLIntel
+    UIGrid --> UICore
+    UIGrid --> MemEngine
+
+    DBWire --> MemEngine
+    DBWire --> PlatformHAL
+    XTask -.-> App
+```
+
+### 2.3 End-to-End Query Execution & Streaming Data Flow
+
+This diagram traces the lifecycle of a query from execution trigger through memory-paging to virtualized grid rendering, highlighting the identified bottlenecks:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Keyboard
+    participant App as Workspace / TabState
+    participant Driver as db-wire (Driver)
+    participant Engine as mem-engine (SlottedPage)
+    participant Disk as Local Disk (LZ4 Spill)
+    participant Grid as ui-grid (Virtualized Grid)
+
+    User->>App: Trigger Run Query (Cmd+Enter)
+    Note over App: Concurrency Bottleneck: Operations only permits 1 active query app-wide
+    App->>Driver: execute_query_stream(sql)
+
+    loop Stream Row Batches
+        Driver->>Driver: Fetch Raw Socket Bytes
+        Note over Driver,Engine: Allocation Smell: Temporary row buffers at several stages
+        Driver->>Engine: append_row(cells)
+        alt Page Full (>64KB)
+            Engine->>Engine: Allocate new SlottedPage
+        else Oversized Row (>64KB)
+            Note over Engine: Smell: Bypass 64KB limit on fresh page, resident bytes can exceed the nominal budget
+            Engine->>Engine: Append oversized payload
+        end
+        opt Cache Pressure (>128 pages)
+            Engine->>Disk: Compress & Spill via LZ4
+        end
+    end
+
+    Driver-->>App: Query Execution Complete
+    App->>Grid: Set QueryResultPager
+
+    loop Render Frame (Scroll / Hover)
+        Grid->>Engine: Fetch Unedited Stored Cell
+        Note over Grid,Engine: Allocation Smell: Calls get_cell() cloning Vec + String instead of with_cell() zero-copy
+        Engine-->>Grid: Byte Payload
+        Grid-->>User: Render Canvas via GPUI
+    end
+```
+
 ---
 
 ## 3. God Files and Structural Anti-Patterns
@@ -53,122 +145,82 @@ As of 2026-11-03, the FastDB repository contains **152 Rust source files** and *
 - **Smell**: Violates Single Responsibility Principle by combining GitHub REST API calls, semver parsing, file download streaming, deep OS shell automation (`hdiutil attach/detach`, `ditto`, `codesign`), and process respawning.
 - **Security Issue**: Ad-hoc re-signs binaries (`codesign --force --deep --sign -`) without cryptographic signature verification (Minisign) or SHA256 checksum validation.
 
----
+### 3.4 State Architecture: Current Monolith vs. Proposed Decoupled Model
 
-## 4. Bad Designs & Performance Bottlenecks
+The structural refactoring focuses on moving away from the "mega-class" pattern towards isolated domain managers and typed tab state:
 
-### 4.1 SQL Editor GPUI Element Explosion ("One-Div-Per-Character")
-- **Location**: `crates/ui-editor/src/editor_view.rs:621-645`
-- **Issue**: Instead of using GPUI's text shaping (`TextSystem`, `ShapedRun`) to render lines in single draw passes, the editor generates **3 `div` elements for every character** (one container + two child hit-test divs for cursor positioning) plus a heap-allocated `String`.
-- **Impact**: A 50-line view (80 chars/line) creates **~12,000 GPUI elements** per render pass, causing noticeable typing and cursor latency.
+```mermaid
+graph TD
+    subgraph Current_State["Current Architecture: Monolithic Shared Mutable State"]
+        WCurrent["Workspace (33 Fields)<br/>40 partial impl files, 14,250 LOC"]
+        TCurrent["TabState (45 Fields)<br/>Untyped: Table & Script merged"]
+        OpCurrent["Operations: active: Option<Operation><br/>Single-query concurrency bottleneck"]
 
-### 4.2 Non-Functional SSH Tunneling (Dead Code Stub)
-- **Location**: `crates/db-wire/src/ssh_tunnel.rs:53-70`
-- **Issue**: `SshTunnel::start_forwarding` binds a local TCP port, prints a log pretending the tunnel is established, and immediately drops the `TcpListener` on return. No socket forwarding loop exists, and the function is not called anywhere in the workspace.
+        WCurrent --> TCurrent
+        WCurrent --> OpCurrent
+    end
 
-### 4.3 7 Heap Allocations Per Streamed Row
-- **Location**: `crates/db-wire/src/stream.rs:62`, `crates/mem-engine/src/pager.rs:72, 76`, `crates/mem-engine/src/slotted_page.rs:95, 117, 128, 129`
-- **Issue**: On every single streamed row, 7 temporary vectors are allocated on the heap: `cell_slices`, `cells_vec`, `row_slices`, `cell_vec`, `null_bitmap`, `cell_offsets`, and `data_bytes`.
-- **Impact**: Streaming 200,000 rows generates **1,400,000 short-lived heap vectors**, resulting in severe allocator churn.
+    subgraph Target_State["Candidate Architecture: Verify Scope First"]
+        WTarget["Workspace (Composition Root)<br/>Window & Layout Orchestration"]
 
-### 4.4 Large Rows Bypassing SlottedPage 64KB Assumption
-- **Location**: `crates/mem-engine/src/slotted_page.rs:109` & `pager.rs:96-100`
-- **Issue**: `try_append_row` only checks `total_est > PAGE_SIZE` if `self.row_count > 0`. On a fresh page (`row_count == 0`), oversized rows (>64KB) are written directly.
-- **Impact**: While preventing query abortion, it breaks `QueryResultPager`'s assumption that 128 pages $\approx$ 8MB RAM. A few large JSON/BLOB rows can inflate memory to gigabytes without triggering LRU disk eviction.
+        ConnMgr["ConnectionManager<br/>(Sessions, Registry, Credentials)"]
+        TabMgr["TabManager<br/>(Tabs Registry, Active Tab, Dirty State)"]
+        TabKind["enum TabKind"]
+        TableTab["TableTabState<br/>(Schema, Table, Filter, Diagram)"]
+        ScriptTab["ScriptTabState<br/>(SqlEditorView, Pinned Session, Path)"]
 
-### 4.5 Unparameterized SQL String Formatting in Grid Edits
-- **Location**: `crates/db-wire/src/sql.rs:30-50`
-- **Issue**: Cell updates during inline grid editing are formatted into raw SQL via string interpolation and single-quote escaping (`v.replace('\'', "''")`) rather than parameterized queries (`$1`, `?`).
-- **Impact**: Security risk and syntax failure on complex data types (binary BLOBs with `\0`, complex JSON, timestamps with timezone).
+        QueryCoord["QueryCoordinator<br/>(HashMap<TabId, Operation>)"]
 
-### 4.6 Hardcoded Character Width Constants in Column Sizing
-- **Location**: `crates/ui-grid/src/grid_element/widths.rs:10-25`
-- **Issue**: Column auto-sizing estimates character widths via hardcoded ASCII float tables (`3.8`, `5.2`, `9.5`), dumping all non-ASCII characters into a fallback `6.5` constant.
-- **Impact**: Column widths are incorrectly calculated for Vietnamese, CJK, and other Unicode text, causing truncated cell values.
+        WTarget --> ConnMgr
+        WTarget --> TabMgr
+        WTarget --> QueryCoord
 
-### 4.7 Divergent Tokenizers in `sql-intel`
-- **Location**: `crates/sql-intel/src/parser.rs` vs `crates/sql-intel/src/script.rs`
-- **Issue**: Two distinct parsers coexist: Tree-sitter (`tree-sitter-sequel`) for syntax highlighting and statement detection, and a 550-line custom hand-written byte lexer in `script.rs`. The custom lexer rejects MySQL comment syntax (`#` or `/*!... */`) that Tree-sitter accepts, creating semantic divergence between editing and execution.
-
-### 4.8 Lock Contention in ODBC Query Cancellation
-- **Location**: `crates/db-wire/src/odbc.rs:130-137, 411-436`
-- **Issue**: Statement raw handles are shared via `Arc<Mutex<Option<usize>>>`. If `SQLCancel` blocks or the driver's thread-safety is misconfigured on Linux/macOS `unixODBC`, `ActiveStatement::drop` can deadlock Tokio worker threads.
-
-### 4.9 Unnecessary Heap Copy in Grid Render Loop
-- **Location**: `crates/ui-grid/src/grid_element.rs:89-92`
-- **Issue**: For every visible cell on screen, `pager.get_cell` allocates a new `Vec<u8>` followed by `String::from_utf8_lossy(...).into_owned()`, ignoring the zero-copy closure API `pager.with_cell(...)`.
+        TabMgr --> TabKind
+        TabKind --> TableTab
+        TabKind --> ScriptTab
+    end
+```
 
 ---
 
-## 5. Phased Implementation Roadmap
+## 4. Audit findings
 
-### Phase 1: Critical UI & Concurrency Fixes (P1)
+**FIX** marks a concrete behavior visible in the current code. Capture a failing regression test or a performance baseline before changing it. **VERIFY FIRST** means collect the specified evidence or settle the product requirement before writing implementation code. A confirmed mechanism can still have an unmeasured impact.
 
-- [ ] **P1-01 — Replace One-Div-Per-Character in SQL Editor.**
-  - Migrate `crates/ui-editor/src/editor_view.rs` to use GPUI's `TextSystem` / `ShapedRun` text shaping API for entire lines.
-  - Calculate cursor placement and selection boundaries using line x-coordinates instead of per-character hit-test divs.
-  - *Acceptance*: Typing latency dropped, smooth 60fps scrolling, GPUI element count reduced by >90%.
+| Finding | Decision | Evidence and scope |
+| --- | --- | --- |
+| 4.1 · Editor element count | FIX · P1-01 | In `ui-editor/src/editor_view.rs`, each rendered character gets a container and two cursor hit targets. A 4,000-character view therefore creates roughly 12,000 such elements. Measure typing latency separately. |
+| 4.2 · SSH forwarding | FIX · P2-04 | `SshTunnel::start_forwarding` returns success and drops its listener without forwarding traffic. The README already describes SSH as unsupported. |
+| 4.3 · Temporary row buffers | FIX · P2-01 | `stream.rs`, `pager.rs` and `slotted_page.rs` materialize intermediate vectors. Allocation counts depend on row contents and page rollover. Profile the count and cost on a fixed workload. |
+| 4.4 · Oversized pages | FIX · P2-05 | An empty page accepts a row larger than 64 KiB. Eviction counts pages, so the configured page count cannot enforce the nominal byte budget. |
+| 4.5 · Grid edit values | FIX · P2-02 | `sql.rs` formats values as SQL literals and uses lossy UTF-8 conversion for original row keys. Binary key identity can be lost. **VERIFY FIRST** for claims of exploitable injection or failures with JSON or timestamps. Record the provider, settings, input and observed result. |
+| 4.6 · Unicode column sizing | VERIFY FIRST · P2-06 | `grid_element/widths.rs` uses font measurements where available and estimates the rest. Reproduce clipping with a specific font, value and sizing action. Check whether the estimate, sample limit or width cap determined the result. |
+| 4.7 · Script parsing | VERIFY FIRST · P3-01 | Rejecting MySQL hash and executable comments is documented policy. A parser difference alone does not establish an execution defect. |
+| 4.8 · ODBC cancellation | VERIFY FIRST · P2-07 | `SQLCancel` runs in `spawn_blocking`. Its mutex keeps the statement handle alive while the driver uses it. A blocked call alone does not establish a deadlock. |
+| 4.9 · Grid and export copies | FIX · P2-03 | For fetched, unedited cells, `resolve_cell` copies pager bytes before constructing display text. The CSV and SQL serializers in `db-wire/src/export.rs` also call `get_cell`. Scroll latency and export throughput remain unmeasured. |
 
-- [ ] **P1-02 — Multi-tab Query Concurrency.**
-  - Refactor `Operations` in `crates/app/src/workspace/operations.rs` from `active: Option<Operation>` to a keyed registry `HashMap<TabId, Operation>`.
-  - Ensure background streaming tasks report progress and completion to their owning tab ID.
-  - *Acceptance*: Users can execute queries simultaneously across different tabs/databases without blocking.
+## 5. Phased implementation roadmap
 
-- [ ] **P1-03 — Type-Safe `TabKind` Enum Refactoring.**
-  - Split `TabState` into `enum TabKind { Table(TableTabState), Script(ScriptTabState) }`.
-  - Remove `SqlEditorView` allocation from Table tabs.
-  - Replace heuristic `is_script()` with explicit pattern matching.
-  - *Acceptance*: Reduced memory consumption when opening multiple table tabs; no dead fields.
+### Phase 1 · Editor and tab ownership
 
----
+- [ ] **P1-01 · FIX · Reduce per-character editor elements.** Record element count and typing latency on the same document and viewport before and after the change. Exercise cursor placement, selection and Unicode text when replacing per-character hit targets.
+- [ ] **P1-02 · VERIFY FIRST · Concurrent queries across tabs.** The global operation limit is confirmed. Define which sessions may overlap and how cancellation targets one operation when tabs share a driver. Before enabling overlap, test same-connection cancellation, stale completion, save ownership and script cleanup.
+- [ ] **P1-03 · VERIFY FIRST · Typed tab state.** Trace script, table and column-editor creation, close and dirty-state handling. Measure the cost of opening table tabs and identify which editor fields each tab needs before choosing enum variants.
 
-### Phase 2: Data Pipeline, Security & Performance Fixes (P2)
+### Phase 2 · Data pipeline and provider behavior
 
-- [ ] **P2-01 — Zero-Allocation Streaming Pipeline.**
-  - Refactor row intake across `stream.rs`, `pager.rs`, and `slotted_page.rs`.
-  - Use a reusable row buffer / slice borrowing (`&[&[u8]]`) to serialize directly into `SlottedPage.payload` without intermediate `Vec` allocations.
-  - *Acceptance*: Memory allocator churn during large queries reduced by >80%; query streaming throughput improved.
+- [ ] **P2-01 · FIX · Reduce temporary row buffers.** Profile allocations and throughput on identical rows before and after. Preserve nullable cells with borrowed optional slices or a null bitmap. Test SQL NULL and empty bytes on both sides of a page rollover and after spill/reload.
+- [ ] **P2-02 · FIX · Preserve typed grid edit values.** Reproduce a binary-key edit with invalid UTF-8 on a supporting provider. Carry original keys and typed values through the change set, SQL builder and driver execution boundary. Test NULL, binary and quoted values, and rollback when an edit affects other than one row. Agree the driver API change before implementation.
+- [ ] **P2-03 · FIX · Remove intermediate pager copies.** Use `with_cell` where consumers can process bytes inside the callback. Keep ownership where GPUI requires it. Compare grid text and exported CSV/SQL bytes, including NULL, empty and edited cells where applicable. Measure scrolling and export separately.
+- [ ] **P2-04 · FIX · Stop reporting a working SSH tunnel.** While forwarding is unsupported, make the stub return an explicit unsupported error and test that callers cannot receive a successful tunnel. Implementing SSH forwarding is a separate feature decision.
+- [ ] **P2-05 · FIX · Account for resident page bytes.** Test multiple rows larger than 64 KiB under a small byte budget. Account for the active page as well as cached pages, define the allowance for a single oversized row, and verify eviction and byte-for-byte readback. Choose overflow storage only if needed to meet the bound.
+- [ ] **P2-06 · VERIFY FIRST · Unicode column sizing.** Capture the clipping case described in 4.6 and compare the final width with the measured glyph width. Change sizing only if the reproduction identifies an incorrect width.
+- [ ] **P2-07 · VERIFY FIRST · ODBC cancellation.** On a named driver and version, cancel a running statement under a bounded test timeout. Capture thread stacks if it hangs. Establish which calls wait on each other before changing statement-handle synchronization.
 
-- [ ] **P2-02 — Parameterized Queries for Data Editing.**
-  - Update `crates/db-wire/src/sql.rs` and `crates/app/src/workspace/data_edit.rs` to construct parameterized queries with driver-level bind parameters (`$1`, `?`).
-  - *Acceptance*: Reliable saving of BLOBs, JSON, and special characters; elimination of SQL injection vulnerabilities.
+### Phase 3 · Architecture and updater verification
 
-- [ ] **P2-03 — Zero-Copy Grid Rendering and Export.**
-  - Refactor `crates/ui-grid/src/grid_element.rs` and `crates/app/src/workspace/export.rs` to use `QueryResultPager::with_cell`.
-  - Borrow byte slices directly for text clipping and CSV/TSV serialization.
-  - *Acceptance*: No micro-stutters during rapid grid scrolling; export performance improved.
-
-- [ ] **P2-04 — Resolve SSH Tunneling Stub.**
-  - Either implement a true TCP forwarding loop using `russh` channels in `crates/db-wire/src/ssh_tunnel.rs`, or explicitly disable/hide SSH configuration in `ConnectionDialog` until implemented.
-  - *Acceptance*: No silent connection drops or misleading UI promises.
-
-- [ ] **P2-05 — SlottedPage Oversized Row & Memory Accounting.**
-  - Add explicit byte-size tracking to `QueryResultPager` so LRU eviction operates on total resident bytes rather than a naive 64KB $\times$ page count assumption.
-  - Implement dedicated overflow/spill pages for rows exceeding 64KB.
-  - *Acceptance*: Large JSON/LOB queries do not cause unbounded RAM growth.
-
----
-
-### Phase 3: Architecture Consolidation (P3)
-
-- [ ] **P3-01 — Unify SQL Parsing under Tree-sitter.**
-  - Consolidate statement splitting and formatting in `crates/sql-intel` onto the Tree-sitter AST parser.
-  - Remove the 550-line custom hand-written lexer in `script.rs`.
-  - *Acceptance*: Consistent syntax support (including MySQL comments) across editor highlighting and execution.
-
-- [ ] **P3-02 — Lock-Free Trie Schema Cache for Autocomplete.**
-  - Replace the SQLite in-memory database in `crates/sql-intel/src/schema_cache.rs` with an in-memory prefix trie (e.g., `radix_trie` or `fst`).
-  - *Acceptance*: Autocomplete suggestions return in <1ms without Mutex locking or SQL execution overhead.
-
-- [ ] **P3-03 — Standardize Keyboard Shortcuts via GPUI Action Context.**
-  - Refactor `crates/app/src/workspace/keyboard.rs` (466 LOC key interceptor) into GPUI `Action` definitions registered on specific focus contexts.
-  - *Acceptance*: Clean action routing; enables user-configurable keybindings.
-
-- [ ] **P3-04 — Modularize `Workspace` Partial Implementations.**
-  - Decompose `Workspace` into discrete sub-components (`ConnectionManager`, `TabManager`, `FilterBuilderModal`, `ColumnEditorModal`) owning their respective state.
-  - Remove partial `impl Workspace` blocks across the 40 files in `crates/app/src/workspace/`.
-  - *Acceptance*: Clear state boundaries; unit-testable components.
-
-- [ ] **P3-05 — Cryptographic Verification for Auto-Updater.**
-  - Integrate Minisign public key verification (`resources/minisign.pub`) and SHA256 checksum checks into `crates/app/src/updater.rs` before invoking macOS packaging scripts.
-  - *Acceptance*: Downloaded artifacts are cryptographically verified before installation.
+- [ ] **P3-01 · VERIFY FIRST · Script parser consolidation.** Identify a failing case within the documented execution policy or agree on a dialect change. Preserve transaction preflight, persistent-session rules and rejection of an invalid script before its first write. Evaluate Tree-sitter against those cases before retiring the lexer.
+- [ ] **P3-02 · VERIFY FIRST · Autocomplete cache.** Measure lookup latency and lock wait with representative schema sizes during refresh. Consider a trie only if lookup or contention misses an agreed latency target.
+- [ ] **P3-03 · VERIFY FIRST · Keyboard action routing.** Identify a concrete routing failure or an agreed keybinding requirement. Trace focus and shortcut precedence before migrating handlers.
+- [ ] **P3-04 · VERIFY FIRST · Workspace decomposition.** Identify a state invariant that current ownership makes difficult to enforce. For the startup I/O concern, measure time to first frame with representative saved connections. Use those findings to scope the refactor.
+- [ ] **P3-05 · FIX · Verify updates before opening or installing them.** Require published updates to include a signed checksum manifest. Verify its Minisign signature with the trusted key and match the selected artifact's SHA256 before every install or manual-open fallback. Test a valid release, missing or invalid signature, absent manifest entry and mismatched artifact.
