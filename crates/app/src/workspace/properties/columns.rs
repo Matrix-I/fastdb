@@ -3,6 +3,13 @@ use crate::workspace::ddl::render_dbeaver_col_badge;
 use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
+    pub(in crate::workspace) fn selected_column_details(&self, name: &str) -> Option<String> {
+        self.columns
+            .iter()
+            .find(|column| column.name == name)
+            .map(column_details)
+    }
+
     pub(in crate::workspace) fn render_columns(
         &self,
         theme: &Theme,
@@ -247,5 +254,86 @@ impl TableProperties {
         }
 
         col_grid.into_any_element()
+    }
+}
+
+fn column_details(column: &db_wire::ColumnMeta) -> String {
+    // Summary metadata cannot distinguish absent values from unsupported fields.
+    // Preserve native spelling rather than the normalized grid display type.
+    format!(
+        "Name: {}\nNative type: {}\nNullable: {}\nCollation: {}\nDefault: {}\nComment: {}",
+        column.name,
+        column.raw_type.as_deref().unwrap_or("Unavailable"),
+        if column.nullable { "Yes" } else { "No" },
+        column.collation.as_deref().unwrap_or("Not reported"),
+        column.default_val.as_deref().unwrap_or("Not reported"),
+        column.comment.as_deref().unwrap_or("Not reported"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::column_details;
+    use db_wire::{ColumnMeta, DataType};
+
+    #[test]
+    fn details_preserve_full_native_values_and_unicode() {
+        let column = ColumnMeta::new("Long column 名", DataType::Text)
+            .with_raw_type("\"MixedCase\".\"Domain\"[]")
+            .with_default("'first\nsecond'::text")
+            .with_collation("\"MixedCase\".\"Collation\"")
+            .with_comment("First line\nSecond line 名")
+            .with_nullable(false);
+        let text = column_details(&column);
+        assert!(text.contains("Name: Long column 名\n"));
+        assert!(text.contains("Native type: \"MixedCase\".\"Domain\"[]\n"));
+        assert!(text.contains("Default: 'first\nsecond'::text\n"));
+        assert!(text.contains("Collation: \"MixedCase\".\"Collation\"\n"));
+        assert!(text.contains("Nullable: No\n"));
+        assert!(text.ends_with("Comment: First line\nSecond line 名"));
+    }
+
+    #[test]
+    fn missing_values_are_distinct_from_empty_and_sql_null() {
+        let column = ColumnMeta::new("value", DataType::Text);
+        let text = column_details(&column);
+        assert!(text.contains("Native type: Unavailable\n"));
+        assert!(text.contains("Collation: Not reported\n"));
+        assert!(text.contains("Default: Not reported\n"));
+        assert!(text.ends_with("Comment: Not reported"));
+        let text = column_details(&column.with_default("NULL").with_comment(""));
+        assert!(text.contains("Default: NULL\n"));
+        assert!(text.ends_with("Comment: "));
+    }
+
+    #[test]
+    fn selection_resolves_exact_column_and_disappears_after_refresh() {
+        use super::TableProperties;
+        let mut model = TableProperties::new(
+            db_wire::DbDriverKind::Sqlite,
+            "main".into(),
+            "items".into(),
+            vec![
+                ColumnMeta::new("Name", DataType::Text).with_comment("first"),
+                ColumnMeta::new("name", DataType::Text).with_comment("second"),
+            ],
+            vec![],
+            vec![],
+        );
+        assert!(
+            model
+                .selected_column_details("Name")
+                .unwrap()
+                .ends_with("first")
+        );
+        assert!(
+            model
+                .selected_column_details("name")
+                .unwrap()
+                .ends_with("second")
+        );
+        assert_eq!(model.selected_column_details("missing"), None);
+        model.columns.clear();
+        assert_eq!(model.selected_column_details("Name"), None);
     }
 }

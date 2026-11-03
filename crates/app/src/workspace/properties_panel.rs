@@ -282,7 +282,49 @@ impl Workspace {
                         model.table.clone(),
                         cx,
                     );
+                    // Details follow the grid so selection cannot shift double-click targets.
                     right_content = right_content.child(model.render_columns(theme, pick));
+                    let selected_details =
+                        self.column_pick
+                            .as_ref()
+                            .and_then(|(owner, schema, table, column)| {
+                                (tab.connection_id.as_ref() == Some(owner)
+                                    && schema == &model.schema
+                                    && table == &model.table)
+                                    .then(|| model.selected_column_details(column))
+                                    .flatten()
+                            });
+                    if let Some(details) = selected_details {
+                        let copy = details.clone();
+                        right_content = right_content.child(
+                            div()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    // Keep the selected column while using its inspector.
+                                    cx.stop_propagation();
+                                })
+                                .p_3()
+                                .flex()
+                                .flex_col()
+                                .flex_shrink_0()
+                                .gap_2()
+                                .text_size(px(12.0))
+                                .child(super::script_tools::tool("Copy column details").on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.clipboard_request_id += 1;
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copy.clone(),
+                                        ));
+                                    }),
+                                ))
+                                .child(details),
+                        );
+                    } else {
+                        right_content = right_content.child(
+                            div().p_2().text_color(theme.text_muted).child(
+                                "Select a column to inspect and copy its full values. Double-click or press Enter to open its editor.",
+                            ),
+                        );
+                    }
                 }
                 PropertySection::Constraints => {
                     right_content = right_content.child(model.render_constraints(theme));
