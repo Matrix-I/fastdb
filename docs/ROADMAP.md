@@ -4,6 +4,8 @@ Audited: **2026-11-02** against the current working tree, including in-progress 
 
 Follow-up: [DBeaver GUI and business workflow analysis](DBEAVER_WORKFLOWS.md) specifies the column editor, draft/persist lifecycle and screen-family coverage. Direct DBeaver inspection is pending desktop permission; documentation-backed behavior is distinguished from proposed FastDB contracts.
 
+Architecture & technical debt backlog: [Codebase Architecture & Improvement Plan](plans/2026-11-03-codebase-architecture-improvements.md) documents God files, bad designs, and phased refactoring tasks (P1–P3).
+
 ## Status and completion rules
 
 | Status | Meaning |
