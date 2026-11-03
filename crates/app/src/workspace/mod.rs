@@ -34,6 +34,10 @@ mod grid_selection;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
+mod navigator_reveal;
+mod object_browser;
+mod object_favorites;
+mod object_search;
 mod operations;
 mod panel_resize;
 mod panes;
@@ -142,6 +146,8 @@ pub struct Workspace {
     pub active_tab: usize,
     pub tabs: Vec<TabState>,
     tab_scroll: ScrollHandle,
+    navigator_scroll: ScrollHandle,
+    navigator_anchor: ScrollAnchor,
     revealed_tab: Option<(u64, usize, usize)>,
     operations: Operations,
     column_pending: Option<column_editor::PendingColumn>,
@@ -159,6 +165,8 @@ pub struct Workspace {
     clipboard_request_id: u64,
     pub(super) allow_quit: bool,
     /// "Choose SQL script" dialog, if open
+    object_browser: Option<object_browser::ObjectBrowser>,
+    object_search: Option<object_search::ObjectSearch>,
     pub script_chooser: Option<ScriptChooser>,
 
     pub value_panel: ValuePanelState,
@@ -207,12 +215,15 @@ impl Workspace {
                 );
             },
         );
+        let navigator_scroll = ScrollHandle::new();
         let workspace = Self {
             theme,
             focus_handle,
             active_tab: 0,
             tabs: Vec::new(),
             tab_scroll: ScrollHandle::new(),
+            navigator_anchor: ScrollAnchor::for_handle(navigator_scroll.clone()),
+            navigator_scroll,
             revealed_tab: None,
             operations: Operations::default(),
             column_pending: None,
@@ -232,6 +243,8 @@ impl Workspace {
             script_request_id: 0,
             clipboard_request_id: 0,
             allow_quit: false,
+            object_browser: None,
+            object_search: None,
             script_chooser: None,
             script_action: None,
             script_search: None,
@@ -510,6 +523,12 @@ impl Render for Workspace {
         }
 
         // 4. Modal Dialog: Database Connection Setup
+        if self.object_browser.is_some() {
+            root = root.child(self.render_object_browser(cx));
+        }
+        if self.object_search.is_some() {
+            root = root.child(self.render_object_search(cx));
+        }
         if self.filter_builder.is_some() {
             root = root.child(self.render_filter_builder(cx));
         }

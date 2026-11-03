@@ -42,6 +42,13 @@ What exists today that these targets build on: a paged result store with an LRU 
 - Saved connection passwords use the OS keychain (macOS Keychain / Linux Secret Service). Existing plaintext passwords migrate automatically after successful keychain storage; config files retain only credential references. Keychain/save failures are shown in the workspace with a retry action.
 
 ### Database navigator
+
+- **Browse catalog objects** pages through PostgreSQL sequences, functions/procedures, user triggers and user-defined types, with on-demand read-only metadata/source (256 KiB limit). Other providers show unsupported status. Favorites persist by connection, schema, kind, name and signature, with explicit missing-object and save-error feedback.
+
+- **Reveal active object** expands and scrolls to the active relation tab in its owning live connection, including views and column tabs. Objects absent from loaded metadata cannot be revealed.
+
+- **Search objects** finds loaded tables/views by schema or relation name and columns by name in the selected connection. Enter runs a case-insensitive literal search. Click a result to open the relation or inspect the column’s cached native metadata. Use a qualified name to narrow the search. Results are capped at 50.
+- Relations are grouped into Tables, Views, Materialized Views and Other Relations using the provider's loaded metadata. Unknown relation kinds stay visible; each folder expands independently and opens the existing data/metadata workflow. Empty folders describe loaded metadata only. Providers that do not discover an object kind cannot populate that folder yet. Manual acceptance is deferred.
 - DBeaver-style tree: connection → databases → schemas → tables → columns, constraints, foreign keys, indexes.
 - Schema metadata (tables, columns, primary keys, constraints, indexes) is loaded in bulk when you connect.
 
@@ -322,6 +329,25 @@ For local macOS builds, use the root script (same workflow as Litty):
 
 Outputs go to `dist/`: `FastDB.app`, `FastDB.dmg` (with an Applications shortcut),
 `FastDB-macos.zip`, and `fastdb-macos`, plus architecture-suffixed binary/ZIP copies.
+The script also writes `SHA256SUMS.txt` for `FastDB.dmg`, the architecture-suffixed
+ZIP and standalone binary. With minisign installed and a secret key available,
+it signs the manifest as `SHA256SUMS.txt.minisig` and verifies the signature against
+`FASTDB_MINISIGN_PUBKEY` (base64 public key), falling back to the last line of
+`resources/minisign.pub`. Set `MINISIGN_SECRET_KEY` to your secret-key path;
+the default is `~/.minisign/minisign.key`. Keep private keys outside the repository.
+Missing minisign or secret key produces unsigned checksums with a warning.
+Signing requires a public key; failed signing or a key mismatch fails packaging
+and removes the signature. Upload the manifest/signature alongside those exact
+artifacts. The current FastDB updater does not verify minisign signatures yet.
+
+```bash
+MINISIGN_SECRET_KEY=/path/to/fastdb.key \
+FASTDB_MINISIGN_PUBKEY='<base64-public-key>' ./bundle_macos.sh --no-install
+# Verify the manifest before checking the artifact hashes:
+minisign -V -m dist/SHA256SUMS.txt -p /path/to/fastdb.pub
+(cd dist && shasum -a 256 -c SHA256SUMS.txt)
+```
+
 The app is signed ad-hoc for local use; distribution signing and notarization are separate steps.
 Both macOS packaging scripts use `diskutil image create from` when available,
 with an `hdiutil` fallback for older macOS versions.

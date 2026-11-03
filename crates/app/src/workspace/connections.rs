@@ -303,7 +303,7 @@ impl Workspace {
                             .navigator_mut()
                             .nav_subfolder_expanded
                             .clear();
-                        this.connections.navigator_mut().selected_table_name = None;
+                        this.connections.navigator_mut().selected_relation = None;
 
                         for t in this.connections.active().tables.clone() {
                             this.connections
@@ -313,7 +313,7 @@ impl Workspace {
                             this.connections
                                 .navigator_mut()
                                 .nav_tables_expanded
-                                .insert(t.schema.clone());
+                                .insert(super::navigator::table_folder_key(&t.schema));
                         }
 
                         let cache = this.connections.active().schema_cache.clone();
@@ -363,7 +363,7 @@ impl Workspace {
             .is_some_and(|s| s.driver.is_some())
     }
 
-    fn activate_live_connection(&mut self, conn_id: &str) -> bool {
+    pub(super) fn activate_live_connection(&mut self, conn_id: &str) -> bool {
         if !self.is_connection_live(conn_id) {
             return false;
         }
@@ -513,7 +513,7 @@ impl Workspace {
             }
             col_map.insert((schema, table), cols);
         }
-        self.connections.session_mut(connection_id).table_columns = col_map;
+        self.connections.session_mut(connection_id).table_columns = Arc::new(col_map);
 
         let mut constr_map = HashMap::new();
         for (schema, table, cname, ctype) in metadata.constraints {

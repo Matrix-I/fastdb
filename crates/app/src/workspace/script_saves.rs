@@ -300,6 +300,8 @@ impl Workspace {
         }
     }
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
+        self.object_browser = None;
+        self.object_search = None;
         self.script_search = None;
         self.filter_builder = None;
         self.script_chooser = None;

@@ -1,5 +1,5 @@
 use super::{FormField, SavedConnection};
-use db_wire::{ColumnMeta, ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
+use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, TableSummary};
 use sql_intel::SchemaCache;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -37,7 +37,7 @@ pub(super) struct NavigatorState {
     pub nav_tables_expanded: HashSet<String>,
     pub nav_table_expanded: HashSet<String>,
     pub nav_subfolder_expanded: HashSet<String>,
-    pub selected_table_name: Option<String>,
+    pub selected_relation: Option<(String, String)>,
 }
 impl Default for NavigatorState {
     fn default() -> Self {
@@ -53,12 +53,12 @@ impl Default for NavigatorState {
             },
             nav_tables_expanded: {
                 let mut s = HashSet::new();
-                s.insert("public".to_string());
+                s.insert(super::navigator::table_folder_key("public"));
                 s
             },
             nav_table_expanded: HashSet::new(),
             nav_subfolder_expanded: HashSet::new(),
-            selected_table_name: None,
+            selected_relation: None,
         }
     }
 }
@@ -72,7 +72,7 @@ pub(super) struct ConnectionSession {
     pub driver: Option<Arc<dyn DatabaseDriver>>,
     pub schema_cache: Arc<SchemaCache>,
     pub tables: Vec<TableSummary>,
-    pub table_columns: HashMap<(String, String), Vec<ColumnMeta>>,
+    pub table_columns: Arc<super::object_search::ColumnMap>,
     pub table_constraints: HashMap<(String, String), Vec<(String, String)>>,
     pub table_indexes: HashMap<(String, String), Vec<String>>,
 }
@@ -87,7 +87,7 @@ impl Default for ConnectionSession {
             driver: None,
             schema_cache: Arc::new(SchemaCache::new().expect("schema cache")),
             tables: Vec::new(),
-            table_columns: HashMap::new(),
+            table_columns: Arc::default(),
             table_constraints: HashMap::new(),
             table_indexes: HashMap::new(),
         }

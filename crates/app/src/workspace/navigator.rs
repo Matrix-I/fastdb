@@ -1,4 +1,5 @@
 use super::*;
+use gpui::prelude::FluentBuilder;
 
 impl Workspace {
     /// DBeaver-style database navigator tree in the left sidebar
@@ -66,6 +67,25 @@ impl Workspace {
                         ),
                     ),
             )
+            .when(self.connections.active().driver.is_some(), |panel| {
+                panel.child(script_tools::tool("Search objects…").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.open_object_search(cx);
+                        window.focus(&this.focus_handle);
+                    },
+                )))
+            })
+            .when(self.active_reveal_target().is_some(), |panel| {
+                panel.child(script_tools::tool("Reveal active object").on_click(
+                    cx.listener(|this, _, window, cx| this.reveal_active_object(window, cx)),
+                ))
+            })
+            .when(self.connections.active().driver.is_some(), |panel| {
+                panel.child(
+                    script_tools::tool("Browse catalog objects…")
+                        .on_click(cx.listener(|this, _, _, cx| this.open_object_browser(cx))),
+                )
+            })
             // Tree View Container with vertical scroll
             .child({
                 let mut nav_tree = div()
@@ -74,6 +94,7 @@ impl Workspace {
                     .flex_col()
                     .flex_1()
                     .overflow_y_scroll()
+                    .track_scroll(&self.navigator_scroll)
                     .gap_0p5();
 
                 if self.connections.saved_connections.is_empty()
@@ -176,4 +197,9 @@ fn toggle_key(set: &mut HashSet<String>, key: &str) {
 mod connection;
 mod details;
 mod schema;
+pub(super) use schema::RelationGroup;
 mod table;
+
+pub(super) fn table_folder_key(schema: &str) -> String {
+    schema::table_folder_key(schema)
+}

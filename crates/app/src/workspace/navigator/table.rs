@@ -16,8 +16,8 @@ impl Workspace {
             .navigator()
             .nav_table_expanded
             .contains(&table_key);
-        let is_selected =
-            self.connections.navigator().selected_table_name.as_deref() == Some(&table_name);
+        let is_selected = self.connections.navigator().selected_relation.as_ref()
+            == Some(&(table_schema.clone(), table_name.clone()));
         let item_id = format!("nav-table-{}-{}", table_schema, table_name);
 
         let t_schema_for_click = table_schema.clone();
@@ -42,13 +42,14 @@ impl Workspace {
                         this.query_table(connection_id, &t_schema_for_click, &t_name_for_click, cx);
                     }
                 } else {
-                    this.connections.navigator_mut().selected_table_name =
-                        Some(t_name_for_click.clone());
+                    this.connections.navigator_mut().selected_relation =
+                        Some((t_schema_for_click.clone(), t_name_for_click.clone()));
                     cx.notify();
                 }
             }));
 
         if is_selected {
+            row_div = row_div.anchor_scroll(Some(self.navigator_anchor.clone()));
             row_div = row_div.bg(rgb(0x135ba2));
         }
 

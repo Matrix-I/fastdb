@@ -205,6 +205,24 @@ pub struct ForeignKey {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    /// None denotes unsupported discovery, distinct from a successfully empty page.
+    async fn list_objects(
+        &self,
+        _kind: crate::objects::ObjectKind,
+        _after: u32,
+    ) -> Result<Option<crate::objects::ObjectPage>> {
+        Ok(None)
+    }
+
+    /// Native identity must still resolve to the requested schema, name and qualifier.
+    async fn object_source(
+        &self,
+        _kind: crate::objects::ObjectKind,
+        _object: &crate::objects::ObjectSummary,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Declares implemented readers; availability does not imply permission or nonempty results.
     fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
         crate::metadata::MetadataCapabilities::default()

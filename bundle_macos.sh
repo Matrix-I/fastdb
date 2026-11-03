@@ -23,6 +23,14 @@ APP_NAME="FastDB"
 DIST_DIR="$DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
+SUMS="$DIST_DIR/SHA256SUMS.txt"
+MINISIGN_PUB_FILE="$DIR/resources/minisign.pub"
+MINISIGN_SEC_FILE="${MINISIGN_SECRET_KEY:-$HOME/.minisign/minisign.key}"
+if [ -z "${FASTDB_MINISIGN_PUBKEY:-}" ] && [ -f "$MINISIGN_PUB_FILE" ]; then
+    FASTDB_MINISIGN_PUBKEY="$(tail -n 1 "$MINISIGN_PUB_FILE")"
+fi
+# A failed rebuild must not leave a signature advertising older artifacts.
+rm -f "$SUMS" "$SUMS.minisig"
 VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
 if [ -z "$VERSION" ]; then
     echo "Could not read the workspace version from Cargo.toml." >&2
@@ -90,6 +98,28 @@ ARCH="$(uname -m)"
 cp "$DIST_DIR/fastdb-macos" "$DIST_DIR/fastdb-macos-$ARCH"
 cp "$DIST_DIR/FastDB-macos.zip" "$DIST_DIR/FastDB-macos-$ARCH.zip"
 
+echo "==> Writing checksums and minisign signature..."
+(cd "$DIST_DIR" && shasum -a 256 "FastDB.dmg" "FastDB-macos-$ARCH.zip" "fastdb-macos-$ARCH" > SHA256SUMS.txt)
+if ! command -v minisign >/dev/null 2>&1; then
+    echo "WARNING: minisign not installed (brew install minisign); $SUMS left unsigned." >&2
+elif [ ! -f "$MINISIGN_SEC_FILE" ]; then
+    echo "WARNING: no minisign secret key at $MINISIGN_SEC_FILE; $SUMS left unsigned." >&2
+elif [ -z "${FASTDB_MINISIGN_PUBKEY:-}" ]; then
+    echo "ERROR: set FASTDB_MINISIGN_PUBKEY or provide resources/minisign.pub before signing." >&2
+    exit 1
+else
+    if ! minisign -S -s "$MINISIGN_SEC_FILE" -m "$SUMS"; then
+        rm -f "$SUMS.minisig"
+        echo "ERROR: minisign signing failed." >&2
+        exit 1
+    fi
+    if ! minisign -V -q -m "$SUMS" -P "$FASTDB_MINISIGN_PUBKEY"; then
+        rm -f "$SUMS.minisig"
+        echo "ERROR: minisign signature does not match FASTDB_MINISIGN_PUBKEY." >&2
+        exit 1
+    fi
+fi
+
 if [ "$INSTALL" = true ] && [ -d "$HOME/Applications" ]; then
     echo "==> Installing to $HOME/Applications/$APP_NAME.app..."
     rm -rf "$HOME/Applications/$APP_NAME.app"
@@ -100,3 +130,7 @@ fi
 
 echo "==> Done! Outputs ready in $DIST_DIR:"
 ls -ldh "$APP_DIR" "$DMG_PATH" "$DIST_DIR/fastdb-macos" "$DIST_DIR/FastDB-macos.zip"
+ls -lh "$SUMS"
+if [ -f "$SUMS.minisig" ]; then
+    ls -lh "$SUMS.minisig"
+fi
