@@ -2,6 +2,7 @@ pub mod binary_decoder;
 mod catalog;
 mod column;
 mod metadata;
+mod objects;
 mod script;
 
 use anyhow::{Context, Result};
@@ -229,6 +230,22 @@ impl DatabaseDriver for PostgresDriver {
             task,
             self.config.clone(),
         )))
+    }
+
+    async fn list_objects(
+        &self,
+        kind: crate::objects::ObjectKind,
+        after: u32,
+    ) -> Result<Option<crate::objects::ObjectPage>> {
+        self.object_page(kind, after).await.map(Some)
+    }
+
+    async fn object_source(
+        &self,
+        kind: crate::objects::ObjectKind,
+        object: &crate::objects::ObjectSummary,
+    ) -> Result<Option<String>> {
+        self.read_object_source(kind, object).await.map(Some)
     }
 
     async fn load_catalog_section(

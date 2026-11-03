@@ -7,6 +7,7 @@ pub mod export;
 pub mod filter;
 pub mod metadata;
 pub mod mysql;
+pub mod objects;
 pub mod odbc;
 pub mod postgres;
 pub mod query_plan;
