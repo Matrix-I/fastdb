@@ -92,6 +92,15 @@ impl Workspace {
                         let type_str = c.data_type.display_name().to_lowercase();
                         let is_nullable = c.nullable;
 
+                        let active_conn_id = self
+                            .connections
+                            .active_connection_id
+                            .clone()
+                            .unwrap_or_default();
+                        let col_name_for_menu = col_name.clone();
+                        let schema_for_col = table_schema.clone();
+                        let table_for_col = table_name.clone();
+
                         nav_tree = nav_tree.child(
                             div()
                                 .id(ElementId::Name(
@@ -102,6 +111,22 @@ impl Workspace {
                                     pick(picked_name.clone(), event.click_count, window, cx);
                                     cx.stop_propagation();
                                 })
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        this.open_nav_target_context_menu(
+                                            NavContextTarget::Column {
+                                                conn_id: active_conn_id.clone(),
+                                                schema: schema_for_col.clone(),
+                                                table: table_for_col.clone(),
+                                                column: col_name_for_menu.clone(),
+                                            },
+                                            event.position,
+                                        );
+                                        cx.notify();
+                                    }),
+                                )
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -229,8 +254,38 @@ impl Workspace {
             if let Some(constrs) = constraints_for_table {
                 for (cname, ctype) in constrs {
                     rendered_any = true;
+                    let active_conn_id = self
+                        .connections
+                        .active_connection_id
+                        .clone()
+                        .unwrap_or_default();
+                    let constr_name = cname.clone();
+                    let constr_type = Some(ctype.clone());
+                    let schema_for_constr = table_schema.clone();
+                    let table_for_constr = table_name.clone();
                     nav_tree = nav_tree.child(
                         div()
+                            .id(ElementId::Name(
+                                format!("nav-constr-{}-{}-{}", table_schema, table_name, cname)
+                                    .into(),
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.open_nav_target_context_menu(
+                                        NavContextTarget::Constraint {
+                                            conn_id: active_conn_id.clone(),
+                                            schema: schema_for_constr.clone(),
+                                            table: table_for_constr.clone(),
+                                            constraint: constr_name.clone(),
+                                            constraint_type: constr_type.clone(),
+                                        },
+                                        event.position,
+                                    );
+                                    cx.notify();
+                                }),
+                            )
                             .flex()
                             .items_center()
                             .gap_1p5()
@@ -402,8 +457,35 @@ impl Workspace {
             if let Some(idxs) = idxs_for_table {
                 for iname in idxs {
                     rendered_any = true;
+                    let active_conn_id = self
+                        .connections
+                        .active_connection_id
+                        .clone()
+                        .unwrap_or_default();
+                    let index_name = iname.clone();
+                    let schema_for_idx = table_schema.clone();
+                    let table_for_idx = table_name.clone();
                     nav_tree = nav_tree.child(
                         div()
+                            .id(ElementId::Name(
+                                format!("nav-idx-{}-{}-{}", table_schema, table_name, iname).into(),
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.open_nav_target_context_menu(
+                                        NavContextTarget::Index {
+                                            conn_id: active_conn_id.clone(),
+                                            schema: schema_for_idx.clone(),
+                                            table: table_for_idx.clone(),
+                                            index: index_name.clone(),
+                                        },
+                                        event.position,
+                                    );
+                                    cx.notify();
+                                }),
+                            )
                             .flex()
                             .items_center()
                             .gap_1p5()

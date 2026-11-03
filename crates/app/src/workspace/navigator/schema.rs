@@ -66,42 +66,70 @@ impl Workspace {
                     .nav_tables_expanded
                     .contains(&key);
                 let toggle = key.clone();
+                let conn_id = self
+                    .connections
+                    .active_connection_id
+                    .clone()
+                    .unwrap_or_default();
+                let schema_for_menu = schema_name.clone();
+                let is_views = group == RelationGroup::Views;
+
+                let mut folder_row = div()
+                    .id(ElementId::Name(format!("nav-relations-{key}").into()))
+                    .flex()
+                    .items_center()
+                    .h(px(22.0))
+                    .pl(px(62.0))
+                    .rounded_sm()
+                    .hover(|s| s.bg(theme.bg_surface_hover));
+
+                if !conn_id.is_empty()
+                    && (group == RelationGroup::Tables || group == RelationGroup::Views)
+                {
+                    let schema = schema_for_menu.clone();
+                    let conn_id_clone = conn_id.clone();
+                    folder_row = folder_row.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.open_nav_target_context_menu(
+                                NavContextTarget::Folder {
+                                    conn_id: conn_id_clone.clone(),
+                                    schema: schema.clone(),
+                                    is_views,
+                                },
+                                event.position,
+                            );
+                            cx.notify();
+                        }),
+                    );
+                }
+
                 nav_tree = nav_tree.child(
-                    div()
-                        .id(ElementId::Name(format!("nav-relations-{key}").into()))
-                        .flex()
-                        .items_center()
-                        .h(px(22.0))
-                        .pl(px(62.0))
-                        .rounded_sm()
-                        .hover(|s| s.bg(theme.bg_surface_hover))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1p5()
-                                .text_size(px(11.5))
-                                .child(nav_chevron(
-                                    format!("nav-chev-relations-{key}"),
-                                    if expanded { "▾" } else { "▸" },
-                                    12.0,
-                                    10.0,
-                                    theme.text_muted,
-                                    theme.text_primary,
-                                    cx,
-                                    move |this, _| {
-                                        toggle_key(
-                                            &mut this
-                                                .connections
-                                                .navigator_mut()
-                                                .nav_tables_expanded,
-                                            &toggle,
-                                        )
-                                    },
-                                ))
-                                .child(img("icons/folder_table.svg").w(px(16.0)).h(px(16.0)))
-                                .child(group.label()),
-                        ),
+                    folder_row.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .text_size(px(11.5))
+                            .child(nav_chevron(
+                                format!("nav-chev-relations-{key}"),
+                                if expanded { "▾" } else { "▸" },
+                                12.0,
+                                10.0,
+                                theme.text_muted,
+                                theme.text_primary,
+                                cx,
+                                move |this, _| {
+                                    toggle_key(
+                                        &mut this.connections.navigator_mut().nav_tables_expanded,
+                                        &toggle,
+                                    )
+                                },
+                            ))
+                            .child(img("icons/folder_table.svg").w(px(16.0)).h(px(16.0)))
+                            .child(group.label()),
+                    ),
                 );
                 if expanded {
                     let mut found = false;

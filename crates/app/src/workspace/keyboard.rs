@@ -79,6 +79,13 @@ impl Workspace {
             self.object_search_key(&event.keystroke, cx);
             return;
         }
+        if self.schema_action_modal.is_some()
+            && !self.updates.read(cx).is_open()
+            && self.column_pending.is_none()
+        {
+            self.schema_action_modal_key(&event.keystroke, cx);
+            return;
+        }
         if self.script_search.is_some() {
             self.search_key(&event.keystroke, cx);
             return;

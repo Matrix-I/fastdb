@@ -23,6 +23,10 @@ impl Workspace {
         let t_schema_for_click = table_schema.clone();
         let t_name_for_click = table_name.clone();
         let connection_id = self.connections.active_connection_id.clone();
+        let conn_id_for_menu = connection_id.clone().unwrap_or_default();
+        let is_view = RelationGroup::from_type(&t.table_type) == RelationGroup::Views;
+        let menu_schema = table_schema.clone();
+        let menu_table = table_name.clone();
 
         let mut row_div = div()
             .id(ElementId::Name(item_id.into()))
@@ -47,6 +51,33 @@ impl Workspace {
                     cx.notify();
                 }
             }));
+
+        if !conn_id_for_menu.is_empty() {
+            let conn_id = conn_id_for_menu.clone();
+            let schema = menu_schema.clone();
+            let name = menu_table.clone();
+            row_div = row_div.on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    let target = if is_view {
+                        NavContextTarget::View {
+                            conn_id: conn_id.clone(),
+                            schema: schema.clone(),
+                            view: name.clone(),
+                        }
+                    } else {
+                        NavContextTarget::Table {
+                            conn_id: conn_id.clone(),
+                            schema: schema.clone(),
+                            table: name.clone(),
+                        }
+                    };
+                    this.open_nav_target_context_menu(target, event.position);
+                    cx.notify();
+                }),
+            );
+        }
 
         if is_selected {
             row_div = row_div.anchor_scroll(Some(self.navigator_anchor.clone()));

@@ -47,6 +47,7 @@ mod properties_panel;
 mod query;
 mod query_history;
 mod query_plan;
+mod schema_action_modal;
 mod script_files;
 mod script_lines;
 mod script_search;
@@ -75,7 +76,7 @@ use workspace_state::{WorkspaceInput, WorkspaceLayout, WorkspaceMenus};
 pub use column_menu::ColumnMenu;
 pub use connection_config::SavedConnection;
 pub use filter_suggest::FilterSuggest;
-pub use nav_context_menu::NavContextMenu;
+pub use nav_context_menu::{NavContextMenu, NavContextTarget};
 use panel_resize::{CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH, PanelDrag, PanelSplitter};
 pub use panes::Panes;
 pub use script_chooser::ScriptChooser;
@@ -167,6 +168,7 @@ pub struct Workspace {
     /// "Choose SQL script" dialog, if open
     object_browser: Option<object_browser::ObjectBrowser>,
     object_search: Option<object_search::ObjectSearch>,
+    pub schema_action_modal: Option<schema_action_modal::SchemaActionModal>,
     pub script_chooser: Option<ScriptChooser>,
 
     pub value_panel: ValuePanelState,
@@ -245,6 +247,7 @@ impl Workspace {
             allow_quit: false,
             object_browser: None,
             object_search: None,
+            schema_action_modal: None,
             script_chooser: None,
             script_action: None,
             script_search: None,
@@ -528,6 +531,9 @@ impl Render for Workspace {
         }
         if self.object_search.is_some() {
             root = root.child(self.render_object_search(cx));
+        }
+        if self.schema_action_modal.is_some() {
+            root = root.child(self.render_schema_action_modal(cx));
         }
         if self.filter_builder.is_some() {
             root = root.child(self.render_filter_builder(cx));
