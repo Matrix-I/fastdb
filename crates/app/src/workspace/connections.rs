@@ -313,7 +313,7 @@ impl Workspace {
                             this.connections
                                 .navigator_mut()
                                 .nav_tables_expanded
-                                .insert(t.schema.clone());
+                                .insert(super::navigator::table_folder_key(&t.schema));
                         }
 
                         let cache = this.connections.active().schema_cache.clone();

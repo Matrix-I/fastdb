@@ -177,3 +177,7 @@ mod connection;
 mod details;
 mod schema;
 mod table;
+
+pub(super) fn table_folder_key(schema: &str) -> String {
+    schema::table_folder_key(schema)
+}

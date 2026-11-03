@@ -53,7 +53,7 @@ impl Default for NavigatorState {
             },
             nav_tables_expanded: {
                 let mut s = HashSet::new();
-                s.insert("public".to_string());
+                s.insert(super::navigator::table_folder_key("public"));
                 s
             },
             nav_table_expanded: HashSet::new(),
