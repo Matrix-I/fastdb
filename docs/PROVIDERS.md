@@ -379,3 +379,20 @@ unsupported discovery. Favorites are stored separately in favorites.json under
 the application config directory, preserving existing connections.json files.
 Missing favorites and malformed/save-failed files have explicit feedback.
 Desktop acceptance remains pending.
+
+## Execution feedback (P1-04)
+
+PostgreSQL forwards bounded per-statement NOTICE/WARNING messages, native command
+counts and one-based character error positions in SQL tab execution logs.
+MySQL/MariaDB show native counts and up to 20 warning details from the same connection;
+failure/timeout loading warnings is explicit and does not retry the original SQL.
+SQLite uses native change counts for commands without result columns; ODBC uses
+SQLRowCount when available and labels unknown counts unavailable. ODBC informational
+diagnostics and structured positions are not yet exposed. See the
+[SQL editor guide](guide/sql-editor.md) for deadlines, retention and cancellation limits.
+
+`cargo test -p db-wire --test execution_feedback_test -- --nocapture` always tests real
+in-memory SQLite and optionally PostgreSQL/MySQL using `FASTDB_TEST_PG_*` and
+`FASTDB_TEST_MYSQL_*` (PORT, HOST, USER, PASSWORD, DATABASE). Missing ports print a skip;
+`FASTDB_REQUIRE_DB_TESTS=1` makes missing live providers fail. The PostgreSQL fixture
+uses temporary tables and leaves no persistent objects.
