@@ -20,8 +20,11 @@ use crate::stream::{RowSink, report_error};
 use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary, row_count_error};
 use binary_decoder::{decode_pg_cell, pg_type_to_data_type};
 
+type NoticeTarget = Arc<Mutex<Option<crate::stream::NoticeForwarder>>>;
+
 pub struct PostgresDriver {
     pub config: ConnectionConfig,
+    notices: NoticeTarget,
     client: tokio::sync::Mutex<Option<Arc<Client>>>,
     cancel_token: Arc<Mutex<Option<CancelToken>>>,
 }
@@ -36,7 +39,18 @@ impl Drop for SocketGuard {
 /// Server errors carry the useful text in their DbError; the Display impl only says "db error"
 fn pg_error_message(e: &tokio_postgres::Error) -> String {
     match e.as_db_error() {
-        Some(db) => format!("{}: {}", db.severity(), db.message()),
+        Some(db) => {
+            let position = match db.position() {
+                Some(tokio_postgres::error::ErrorPosition::Original(p)) => {
+                    format!(" · character {p}")
+                }
+                Some(tokio_postgres::error::ErrorPosition::Internal { position, .. }) => {
+                    format!(" · internal query character {position}")
+                }
+                None => String::new(),
+            };
+            format!("{}: {}{position}", db.severity(), db.message())
+        }
         None => e.to_string(),
     }
 }
@@ -108,6 +122,7 @@ impl PostgresDriver {
     pub fn new(config: ConnectionConfig) -> Self {
         Self {
             config,
+            notices: Arc::default(),
             client: tokio::sync::Mutex::new(None),
             cancel_token: Arc::new(Mutex::new(None)),
         }
@@ -122,21 +137,30 @@ impl PostgresDriver {
         }
 
         // Connect on the shared runtime so the socket outlives the caller's runtime
-        let client =
-            Arc::new(crate::run_on_shared_runtime(Self::connect_raw(self.config.clone())).await?);
+        let config = self.config.clone();
+        let notices = self.notices.clone();
+        let client = Arc::new(
+            crate::run_on_shared_runtime(async move {
+                Self::connect_with_notices(config, notices)
+                    .await
+                    .map(|(client, _)| client)
+            })
+            .await?,
+        );
         *self.cancel_token.lock() = Some(client.cancel_token());
         *guard = Some(Arc::clone(&client));
         Ok(client)
     }
 
-    async fn connect_raw(config: ConnectionConfig) -> Result<Client> {
-        Self::connect_with_task(config)
-            .await
-            .map(|(client, _task)| client)
-    }
-
     async fn connect_with_task(
         config: ConnectionConfig,
+    ) -> Result<(Client, tokio::task::JoinHandle<()>)> {
+        Self::connect_with_notices(config, Arc::default()).await
+    }
+
+    async fn connect_with_notices(
+        config: ConnectionConfig,
+        notices: NoticeTarget,
     ) -> Result<(Client, tokio::task::JoinHandle<()>)> {
         let mut pg_config = tokio_postgres::Config::new();
         pg_config.user(&config.user);
@@ -164,7 +188,7 @@ impl PostgresDriver {
 
         let client = if config.tls_enabled {
             pg_config.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let (client, connection) = pg_config
+            let (client, mut connection) = pg_config
                 .connect(tls_connector(&config)?)
                 .await
                 .with_context(|| {
@@ -174,22 +198,48 @@ impl PostgresDriver {
                     )
                 })?;
             let task = crate::get_runtime().spawn(async move {
-                if let Err(e) = connection.await {
-                    warn!("PostgreSQL connection error: {}", e);
+                while let Some(message) =
+                    futures::future::poll_fn(|cx| connection.poll_message(cx)).await
+                {
+                    match message {
+                        Ok(tokio_postgres::AsyncMessage::Notice(notice)) => {
+                            if let Some(target) = notices.lock().as_mut() {
+                                target.send(format!("{}: {}", notice.severity(), notice.message()));
+                            }
+                        }
+                        Err(_) => {
+                            warn!("PostgreSQL connection closed with an error");
+                            break;
+                        }
+                        _ => {}
+                    }
                 }
             });
             (client, task)
         } else {
             pg_config.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            let (client, connection) = pg_config.connect(NoTls).await.with_context(|| {
+            let (client, mut connection) = pg_config.connect(NoTls).await.with_context(|| {
                 format!(
                     "Failed to connect to PostgreSQL ({}:{})",
                     config.host, config.port
                 )
             })?;
             let task = crate::get_runtime().spawn(async move {
-                if let Err(e) = connection.await {
-                    warn!("PostgreSQL connection error: {}", e);
+                while let Some(message) =
+                    futures::future::poll_fn(|cx| connection.poll_message(cx)).await
+                {
+                    match message {
+                        Ok(tokio_postgres::AsyncMessage::Notice(notice)) => {
+                            if let Some(target) = notices.lock().as_mut() {
+                                target.send(format!("{}: {}", notice.severity(), notice.message()));
+                            }
+                        }
+                        Err(_) => {
+                            warn!("PostgreSQL connection closed with an error");
+                            break;
+                        }
+                        _ => {}
+                    }
                 }
             });
             (client, task)
@@ -229,13 +279,17 @@ impl DatabaseDriver for PostgresDriver {
 
     async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
         let config = self.config.clone();
-        let (client, task) =
-            crate::run_on_shared_runtime(async move { Self::connect_with_task(config).await })
-                .await?;
+        let notices = NoticeTarget::default();
+        let target = notices.clone();
+        let (client, task) = crate::run_on_shared_runtime(async move {
+            Self::connect_with_notices(config, target).await
+        })
+        .await?;
         Ok(Arc::new(script::PostgresScriptSession::new(
             client,
             task,
             self.config.clone(),
+            notices,
         )))
     }
 
@@ -321,7 +375,21 @@ impl DatabaseDriver for PostgresDriver {
         // Update cancel token for this connection
         *self.cancel_token.lock() = Some(client.cancel_token());
 
-        stream_client(&client, sql, event_tx, start_time).await
+        stream_client(&client, sql, event_tx, start_time, &self.notices, None).await
+    }
+
+    async fn execute_streaming_controlled(
+        &self,
+        sql: &str,
+        tx: flume::Sender<StreamEvent>,
+        control: Arc<crate::execution::ExecutionControl>,
+    ) -> Result<()> {
+        control.check()?;
+        let started = Instant::now();
+        let client = self.get_or_connect().await?;
+        control.check()?;
+        *self.cancel_token.lock() = Some(client.cancel_token());
+        stream_client(&client, sql, tx, started, &self.notices, Some(&control)).await
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
@@ -483,7 +551,17 @@ async fn stream_client(
     sql: &str,
     event_tx: flume::Sender<StreamEvent>,
     start_time: Instant,
+    notices: &NoticeTarget,
+    control: Option<&crate::execution::ExecutionControl>,
 ) -> Result<()> {
+    struct NoticeGuard(NoticeTarget);
+    impl Drop for NoticeGuard {
+        fn drop(&mut self) {
+            self.0.lock().take();
+        }
+    }
+    *notices.lock() = Some(crate::stream::NoticeForwarder::new(event_tx.clone()));
+    let _notices = NoticeGuard(notices.clone());
     let statement = client.prepare(sql).await.map_err(|e| {
         let reported = report_error(
             &event_tx,
@@ -497,8 +575,12 @@ async fn stream_client(
         .iter()
         .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
         .collect();
-    let mut sink = RowSink::start(columns, event_tx, start_time)?;
+    let has_columns = !columns.is_empty();
+    let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
 
+    if let Some(control) = control {
+        control.check()?;
+    }
     let row_stream = client
         .query_raw(&statement, std::iter::empty::<i32>())
         .await
@@ -519,6 +601,11 @@ async fn stream_client(
         sink.commit_row()?;
     }
 
+    if !has_columns {
+        let _ = event_tx.send(StreamEvent::CommandComplete {
+            affected_rows: row_stream.rows_affected(),
+        });
+    }
     let total_rows = sink.finish();
     debug!(
         "Postgres query streaming completed: {} rows in {}ms",

@@ -35,18 +35,26 @@ impl Drop for TabSession {
 }
 
 pub struct ScriptControl {
+    timeout: Option<Duration>,
     cancel: tokio::sync::watch::Sender<bool>,
     finished: tokio::sync::watch::Sender<bool>,
 }
 impl Default for ScriptControl {
     fn default() -> Self {
         Self {
+            timeout: None,
             cancel: tokio::sync::watch::channel(false).0,
             finished: tokio::sync::watch::channel(false).0,
         }
     }
 }
 impl ScriptControl {
+    pub fn with_timeout(timeout: Option<Duration>) -> Self {
+        Self {
+            timeout,
+            ..Self::default()
+        }
+    }
     pub fn request_cancel(&self) {
         self.cancel.send_replace(true);
     }
@@ -203,6 +211,11 @@ async fn run_script_inner(
             tokio::select! {
                 biased;
                 _ = control.cancelled() => None,
+                _ = crate::execution::deadline(control.timeout) => {
+                    outcome.error = Some("Statement timed out; earlier committed writes may remain applied".into());
+                    control.request_cancel();
+                    None
+                }
                 result = &mut execution => Some(result),
             }
         }; // Drop execution BEFORE sending cancellation: no later protocol step can run.
@@ -384,6 +397,33 @@ mod tests {
                 _ => None,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn statement_deadline_cancels_and_stops_remaining_statements() {
+        crate::get_runtime().block_on(async {
+            let session = FakeSession::new(false, None);
+            session.cancel_gate.add_permits(1);
+            let control = Arc::new(ScriptControl::with_timeout(Some(std::time::Duration::ZERO)));
+            let (tx, rx) = flume::unbounded();
+            run_script(
+                fake_driver(session.clone()),
+                vec!["wait".into(), "never".into()],
+                control,
+                tx,
+            )
+            .await;
+            let outcome = outcome(&rx);
+            assert!(outcome.cancelled);
+            assert!(outcome.error.unwrap().contains("timed out"));
+            let calls = session.calls.lock().unwrap();
+            assert!(!calls.iter().any(|sql| sql == "never"));
+            assert_eq!(
+                calls.iter().filter(|sql| sql.as_str() == "cancel").count(),
+                1
+            );
+            assert!(session.aborted.load(Ordering::SeqCst));
+        });
     }
 
     #[test]

@@ -69,6 +69,7 @@ fn query() -> Result<(Arc<QueryResultPager>, f64, f64)> {
                 ensure!(total_rows == ROWS, "incomplete query");
                 completed = true;
             }
+            StreamEvent::CommandComplete { .. } | StreamEvent::Notice(_) => {}
             StreamEvent::Error(error) => anyhow::bail!("{error}"),
         }
     }

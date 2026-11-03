@@ -30,7 +30,9 @@ impl Workspace {
         plan_requested: bool,
         cx: &mut Context<Self>,
     ) {
-        let control = Arc::new(ScriptControl::default());
+        let control = Arc::new(ScriptControl::with_timeout(
+            self.tabs[index].statement_timeout(),
+        ));
         let tab = &mut self.tabs[index];
         let tab_id = tab.id;
         let Some(connection_id) = tab.connection_id.clone() else {
@@ -94,7 +96,7 @@ impl Workspace {
     }
 
     pub(super) fn transaction_command(&mut self, sql: &str, cx: &mut Context<Self>) {
-        if self.operations.is_running() {
+        if self.execution_busy(cx) {
             return;
         }
         let index = self.active_tab;
@@ -169,6 +171,10 @@ impl Workspace {
                     format!("{} · {}", outcome_message(&outcome), tab.transaction_state)
                 };
                 if outcome.cancelled || outcome.error.is_some() || outcome.cleanup_error.is_some() {
+                    if !tab.execution_log.is_active() {
+                        tab.execution_log
+                            .start("Execution stopped / session feedback");
+                    }
                     tab.apply_stream_event(StreamEvent::Error(message.clone()));
                 }
                 tab.script_status = Some(message);

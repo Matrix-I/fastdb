@@ -99,7 +99,7 @@ impl Default for ConnectionConfig {
     }
 }
 
-/// Progress of a streaming query, in order: SchemaReady, PageAppended*, then Completed or Error
+/// Query progress: schema/rows and optional notices/command count, then Completed or Error.
 #[derive(Clone)]
 pub enum StreamEvent {
     /// Result columns are known; rows are appended into this pager as they arrive
@@ -111,6 +111,11 @@ pub enum StreamEvent {
         total_rows: u64,
         elapsed_ms: u64,
     },
+    /// Native command count; None means the provider cannot determine it.
+    CommandComplete {
+        affected_rows: Option<u64>,
+    },
+    Notice(String),
     Error(String),
 }
 
@@ -132,6 +137,10 @@ impl std::fmt::Debug for StreamEvent {
                     "Completed {{ total_rows: {total_rows}, elapsed_ms: {elapsed_ms} }}"
                 )
             }
+            StreamEvent::CommandComplete { affected_rows } => {
+                write!(f, "CommandComplete({affected_rows:?})")
+            }
+            StreamEvent::Notice(message) => write!(f, "Notice({message:?})"),
             StreamEvent::Error(e) => write!(f, "Error({e:?})"),
         }
     }
@@ -289,6 +298,17 @@ pub trait DatabaseDriver: Send + Sync {
         event_tx: flume::Sender<StreamEvent>,
     ) -> Result<()>;
 
+    /// Providers check control after acquiring a connection, before sending SQL.
+    async fn execute_streaming_controlled(
+        &self,
+        sql: &str,
+        tx: flume::Sender<StreamEvent>,
+        control: Arc<crate::execution::ExecutionControl>,
+    ) -> Result<()> {
+        control.check()?;
+        self.execute_streaming(sql, tx).await
+    }
+
     /// Execute query to completion and return the populated pager, total rows, and elapsed ms
     async fn execute_query(&self, sql: &str) -> Result<(Arc<QueryResultPager>, u64, u64)> {
         let (event_tx, event_rx) = flume::unbounded();
@@ -304,7 +324,9 @@ pub trait DatabaseDriver: Send + Sync {
                     elapsed_ms,
                 } => summary = Some((total_rows, elapsed_ms)),
                 StreamEvent::Error(e) => anyhow::bail!(e),
-                StreamEvent::PageAppended { .. } => {}
+                StreamEvent::PageAppended { .. }
+                | StreamEvent::CommandComplete { .. }
+                | StreamEvent::Notice(_) => {}
             }
         }
 

@@ -46,9 +46,13 @@ impl SqliteDriver {
         conn: &Mutex<Connection>,
         sql: &str,
         event_tx: &flume::Sender<StreamEvent>,
+        control: Option<&crate::execution::ExecutionControl>,
     ) -> Result<()> {
         let start_time = Instant::now();
         let conn = conn.lock();
+        if let Some(control) = control {
+            control.check()?;
+        }
         let mut stmt = conn
             .prepare(sql)
             .map_err(|e| report_error(event_tx, format!("SQLite prepare error: {e}")))?;
@@ -65,8 +69,13 @@ impl SqliteDriver {
                 )
             })
             .collect();
+        let has_columns = !columns.is_empty();
+        let changes_before = conn.total_changes();
         let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
 
+        if let Some(control) = control {
+            control.check()?;
+        }
         let mut rows = stmt
             .query([])
             .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?;
@@ -90,6 +99,18 @@ impl SqliteDriver {
             sink.commit_row()?;
         }
 
+        drop(rows);
+        drop(stmt);
+        if !has_columns {
+            let affected_rows = if conn.total_changes() == changes_before {
+                0
+            } else {
+                conn.changes()
+            };
+            let _ = event_tx.send(StreamEvent::CommandComplete {
+                affected_rows: Some(affected_rows),
+            });
+        }
         sink.finish();
         Ok(())
     }
@@ -138,9 +159,24 @@ impl DatabaseDriver for SqliteDriver {
         let sql = sql.to_string();
         // rusqlite is synchronous; keep it off the async workers so cancel_active_query can interrupt it
         crate::get_runtime()
-            .spawn_blocking(move || Self::stream_blocking(&conn, &sql, &event_tx))
+            .spawn_blocking(move || Self::stream_blocking(&conn, &sql, &event_tx, None))
             .await
             .map_err(|e| anyhow::anyhow!("SQLite worker failed: {e}"))?
+    }
+
+    async fn execute_streaming_controlled(
+        &self,
+        sql: &str,
+        tx: flume::Sender<StreamEvent>,
+        control: Arc<crate::execution::ExecutionControl>,
+    ) -> Result<()> {
+        control.check()?;
+        let conn = self.conn.clone();
+        let sql = sql.to_owned();
+        crate::get_runtime()
+            .spawn_blocking(move || Self::stream_blocking(&conn, &sql, &tx, Some(&control)))
+            .await
+            .map_err(|error| anyhow::anyhow!("SQLite worker failed: {error}"))?
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
@@ -257,5 +293,40 @@ impl DatabaseDriver for SqliteDriver {
         let conn = self.conn.lock();
         conn.execute_batch(sql)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn timed_out_queued_write_does_not_execute_after_connection_unlocks() {
+        let driver = Arc::new(SqliteDriver::new_memory());
+        let connection = driver.conn.lock();
+        connection
+            .execute_batch("CREATE TABLE pending (id INTEGER)")
+            .unwrap();
+        crate::get_runtime().block_on(async {
+            let (tx, rx) = flume::unbounded();
+            let task = tokio::spawn(crate::execution::execute_with_timeout(
+                driver.clone(), "INSERT INTO pending VALUES (1)".into(), tx,
+                Some(std::time::Duration::ZERO),
+            ));
+            // The cancellation acknowledgement proves timeout happened while the
+            // real blocking worker was unable to acquire this connection.
+            while let Ok(event) = rx.recv_async().await {
+                if matches!(event, StreamEvent::Notice(message) if message.contains("cancellation requested")) { break; }
+            }
+            drop(connection);
+            task.await.unwrap();
+            assert!(matches!(rx.drain().last(), Some(StreamEvent::Error(message)) if message.contains("timed out")));
+        });
+        let count: i64 = driver
+            .conn
+            .lock()
+            .query_row("SELECT count(*) FROM pending", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

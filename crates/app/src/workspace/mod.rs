@@ -24,6 +24,7 @@ mod ddl;
 mod diagram_gestures;
 mod diagram_model;
 mod diagram_panel;
+mod execution_log;
 mod export;
 mod fetch_plan;
 mod filter_builder;

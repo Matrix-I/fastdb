@@ -7,6 +7,8 @@ use crate::traits::StreamEvent;
 
 /// Minimum spacing between PageAppended notifications (one 60 FPS frame)
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(16);
+/// Reserve relay capacity for schema, bounded notices and terminal events.
+pub(crate) const MAX_PENDING_PROGRESS: usize = 32;
 
 /// Sends `msg` as a StreamEvent::Error and returns it as an error for the caller to propagate
 pub(crate) fn report_error(
@@ -67,7 +69,11 @@ impl RowSink {
         self.total_rows = total_rows;
 
         if rollover || self.last_notified_at.elapsed() >= NOTIFY_INTERVAL {
-            let _ = self.event_tx.send(StreamEvent::PageAppended { total_rows });
+            // Progress is replaceable: the pager owns every row and Completed
+            // refreshes the final count even if the UI temporarily falls behind.
+            if self.event_tx.len() < MAX_PENDING_PROGRESS {
+                let _ = self.event_tx.send(StreamEvent::PageAppended { total_rows });
+            }
             self.last_notified_at = Instant::now();
         }
         Ok(())
@@ -89,10 +95,85 @@ impl RowSink {
     }
 }
 
+/// Bound notices before they reach any unbounded event relay. Never block the
+/// PostgreSQL protocol pump, and make truncation visible exactly once.
+pub(crate) struct NoticeForwarder {
+    tx: flume::Sender<StreamEvent>,
+    sent: usize,
+}
+impl NoticeForwarder {
+    pub fn new(tx: flume::Sender<StreamEvent>) -> Self {
+        Self { tx, sent: 0 }
+    }
+    pub fn send(&mut self, message: String) {
+        const MAX_NOTICES: usize = 20;
+        const MAX_NOTICE_CHARS: usize = 1024;
+        let message = if self.sent < MAX_NOTICES {
+            message.chars().take(MAX_NOTICE_CHARS).collect()
+        } else if self.sent == MAX_NOTICES {
+            "Further server notices omitted (limit: 20 per statement)".into()
+        } else {
+            return;
+        };
+        self.sent += 1;
+        let _ = self.tx.send(StreamEvent::Notice(message));
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+    #[test]
+    fn notice_flood_is_bounded_before_relay_with_truncation_feedback() {
+        let (tx, rx) = flume::unbounded();
+        let mut notices = NoticeForwarder::new(tx);
+        for _ in 0..10_000 {
+            notices.send("é".repeat(2000));
+        }
+        assert_eq!(rx.len(), 21);
+        let first = rx.recv().unwrap();
+        assert!(matches!(first, StreamEvent::Notice(message) if message.chars().count() == 1024));
+        assert!(
+            matches!(rx.drain().last(), Some(StreamEvent::Notice(message)) if message.contains("omitted"))
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mem_engine::DataType;
+
+    #[test]
+    fn slow_consumer_coalesces_progress_without_losing_result_rows() {
+        let (tx, rx) = flume::bounded(64);
+        let mut sink = RowSink::start(
+            vec![ColumnMeta::new("note", DataType::Text)],
+            tx.clone(),
+            Instant::now(),
+        )
+        .unwrap();
+        for _ in 0..MAX_PENDING_PROGRESS {
+            tx.send(StreamEvent::PageAppended { total_rows: 0 })
+                .unwrap();
+        }
+        for _ in 0..30 {
+            sink.cells_mut()[0] = Some(vec![b'x'; 20_000]);
+            sink.commit_row().unwrap();
+        }
+        assert_eq!(sink.finish(), 30);
+        assert_eq!(rx.len(), MAX_PENDING_PROGRESS + 2);
+        let events: Vec<_> = rx.drain().collect();
+        let StreamEvent::SchemaReady(pager) = &events[0] else {
+            panic!("missing schema")
+        };
+        assert_eq!(pager.total_rows(), 30);
+        assert_eq!(pager.get_cell(29, 0).unwrap().len(), 20_000);
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Completed { total_rows: 30, .. })
+        ));
+    }
 
     #[test]
     fn test_row_sink_emits_events_in_order() {

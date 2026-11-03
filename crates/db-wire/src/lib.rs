@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub mod catalog;
 pub mod column;
+pub mod execution;
 pub mod export;
 pub mod filter;
 pub mod metadata;

@@ -16,6 +16,21 @@ fn table_tab_index(
 }
 
 impl Workspace {
+    pub(super) fn execution_busy(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(operation) = self.operations.active() else {
+            return false;
+        };
+        let message = format!(
+            "Another SQL operation is running in tab {}. Wait or Cancel before executing again. FastDB runs one operation at a time.",
+            operation.tab_id
+        );
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            tab.script_status = Some(message);
+        }
+        cx.notify();
+        true
+    }
+
     pub fn query_table(
         &mut self,
         connection_id: &str,
@@ -61,7 +76,7 @@ impl Workspace {
     }
 
     pub fn run_active_query(&mut self, cx: &mut Context<Self>) {
-        if self.operations.is_running() {
+        if self.execution_busy(cx) {
             return;
         }
         if let Some(tab) = self.tabs.get(self.active_tab).filter(|t| !t.file_busy) {
@@ -69,7 +84,7 @@ impl Workspace {
         }
     }
     pub(super) fn run_saved_query(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.operations.is_running() {
+        if self.execution_busy(cx) {
             return;
         }
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
@@ -132,7 +147,7 @@ impl Workspace {
     }
 
     pub(super) fn run_script(&mut self, cx: &mut Context<Self>) {
-        if self.operations.is_running() {
+        if self.execution_busy(cx) {
             return;
         }
         if let Some(tab) = self
@@ -145,7 +160,7 @@ impl Workspace {
     }
 
     pub(super) fn run_saved_script(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.operations.is_running() {
+        if self.execution_busy(cx) {
             return;
         }
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
@@ -263,6 +278,8 @@ impl Workspace {
                     criteria: tab.filter_spec.clone(),
                 });
         }
+        tab.execution_log.start(&sql);
+        let timeout = tab.statement_timeout();
         tab.begin_fetch(paged, append);
         let tab_id = tab.id;
         let connection_id = tab
@@ -278,11 +295,12 @@ impl Workspace {
         cx.notify();
 
         let (event_tx, event_rx) = flume::unbounded();
-        let driver = Arc::clone(&driver);
-        db_wire::get_runtime().spawn(async move {
-            // Failures are reported through StreamEvent::Error
-            let _ = driver.execute_streaming(&sql, event_tx).await;
-        });
+        db_wire::get_runtime().spawn(db_wire::execution::execute_with_timeout(
+            driver.clone(),
+            sql,
+            event_tx,
+            timeout,
+        ));
 
         cx.spawn(async move |this, cx| {
             while let Ok(event) = event_rx.recv_async().await {

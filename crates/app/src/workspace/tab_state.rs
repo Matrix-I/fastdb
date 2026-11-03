@@ -35,6 +35,10 @@ pub struct TabState {
     pub editor: SqlEditorView,
     pub grid: VirtualDataGrid,
     pub execution_time_ms: Option<u64>,
+    pub(super) affected_rows: Option<Option<u64>>,
+    pub(super) execution_log: super::execution_log::ExecutionLog,
+    pub(super) show_execution_log: bool,
+    pub(super) timeout_index: usize,
     pub fetch: FetchState,
     /// Statement of a script tab's current result, read again by "fetch next"
     pub script_sql: Option<String>,
@@ -76,6 +80,7 @@ pub(super) struct ScriptResult {
     sql: Option<String>,
     error: Option<String>,
     elapsed: Option<u64>,
+    affected_rows: Option<Option<u64>>,
     query_plan: Option<db_wire::query_plan::QueryPlan>,
     show_plan: bool,
 }
@@ -275,6 +280,10 @@ impl TabState {
             editor: SqlEditorView::new("", Theme::dark(), None),
             grid: VirtualDataGrid::new(None, Theme::dark()),
             execution_time_ms: None,
+            affected_rows: None,
+            execution_log: Default::default(),
+            show_execution_log: false,
+            timeout_index: 0,
             fetch: FetchState::default(),
             script_sql: None,
             query_plan: None,
@@ -322,6 +331,7 @@ impl TabState {
         std::mem::swap(&mut self.script_sql, &mut result.sql);
         std::mem::swap(&mut self.last_error, &mut result.error);
         std::mem::swap(&mut self.execution_time_ms, &mut result.elapsed);
+        std::mem::swap(&mut self.affected_rows, &mut result.affected_rows);
         std::mem::swap(&mut self.query_plan, &mut result.query_plan);
         std::mem::swap(&mut self.show_plan, &mut result.show_plan);
         // Keep inactive results in display order after removing the selected slot.
@@ -347,6 +357,7 @@ impl TabState {
                 sql: self.script_sql.take(),
                 error: self.last_error.take(),
                 elapsed: self.execution_time_ms.take(),
+                affected_rows: self.affected_rows.take(),
                 query_plan: self.query_plan.take(),
                 show_plan: std::mem::take(&mut self.show_plan),
             };
@@ -363,6 +374,14 @@ impl TabState {
         self.script_sql = Some(sql);
     }
 
+    pub(super) fn statement_timeout(&self) -> Option<Duration> {
+        let seconds = super::execution_log::TIMEOUT_SECONDS
+            .get(self.timeout_index)
+            .copied()
+            .unwrap_or(0);
+        (seconds > 0).then(|| Duration::from_secs(seconds))
+    }
+
     /// Rows currently shown in the grid
     pub fn loaded_rows(&self) -> u64 {
         self.grid
@@ -374,6 +393,7 @@ impl TabState {
 
     /// Run intent belongs to the newly initialized result, not the previous one.
     pub(super) fn begin_session_statement(&mut self, sql: String, plan_requested: bool) {
+        self.execution_log.start(&sql);
         self.new_script_result(sql);
         self.begin_fetch(false, false);
         self.plan_requested = plan_requested;
@@ -381,6 +401,8 @@ impl TabState {
 
     /// Marks the start of a run; `append` keeps the current rows and adds the new ones after them
     pub fn begin_fetch(&mut self, paged: bool, append: bool) {
+        self.affected_rows = None;
+        self.execution_time_ms = None;
         self.query_plan = None;
         self.plan_requested = false;
         self.show_plan = false;
@@ -393,7 +415,17 @@ impl TabState {
 
     /// Applies a streaming query event to this tab's grid
     pub fn apply_stream_event(&mut self, event: StreamEvent) -> QueryStatus {
+        self.execution_log.apply(&event);
         match event {
+            StreamEvent::CommandComplete { affected_rows } => {
+                self.affected_rows = Some(affected_rows);
+                QueryStatus::Running {
+                    rows: self.loaded_rows(),
+                }
+            }
+            StreamEvent::Notice(_) => QueryStatus::Running {
+                rows: self.loaded_rows(),
+            },
             StreamEvent::SchemaReady(pager) => {
                 self.schema_stale = false;
                 self.fetch.schema_ready_at = Some(Instant::now());
@@ -915,6 +947,7 @@ mod script_result_tests {
             "create table t (v text); insert into t values ('a;b'); select * from t; select missing from t; insert into t values ('must not run');"
         ).unwrap().into();
         while let Some(sql) = tab.pending_statements.pop_front() {
+            tab.execution_log.start(&sql);
             tab.new_script_result(sql.clone());
             tab.begin_fetch(false, false);
             let (sender, receiver) = flume::unbounded();
@@ -934,6 +967,47 @@ mod script_result_tests {
             Some(b"a;b".as_slice())
         );
         assert_eq!(tab.connection_id.as_deref(), Some("a"));
+        let entries: Vec<_> = tab.execution_log.messages().collect();
+        assert_eq!(entries.len(), 4);
+        assert!(entries[1].contains("1 row(s) affected"));
+        assert!(entries[2].contains("1 row(s) returned"));
+        assert!(entries[3].contains("no such column: missing"));
+        tab.select_result(1);
+        assert_eq!(tab.affected_rows, Some(Some(1)));
+        tab.select_result(2);
+        assert_eq!(tab.affected_rows, None);
+    }
+
+    #[test]
+    fn result_eviction_does_not_remove_tab_execution_feedback() {
+        let mut tab = tab();
+        assert!(tab.statement_timeout().is_none());
+        tab.timeout_index = 2;
+        assert_eq!(
+            tab.statement_timeout(),
+            Some(std::time::Duration::from_secs(30))
+        );
+        for n in 0..25 {
+            tab.begin_session_statement(format!("UPDATE t SET v = {n}"), false);
+            tab.apply_stream_event(db_wire::StreamEvent::CommandComplete {
+                affected_rows: Some(n),
+            });
+            tab.apply_stream_event(db_wire::StreamEvent::Completed {
+                total_rows: 0,
+                elapsed_ms: 1,
+            });
+        }
+        assert_eq!(tab.result_count(), 20);
+        assert_eq!(tab.execution_log.messages().count(), 25);
+        assert!(
+            tab.execution_log
+                .messages()
+                .next()
+                .unwrap()
+                .contains("v = 0")
+        );
+        tab.select_result(0);
+        assert_eq!(tab.affected_rows, Some(Some(5)));
     }
 
     #[test]

@@ -32,6 +32,13 @@ impl Workspace {
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
+        let timeout_label = match self.tabs[tab_idx].timeout_index {
+            1 => "Timeout: 5s",
+            2 => "Timeout: 30s",
+            3 => "Timeout: 60s",
+            4 => "Timeout: 300s",
+            _ => "Timeout: off",
+        };
         let supports_plan = self.tab_provider(tab_idx) == DbDriverKind::Postgres;
         let toolbar = div()
             .id("script-toolbar")
@@ -93,6 +100,27 @@ impl Workspace {
                     }),
             )
             .child(tool("Run script").on_click(cx.listener(|this, _, _, cx| this.run_script(cx))))
+            .child(
+                tool("Execution log")
+                    .id("toggle-execution-log")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tabs[tab_idx].show_execution_log =
+                            !this.tabs[tab_idx].show_execution_log;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                tool(timeout_label)
+                    .id("statement-timeout")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.execution_busy(cx) {
+                            let tab = &mut this.tabs[tab_idx];
+                            tab.timeout_index = (tab.timeout_index + 1)
+                                % super::execution_log::TIMEOUT_SECONDS.len();
+                            cx.notify();
+                        }
+                    })),
+            )
             .when(supports_plan && !is_running_query, |toolbar| {
                 toolbar
                     .child(tool("Begin").on_click(
@@ -212,9 +240,15 @@ impl Workspace {
                 theme,
             ));
 
+        let log = tab
+            .show_execution_log
+            .then(|| tab.execution_log.messages().rev().collect::<Vec<_>>());
+        let execution_status = tab.script_status.clone();
         let last_error = tab.last_error.clone();
         let no_result_set = tab.grid.pager.as_ref().is_some_and(|p| p.num_cols() == 0);
-        let elapsed = tab.fetch.last.as_ref().map(|s| s.elapsed);
+        let elapsed = tab.execution_time_ms;
+        let command_count = tab.affected_rows;
+        let result_failed = last_error.is_some();
         let result_count = tab.result_count();
         let selected_result = tab.active_result;
         let history = tab.show_history.then(|| tab.query_history.clone());
@@ -242,6 +276,46 @@ impl Workspace {
             .child(toolbar)
             .child(editor);
 
+        if let Some(entries) = log {
+            let mut list = div()
+                .id("execution-log")
+                .flex()
+                .flex_col()
+                .flex_none()
+                .max_h(px(180.0))
+                .overflow_y_scroll()
+                .bg(theme.bg_surface)
+                .text_size(px(11.0))
+                .text_color(theme.text_secondary)
+                .child(div().px_2().py_1().child(
+                    "Execution log · latest 100 statements · retained while this tab is open",
+                ));
+            if entries.is_empty() {
+                list = list.child(div().p_2().child("No statements executed in this tab."));
+            }
+            for (index, message) in entries.into_iter().enumerate() {
+                list = list.child(
+                    div()
+                        .id(("execution-entry", index))
+                        .px_2()
+                        .py_1()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(message),
+                );
+            }
+            column = column.child(list);
+        }
+        if let Some(message) = execution_status {
+            column = column.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_secondary)
+                    .child(message),
+            );
+        }
         if let Some(diag) = first_diag {
             column = column.child(
                 div()
@@ -371,9 +445,20 @@ impl Workspace {
         result = if show_plan {
             result.child(self.render_query_plan(tab_idx, cx))
         } else if no_result_set {
-            let detail = elapsed
-                .map(|e| format!(" ({:.3}s)", e.as_secs_f64()))
-                .unwrap_or_default();
+            let detail = elapsed.map(|ms| format!(" · {ms} ms")).unwrap_or_default();
+            let message = if result_failed {
+                "Statement failed".into()
+            } else if elapsed.is_none() {
+                "Waiting for statement completion…".into()
+            } else {
+                match command_count {
+                    Some(Some(count)) => format!("{count} row(s) affected{detail}"),
+                    Some(None) => {
+                        format!("Statement completed; affected count unavailable{detail}")
+                    }
+                    None => format!("Statement completed{detail}"),
+                }
+            };
             result.child(
                 div()
                     .flex()
@@ -382,7 +467,7 @@ impl Workspace {
                     .justify_center()
                     .text_size(px(12.0))
                     .text_color(theme.text_muted)
-                    .child(format!("Statement executed successfully.{detail}")),
+                    .child(message),
             )
         } else {
             result.child(self.render_data_panel(tab_idx, window, cx))

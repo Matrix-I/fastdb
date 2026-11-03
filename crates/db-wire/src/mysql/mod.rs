@@ -94,6 +94,7 @@ impl MySqlDriver {
         sql: String,
         event_tx: flume::Sender<StreamEvent>,
         active_conn_id: Arc<Mutex<Option<u32>>>,
+        control: Option<Arc<crate::execution::ExecutionControl>>,
     ) -> Result<()> {
         let start_time = Instant::now();
         let mut conn = pool
@@ -103,6 +104,9 @@ impl MySqlDriver {
         *active_conn_id.lock() = Some(conn.id());
 
         let result = async {
+            if let Some(control) = &control {
+                control.check()?;
+            }
             let mut query_result = conn.query_iter(sql).await.map_err(|e| {
                 report_error(&event_tx, format!("MySQL query execution error: {e}"))
             })?;
@@ -118,20 +122,62 @@ impl MySqlDriver {
                         .collect()
                 })
                 .unwrap_or_default();
+            let has_columns = !columns.is_empty();
+            if !has_columns {
+                let _ = event_tx.send(StreamEvent::CommandComplete {
+                    affected_rows: Some(query_result.affected_rows()),
+                });
+            }
             let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
 
-            let stream = query_result
-                .stream::<mysql_async::Row>()
-                .await
-                .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
-            if let Some(mut stream) = stream {
-                while let Some(row_res) = stream.next().await {
-                    let row =
-                        row_res.map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
-                    for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
-                        *cell = mysql_value_to_bytes(row.get(i));
+            {
+                let stream = query_result
+                    .stream::<mysql_async::Row>()
+                    .await
+                    .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+                if let Some(mut stream) = stream {
+                    while let Some(row_res) = stream.next().await {
+                        let row = row_res
+                            .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+                        for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
+                            *cell = mysql_value_to_bytes(row.get(i));
+                        }
+                        sink.commit_row()?;
                     }
-                    sink.commit_row()?;
+                }
+            }
+            let warnings = query_result.warnings();
+            let info = query_result.info().into_owned();
+            drop(query_result);
+            if !info.is_empty() {
+                let _ = event_tx.send(StreamEvent::Notice(info));
+            }
+            if warnings > 0 {
+                let _ = event_tx.send(StreamEvent::Notice(format!(
+                    "MySQL: {warnings} server warning(s); showing up to 20"
+                )));
+                let messages = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    conn.query::<(String, u16, String), _>("SHOW WARNINGS LIMIT 20"),
+                )
+                .await;
+                match messages {
+                    Ok(Ok(messages)) => {
+                        for (level, code, text) in messages {
+                            let _ = event_tx
+                                .send(StreamEvent::Notice(format!("{level} {code}: {text}")));
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        let _ = event_tx.send(StreamEvent::Notice(format!(
+                            "Cannot load warning details: {error}"
+                        )));
+                    }
+                    Err(_) => {
+                        let _ = event_tx.send(StreamEvent::Notice(
+                            "Loading warning details timed out".into(),
+                        ));
+                    }
                 }
             }
             Ok::<RowSink, anyhow::Error>(sink)
@@ -268,7 +314,32 @@ impl DatabaseDriver for MySqlDriver {
         let pool = self.get_pool()?;
         let sql = sql.to_string();
         let active_conn_id = Arc::clone(&self.active_conn_id);
-        crate::run_on_shared_runtime(Self::stream_query(pool, sql, event_tx, active_conn_id)).await
+        crate::run_on_shared_runtime(Self::stream_query(
+            pool,
+            sql,
+            event_tx,
+            active_conn_id,
+            None,
+        ))
+        .await
+    }
+
+    async fn execute_streaming_controlled(
+        &self,
+        sql: &str,
+        tx: flume::Sender<StreamEvent>,
+        control: Arc<crate::execution::ExecutionControl>,
+    ) -> Result<()> {
+        control.check()?;
+        let pool = self.get_pool()?;
+        crate::run_on_shared_runtime(Self::stream_query(
+            pool,
+            sql.to_owned(),
+            tx,
+            self.active_conn_id.clone(),
+            Some(control),
+        ))
+        .await
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {

@@ -312,6 +312,17 @@ impl DatabaseDriver for OdbcDriver {
         sql: &str,
         event_tx: flume::Sender<StreamEvent>,
     ) -> Result<()> {
+        self.execute_streaming_controlled(sql, event_tx, Arc::default())
+            .await
+    }
+
+    async fn execute_streaming_controlled(
+        &self,
+        sql: &str,
+        event_tx: flume::Sender<StreamEvent>,
+        control: Arc<crate::execution::ExecutionControl>,
+    ) -> Result<()> {
+        control.check()?;
         let sql = executable_sql(self.config.driver, sql);
         let errors = event_tx.clone();
         self.cancelled.store(false, Ordering::SeqCst);
@@ -324,7 +335,8 @@ impl DatabaseDriver for OdbcDriver {
                 if this.cancelled.load(Ordering::SeqCst) {
                     bail!("Query cancelled");
                 }
-                match statement.execute(&sql, ())? {
+                control.check()?;
+                let no_rows = match statement.execute(&sql, ())? {
                     Some(mut cursor) => {
                         let count = cursor.num_result_cols()? as u16;
                         let mut columns = Vec::new();
@@ -339,7 +351,7 @@ impl DatabaseDriver for OdbcDriver {
                                     .with_nullable(description.could_be_nullable()),
                             );
                         }
-                        let mut sink = RowSink::start(columns, event_tx, started)?;
+                        let mut sink = RowSink::start(columns, event_tx.clone(), started)?;
                         while let Some(mut row) = cursor.next_row()? {
                             if this.cancelled.load(Ordering::SeqCst) {
                                 bail!("Query cancelled");
@@ -386,10 +398,14 @@ impl DatabaseDriver for OdbcDriver {
                             bail!("Query cancelled");
                         }
                         sink.finish();
+                        false
                     }
-                    None => {
-                        RowSink::start(Vec::new(), event_tx, started)?.finish();
-                    }
+                    None => true,
+                };
+                if no_rows {
+                    let affected_rows = statement.row_count()?.map(|n| n as u64);
+                    let _ = event_tx.send(StreamEvent::CommandComplete { affected_rows });
+                    RowSink::start(Vec::new(), event_tx, started)?.finish();
                 }
                 Ok(())
             })

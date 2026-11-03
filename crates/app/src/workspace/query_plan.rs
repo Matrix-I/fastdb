@@ -3,7 +3,7 @@ use super::*;
 
 impl Workspace {
     pub(super) fn explain_active_statement(&mut self, analyze: bool, cx: &mut Context<Self>) {
-        if self.operations.is_running() {
+        if self.execution_busy(cx) {
             return;
         }
         if let Some(tab) = self
@@ -21,7 +21,7 @@ impl Workspace {
         analyze: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.operations.is_running() {
+        if self.execution_busy(cx) {
             return;
         }
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {

@@ -5,6 +5,7 @@ pub(super) struct PostgresScriptSession {
     client: tokio::sync::Mutex<Option<Client>>,
     token: CancelToken,
     config: ConnectionConfig,
+    notices: NoticeTarget,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -13,11 +14,13 @@ impl PostgresScriptSession {
         client: Client,
         task: tokio::task::JoinHandle<()>,
         config: ConnectionConfig,
+        notices: NoticeTarget,
     ) -> Self {
         Self {
             token: client.cancel_token(),
             client: tokio::sync::Mutex::new(Some(client)),
             config,
+            notices,
             task: Mutex::new(Some(task)),
         }
     }
@@ -31,7 +34,7 @@ impl ScriptSession for PostgresScriptSession {
             .as_ref()
             .ok_or_else(|| report_error(&tx, "Script session is closed"))?;
         // Never call get_or_connect: a lost session is terminal for this run.
-        stream_client(client, sql, tx, Instant::now()).await
+        stream_client(client, sql, tx, Instant::now(), &self.notices, None).await
     }
 
     async fn cancel_active_query(&self) -> Result<()> {
