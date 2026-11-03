@@ -29,10 +29,7 @@ impl PostgresDriver {
             CatalogSection::Policies => POLICIES,
             CatalogSection::Permissions => PERMISSIONS,
         };
-        let rows = client
-            .query(sql, &[&oid])
-            .await
-            .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+        let rows = query_catalog_rows(&client, sql, oid).await?;
         Ok(Some(
             rows.into_iter()
                 .map(|row| {
@@ -97,7 +94,7 @@ SELECT n.nspname::text||'.'||c.relname::text,'Parent relation','Parent of the cu
 FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhparent JOIN pg_namespace n ON n.oid=c.relnamespace
 WHERE i.inhrelid=$1 ORDER BY 1,2
 "#;
-const TRIGGERS: &str = r#"
+pub(super) const TRIGGERS: &str = r#"
 SELECT t.tgname::text,
        CASE t.tgenabled WHEN 'O' THEN 'Enabled (origin)' WHEN 'D' THEN 'Disabled'
                        WHEN 'R' THEN 'Enabled (replica)' ELSE 'Enabled (always)' END,
@@ -140,3 +137,14 @@ FROM pg_attribute col CROSS JOIN LATERAL aclexplode(col.attacl) a
 WHERE col.attrelid=$1 AND col.attnum>0 AND NOT col.attisdropped
 ORDER BY 1,2,3
 "#;
+
+pub(super) async fn query_catalog_rows(
+    client: &Client,
+    sql: &str,
+    oid: u32,
+) -> Result<Vec<tokio_postgres::Row>> {
+    client.query(sql, &[&oid]).await.map_err(|e| {
+        let message = pg_error_message(&e);
+        anyhow::Error::new(e).context(message)
+    })
+}

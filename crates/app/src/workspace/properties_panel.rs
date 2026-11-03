@@ -1,4 +1,6 @@
 use super::*;
+use db_wire::metadata::MetadataFeature as F;
+use gpui::prelude::FluentBuilder;
 
 impl Workspace {
     /// Properties sub-tab: table header form plus columns, constraints, indexes and DDL
@@ -167,23 +169,25 @@ impl Workspace {
                     .h(px(22.0))
                     .flex_shrink_0()
                     .px_2()
-                    .cursor_pointer()
                     .bg(if is_selected {
                         theme.bg_surface_selected
                     } else {
                         hsla(0.0, 0.0, 0.0, 0.0).into()
                     })
-                    .hover(|s| s.bg(theme.bg_surface_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
-                            t.active_property_section = sec;
-                            t.ddl_selected_all = false;
-                            this.input.is_filter_focused = false;
-                            this.input.is_fetch_size_focused = false;
-                            t.properties_scroll.set_offset(point(px(0.0), px(0.0)));
-                            cx.notify();
-                        }
-                    }))
+                    .when(sec != PropertySection::Virtual, |row| {
+                        row.cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_surface_hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                    t.active_property_section = sec;
+                                    t.ddl_selected_all = false;
+                                    this.input.is_filter_focused = false;
+                                    this.input.is_fetch_size_focused = false;
+                                    t.properties_scroll.set_offset(point(px(0.0), px(0.0)));
+                                    cx.notify();
+                                }
+                            }))
+                    })
                     .child(img(icon).w(px(13.0)).h(px(13.0)))
                     .child(
                         div()
@@ -198,11 +202,22 @@ impl Workspace {
                             } else {
                                 theme.text_secondary
                             })
-                            .child(label),
+                            .child(if sec == PropertySection::Virtual {
+                                "Virtual · pending"
+                            } else {
+                                label
+                            }),
                     ),
             );
         }
 
+        left_nav = left_nav.child(
+            div()
+                .p_2()
+                .text_size(px(10.0))
+                .text_color(theme.text_muted)
+                .child("Virtual keys/relationships are not implemented yet."),
+        );
         master_detail = master_detail.child(left_nav);
 
         // Right Detail Content
@@ -217,62 +232,104 @@ impl Workspace {
             .track_scroll(&scroll)
             .bg(theme.bg_editor);
 
-        match active_property_sec {
-            PropertySection::Columns => {
-                let pick = self.column_open_pick(
-                    tab.connection_id.clone().unwrap_or_default(),
-                    model.schema.clone(),
-                    model.table.clone(),
-                    cx,
-                );
-                right_content = right_content.child(model.render_columns(theme, pick));
+        let feature = match active_property_sec {
+            PropertySection::Columns | PropertySection::Ddl => Some(F::Columns),
+            PropertySection::Constraints => Some(F::Constraints),
+            PropertySection::ForeignKeys => Some(F::ForeignKeys),
+            PropertySection::Indexes => Some(F::Indexes),
+            PropertySection::Statistics => Some(F::TableDetails),
+            _ => None,
+        };
+        let notice = if self.tab_session(active_tab_idx).driver.is_none() {
+            Some("Disconnected. Connect and refresh to load metadata.".to_string())
+        } else {
+            if active_property_sec == PropertySection::Ddl {
+                model.ddl_notice()
+            } else {
+                feature.and_then(|feature| model.section_notice(feature))
             }
-            PropertySection::Constraints => {
-                right_content = right_content.child(model.render_constraints(theme));
+        };
+        if let Some(notice) = notice {
+            right_content = right_content.child(div().p_4().child(notice)).child(
+                div()
+                    .p_4()
+                    .text_color(theme.text_muted)
+                    .child("Refresh the owning connection to retry metadata loading."),
+            );
+        } else {
+            if let Some(feature) = feature
+                && let Some(state) = model.states.get(&feature)
+                && let Some(message) = state.message()
+            {
+                right_content =
+                    right_content.child(div().p_3().text_color(theme.text_muted).child(format!(
+                        "Summary reader: {message} Displaying independently loaded native details."
+                    )));
             }
-            PropertySection::ForeignKeys => {
-                right_content = right_content.child(model.render_foreignkeys(theme));
+            if active_property_sec == PropertySection::Ddl
+                && let Some(notice) = model.section_notice(F::TableDetails)
+            {
+                right_content =
+                    right_content.child(div().p_3().text_color(theme.text_muted).child(format!(
+                        "Native DDL unavailable. {notice} Showing a partial metadata preview."
+                    )));
             }
-            PropertySection::Indexes => {
-                right_content = right_content.child(model.render_indexes(theme));
-            }
-            PropertySection::Ddl => {
-                right_content = right_content
-                    .cursor_text()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.input.is_filter_focused = false;
-                            this.input.is_fetch_size_focused = false;
-                            if let Some(tab) = this.tabs.get_mut(this.active_tab) {
-                                tab.ddl_selected_all = false;
-                            }
-                            window.focus(&this.focus_handle);
-                            cx.notify();
-                        }),
-                    )
-                    .child(model.render_ddl(theme, tab.ddl_selected_all));
-            }
-            PropertySection::Statistics => {
-                right_content = right_content.child(model.render_statistics(theme));
-            }
-            section if section.catalog().is_some() => {
-                right_content = right_content.child(self.render_catalog_section(
-                    active_tab_idx,
-                    section.catalog().unwrap(),
-                    cx,
-                ));
-            }
-            _ => {
-                right_content = right_content.child(
-                    div()
-                        .p_4()
-                        .text_color(theme.text_muted)
-                        .child("Virtual keys/relationships are not implemented yet."),
-                );
+            match active_property_sec {
+                PropertySection::Columns => {
+                    let pick = self.column_open_pick(
+                        tab.connection_id.clone().unwrap_or_default(),
+                        model.schema.clone(),
+                        model.table.clone(),
+                        cx,
+                    );
+                    right_content = right_content.child(model.render_columns(theme, pick));
+                }
+                PropertySection::Constraints => {
+                    right_content = right_content.child(model.render_constraints(theme));
+                }
+                PropertySection::ForeignKeys => {
+                    right_content = right_content.child(model.render_foreignkeys(theme));
+                }
+                PropertySection::Indexes => {
+                    right_content = right_content.child(model.render_indexes(theme));
+                }
+                PropertySection::Ddl => {
+                    right_content = right_content
+                        .cursor_text()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.input.is_filter_focused = false;
+                                this.input.is_fetch_size_focused = false;
+                                if let Some(tab) = this.tabs.get_mut(this.active_tab) {
+                                    tab.ddl_selected_all = false;
+                                }
+                                window.focus(&this.focus_handle);
+                                cx.notify();
+                            }),
+                        )
+                        .child(model.render_ddl(theme, tab.ddl_selected_all));
+                }
+                PropertySection::Statistics => {
+                    right_content = right_content.child(model.render_statistics(theme));
+                }
+                section if section.catalog().is_some() => {
+                    right_content = right_content.child(self.render_catalog_section(
+                        active_tab_idx,
+                        section.catalog().unwrap(),
+                        cx,
+                    ));
+                }
+                _ => {
+                    right_content = right_content.child(
+                        div()
+                            .p_4()
+                            .text_color(theme.text_muted)
+                            .child("Virtual keys/relationships are not implemented yet."),
+                    );
+                }
             }
         }
-
         let mut detail = div()
             .flex()
             .flex_col()

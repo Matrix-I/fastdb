@@ -230,6 +230,15 @@ fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
 
 #[async_trait]
 impl DatabaseDriver for MySqlDriver {
+    fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
+        use crate::catalog::CatalogSection as C;
+        use crate::metadata::{MetadataCapabilities, MetadataFeature as F};
+        MetadataCapabilities::new(
+            &[F::Columns, F::Constraints, F::Indexes, F::ForeignKeys],
+            &[F::Catalog(C::Rules), F::Catalog(C::Policies)],
+        )
+    }
+
     async fn ping(&self) -> Result<()> {
         let pool = self.get_pool()?;
         crate::run_on_shared_runtime(async move {

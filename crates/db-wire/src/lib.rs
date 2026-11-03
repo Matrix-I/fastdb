@@ -5,6 +5,7 @@ pub mod catalog;
 pub mod column;
 pub mod export;
 pub mod filter;
+pub mod metadata;
 pub mod mysql;
 pub mod odbc;
 pub mod postgres;

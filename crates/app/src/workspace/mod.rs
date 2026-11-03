@@ -16,6 +16,7 @@ mod connection_config;
 mod connection_dialog;
 mod connection_state;
 mod connections;
+mod metadata_state;
 use connection_state::{ConnectionFormState, ConnectionManager, ConnectionSession};
 mod data_edit;
 mod data_panel;

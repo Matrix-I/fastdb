@@ -11,14 +11,16 @@ impl TableProperties {
                 .map(|c| vec![c.name.clone(), c.columns.join(", "), c.definition.clone()])
                 .collect()
         } else {
-            self.constraints
+            self.foreign_keys
                 .iter()
-                .filter(|(_, kind)| kind == "FOREIGN KEY")
-                .map(|(name, _)| {
+                .map(|key| {
                     vec![
-                        name.clone(),
-                        "Unavailable".into(),
-                        "Referenced table, columns and actions: Unavailable".into(),
+                        key.name.clone(),
+                        key.source_column.clone(),
+                        format!(
+                            "{}.{} ({}) · actions/deferrability unavailable",
+                            key.target_schema, key.target_table, key.target_column
+                        ),
                     ]
                 })
                 .collect()
@@ -34,7 +36,7 @@ impl TableProperties {
             if self.details.is_some() {
                 "No foreign keys."
             } else {
-                "Foreign key definitions are unavailable or empty."
+                "Foreign keys loaded: no objects found. Native definitions/actions are unavailable."
             },
             theme,
         )

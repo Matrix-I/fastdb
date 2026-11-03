@@ -2,7 +2,9 @@ use super::connection_config::ConnectionRepository;
 fn connections_config_path() -> std::path::PathBuf {
     platform_hal::paths::config_dir().join("connections.json")
 }
+use super::metadata_state::{MetadataState, MetadataStates, load_optional};
 use super::*;
+use db_wire::metadata::{MetadataFeature as F, MetadataSupport};
 
 /// Navigator metadata of one connection
 pub(super) struct SchemaMetadata {
@@ -11,33 +13,53 @@ pub(super) struct SchemaMetadata {
     constraints: Vec<(String, String, String, String)>,
     indexes: Vec<(String, String, String)>,
     details: Vec<(String, String, db_wire::TableDetails)>,
-    details_error: Option<String>,
-    foreign_keys: Result<Option<Vec<db_wire::ForeignKey>>, String>,
+    states: Arc<MetadataStates>,
+    foreign_keys: Vec<db_wire::ForeignKey>,
 }
 
-/// Loads tables, then columns, constraints and indexes in batch; only a failed
-/// table listing is an error, the rest fall back to empty
+/// Required table discovery fails explicitly; optional readers retain independent outcomes.
 async fn fetch_schema_metadata(driver: &dyn DatabaseDriver) -> Result<SchemaMetadata, String> {
     let tables = driver
         .list_tables()
         .await
-        .map_err(|e| format!("Connected but failed to list tables: {}", e))?;
-    let details = driver.list_table_details().await;
-    let details_error = details
-        .as_ref()
-        .err()
-        .map(|e| format!("Table details unavailable: {e}"));
+        .map_err(|e| format!("Connected but failed to list tables: {e}"))?;
+    let capabilities = driver.metadata_capabilities();
+    let (columns, constraints, indexes, details, foreign_keys) = tokio::join!(
+        load_optional(capabilities.support(F::Columns), driver.list_all_columns()),
+        load_optional(
+            capabilities.support(F::Constraints),
+            driver.list_all_constraints()
+        ),
+        load_optional(capabilities.support(F::Indexes), driver.list_all_indexes()),
+        load_optional(
+            capabilities.support(F::TableDetails),
+            driver.list_table_details()
+        ),
+        load_optional(
+            capabilities.support(F::ForeignKeys),
+            driver.list_foreign_keys()
+        ),
+    );
+    let foreign_state = if foreign_keys.1 == MetadataState::Ready && foreign_keys.0.is_none() {
+        MetadataState::Unavailable(MetadataSupport::NotImplemented)
+    } else {
+        foreign_keys.1
+    };
+    let states = Arc::new(HashMap::from([
+        (F::Columns, columns.1),
+        (F::Constraints, constraints.1),
+        (F::Indexes, indexes.1),
+        (F::TableDetails, details.1),
+        (F::ForeignKeys, foreign_state),
+    ]));
     Ok(SchemaMetadata {
-        foreign_keys: driver
-            .list_foreign_keys()
-            .await
-            .map_err(|e| format!("Foreign keys unavailable: {e}")),
         tables,
-        columns: driver.list_all_columns().await.unwrap_or_default(),
-        constraints: driver.list_all_constraints().await.unwrap_or_default(),
-        indexes: driver.list_all_indexes().await.unwrap_or_default(),
-        details: details.unwrap_or_default(),
-        details_error,
+        columns: columns.0,
+        constraints: constraints.0,
+        indexes: indexes.0,
+        details: details.0,
+        foreign_keys: foreign_keys.0.unwrap_or_default(),
+        states,
     })
 }
 
@@ -517,6 +539,13 @@ impl Workspace {
         let session = self.connections.session_mut(connection_id);
         let mut tree = BTreeMap::<String, Vec<TableSummary>>::new();
         let mut properties = HashMap::new();
+        let mut foreign_key_map: HashMap<_, Vec<_>> = HashMap::new();
+        for key in &metadata.foreign_keys {
+            foreign_key_map
+                .entry((key.source_schema.clone(), key.source_table.clone()))
+                .or_default()
+                .push(key.clone());
+        }
         let mut details: HashMap<_, _> = metadata
             .details
             .into_iter()
@@ -539,21 +568,33 @@ impl Workspace {
                     .unwrap_or_default(),
                 session.table_indexes.get(&key).cloned().unwrap_or_default(),
             )
-            .with_metadata(details.remove(&key), metadata.details_error.clone());
+            .with_metadata(
+                details.remove(&key),
+                metadata
+                    .states
+                    .get(&F::TableDetails)
+                    .and_then(MetadataState::message),
+            )
+            .with_states(
+                metadata.states.clone(),
+                foreign_key_map.remove(&key).unwrap_or_default(),
+            );
             properties.insert(key, Arc::new(model));
         }
-        let (foreign_keys, notice) = match metadata.foreign_keys {
-            Ok(Some(keys)) => (keys, None),
-            Ok(None) => (
-                Vec::new(),
-                Some("Foreign-key relationships unavailable for this provider".into()),
-            ),
-            Err(error) => (Vec::new(), Some(error)),
-        };
+        let notices: Vec<_> = [F::Columns, F::ForeignKeys]
+            .into_iter()
+            .filter_map(|feature| {
+                metadata
+                    .states
+                    .get(&feature)
+                    .and_then(MetadataState::message)
+            })
+            .collect();
+        let notice = (!notices.is_empty()).then(|| notices.join(" · "));
         session.diagram = Arc::new(super::diagram_model::DiagramModel::build(
             &session.tables,
             &session.table_columns,
-            foreign_keys,
+            metadata.foreign_keys,
             notice,
         ));
         session.schema_tree = Arc::new(tree);
@@ -742,5 +783,29 @@ impl Workspace {
 
         self.save_config();
         self.form.show_connection_modal = false;
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::fetch_schema_metadata;
+    use crate::workspace::metadata_state::MetadataState;
+    use db_wire::metadata::{MetadataFeature as F, MetadataSupport};
+    use db_wire::{DatabaseDriver, SqliteDriver};
+    #[test]
+    fn table_discovery_survives_optional_failure_without_claiming_empty_metadata() {
+        db_wire::get_runtime().block_on(async {
+            let driver = SqliteDriver::new_memory();
+            driver.execute_query("CREATE TABLE real_table (id INTEGER PRIMARY KEY)").await.unwrap();
+            driver.execute_query("CREATE VIEW broken AS SELECT id FROM missing_relation").await.unwrap();
+            let metadata=fetch_schema_metadata(&driver).await.unwrap();
+            assert!(metadata.tables.iter().any(|t|t.name=="real_table"));
+            assert!(matches!(metadata.states.get(&F::Columns),Some(MetadataState::Failed(error)) if error.contains("missing_relation")));
+            assert!(metadata.columns.is_empty());
+            assert_eq!(metadata.states.get(&F::Constraints),Some(&MetadataState::Unavailable(MetadataSupport::NotImplemented)));
+            assert_eq!(metadata.states.get(&F::Indexes),Some(&MetadataState::Ready));
+            assert!(metadata.indexes.is_empty());
+            assert_eq!(metadata.states.get(&F::ForeignKeys),Some(&MetadataState::Ready));
+        });
     }
 }

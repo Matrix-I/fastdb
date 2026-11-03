@@ -1,14 +1,16 @@
+use super::metadata_state::MetadataState;
 use super::script_tools::tool;
 use super::*;
 use db_wire::catalog::{CatalogRow, CatalogSection};
+use db_wire::metadata::{MetadataFeature, MetadataSupport};
 use gpui::prelude::FluentBuilder;
 
 #[derive(Clone)]
 pub(super) enum CatalogState {
     Loading,
     Ready(Arc<Vec<CatalogRow>>),
-    Unsupported,
-    Failed(String),
+    Unavailable(MetadataSupport),
+    Failed(MetadataState),
 }
 #[derive(Default)]
 pub(super) struct CatalogCache {
@@ -59,10 +61,21 @@ impl Workspace {
         let Some(driver) = driver else {
             tab.catalog.sections.insert(
                 section,
-                CatalogState::Failed("Disconnected; reconnect and Retry".into()),
+                CatalogState::Failed(MetadataState::Failed(
+                    "Disconnected; reconnect and Retry".into(),
+                )),
             );
             return;
         };
+        let support = driver
+            .metadata_capabilities()
+            .support(MetadataFeature::Catalog(section));
+        if support != MetadataSupport::Available {
+            tab.catalog
+                .sections
+                .insert(section, CatalogState::Unavailable(support));
+            return;
+        }
         let owner = tab.connection_id.clone().unwrap_or_default();
         let schema = tab.schema_name.clone().unwrap_or_default();
         let table = tab.table_name.clone().unwrap_or_default();
@@ -98,8 +111,8 @@ impl Workspace {
                     section,
                     match result {
                         Ok(Some(rows)) => CatalogState::Ready(Arc::new(rows)),
-                        Ok(None) => CatalogState::Unsupported,
-                        Err(error) => CatalogState::Failed(format!("{error:#}")),
+                        Ok(None) => CatalogState::Unavailable(MetadataSupport::NotImplemented),
+                        Err(error) => CatalogState::Failed(MetadataState::from_error(&error)),
                     },
                 );
                 cx.notify();
@@ -140,7 +153,7 @@ impl Workspace {
                     .bg(theme.bg_grid_header)
                     .child(section.label())
                     .when(
-                        !matches!(&state, CatalogState::Loading | CatalogState::Unsupported),
+                        !matches!(&state, CatalogState::Loading | CatalogState::Unavailable(_)),
                         |header| {
                             header.child(tool("Reload section").on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -162,15 +175,21 @@ impl Workspace {
             CatalogState::Loading => {
                 panel = panel.child(div().p_4().child("Loading catalog metadata…"))
             }
-            CatalogState::Unsupported => {
+            CatalogState::Unavailable(support) => {
                 panel = panel.child(
                     div()
                         .p_4()
-                        .child("This provider does not expose this catalog section yet."),
+                        .child(support.explanation().unwrap_or("Metadata unavailable")),
                 )
             }
             CatalogState::Failed(error) => {
-                panel = panel.child(div().p_4().text_color(rgb(0xf85149)).child(error))
+                panel = panel.child(
+                    div().p_4().text_color(rgb(0xf85149)).child(
+                        error
+                            .message()
+                            .unwrap_or_else(|| "Metadata unavailable".into()),
+                    ),
+                )
             }
             CatalogState::Ready(rows) => {
                 panel=panel.child(div().p_2().text_color(theme.text_secondary)

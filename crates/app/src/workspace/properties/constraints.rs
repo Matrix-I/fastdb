@@ -58,7 +58,7 @@ impl TableProperties {
             if self.details.is_some() {
                 "No constraints."
             } else {
-                "Constraint metadata is unavailable or empty."
+                "Constraints loaded: no objects found. Native definitions are unavailable."
             },
             theme,
         )

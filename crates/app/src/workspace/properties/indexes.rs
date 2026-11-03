@@ -47,7 +47,7 @@ impl TableProperties {
             if self.details.is_some() {
                 "No indexes."
             } else {
-                "Index metadata is unavailable or empty."
+                "Indexes loaded: no objects found. Native definitions are unavailable."
             },
             theme,
         )

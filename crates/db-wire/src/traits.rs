@@ -205,6 +205,11 @@ pub struct ForeignKey {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    /// Declares implemented readers; availability does not imply permission or nonempty results.
+    fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
+        crate::metadata::MetadataCapabilities::default()
+    }
+
     /// None is unsupported; Some(empty) is a successfully loaded empty catalog.
     async fn load_catalog_section(
         &self,
@@ -305,9 +310,8 @@ pub trait DatabaseDriver: Send + Sync {
         let tables = self.list_tables().await?;
         let mut results = Vec::new();
         for t in &tables {
-            if let Ok(cols) = self.list_columns(&t.schema, &t.name).await {
-                results.push((t.schema.clone(), t.name.clone(), cols));
-            }
+            let cols = self.list_columns(&t.schema, &t.name).await?;
+            results.push((t.schema.clone(), t.name.clone(), cols));
         }
         Ok(results)
     }

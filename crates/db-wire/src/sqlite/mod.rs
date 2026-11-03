@@ -108,6 +108,20 @@ fn sqlite_decl_data_type(decl_type: &str) -> DataType {
 
 #[async_trait]
 impl DatabaseDriver for SqliteDriver {
+    fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
+        use crate::catalog::CatalogSection as C;
+        use crate::metadata::{MetadataCapabilities, MetadataFeature as F};
+        MetadataCapabilities::new(
+            &[F::Columns, F::Indexes, F::ForeignKeys],
+            &[
+                F::Catalog(C::Partitions),
+                F::Catalog(C::Rules),
+                F::Catalog(C::Policies),
+                F::Catalog(C::Permissions),
+            ],
+        )
+    }
+
     async fn ping(&self) -> Result<()> {
         let conn = self.conn.lock();
         // `execute` rejects statements that return rows, so read the row instead

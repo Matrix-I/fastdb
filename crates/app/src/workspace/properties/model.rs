@@ -1,4 +1,7 @@
+use crate::workspace::metadata_state::{MetadataState, MetadataStates};
+use db_wire::metadata::MetadataFeature;
 use db_wire::{ColumnMeta, DbDriverKind, sql::generate_table_ddl};
+use std::sync::Arc;
 #[derive(Clone)]
 pub(in crate::workspace) struct TableProperties {
     pub schema: String,
@@ -9,6 +12,8 @@ pub(in crate::workspace) struct TableProperties {
     pub ddl: String,
     pub details: Option<db_wire::TableDetails>,
     pub metadata_error: Option<String>,
+    pub states: Arc<MetadataStates>,
+    pub foreign_keys: Vec<db_wire::ForeignKey>,
 }
 impl TableProperties {
     pub fn statistics_rows(&self) -> Vec<(&'static str, String)> {
@@ -113,9 +118,54 @@ impl TableProperties {
             ddl,
             details: None,
             metadata_error: None,
+            states: Arc::default(),
+            foreign_keys: Vec::new(),
         }
     }
 
+    pub fn with_states(
+        mut self,
+        states: Arc<MetadataStates>,
+        foreign_keys: Vec<db_wire::ForeignKey>,
+    ) -> Self {
+        self.states = states;
+        self.foreign_keys = foreign_keys;
+        self
+    }
+    pub fn ddl_notice(&self) -> Option<String> {
+        if self
+            .details
+            .as_ref()
+            .and_then(|details| details.ddl.as_ref())
+            .is_some()
+        {
+            None
+        } else {
+            self.section_notice(MetadataFeature::Columns)
+        }
+    }
+    pub fn section_notice(&self, feature: MetadataFeature) -> Option<String> {
+        if self.details.is_some()
+            && matches!(
+                feature,
+                MetadataFeature::Constraints
+                    | MetadataFeature::Indexes
+                    | MetadataFeature::ForeignKeys
+            )
+        {
+            return None;
+        }
+        match self.states.get(&feature) {
+            Some(MetadataState::Ready)
+                if feature == MetadataFeature::TableDetails && self.details.is_none() =>
+            {
+                Some("Native details are unavailable for this relation.".into())
+            }
+            Some(MetadataState::Ready) => None,
+            Some(state) => state.message(),
+            None => Some("Metadata has not been loaded. Connect and refresh to retry.".into()),
+        }
+    }
     pub fn with_metadata(
         mut self,
         details: Option<db_wire::TableDetails>,
@@ -158,6 +208,103 @@ mod tests {
     use super::TableProperties;
     use db_wire::{ColumnMeta, DataType, DbDriverKind};
 
+    #[test]
+    fn native_details_remain_available_when_summary_readers_fail() {
+        use crate::workspace::metadata_state::MetadataState;
+        use db_wire::metadata::MetadataFeature as F;
+        use std::sync::Arc;
+        let states = Arc::new(
+            [F::Columns, F::Constraints, F::Indexes, F::ForeignKeys]
+                .into_iter()
+                .map(|f| (f, MetadataState::Failed("summary failure".into())))
+                .collect(),
+        );
+        let model = TableProperties::new(
+            DbDriverKind::Postgres,
+            "public".into(),
+            "items".into(),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .with_metadata(
+            Some(db_wire::TableDetails {
+                ddl: Some("CREATE TABLE items ();".into()),
+                ..Default::default()
+            }),
+            None,
+        )
+        .with_states(states, vec![]);
+        for feature in [F::Constraints, F::Indexes, F::ForeignKeys] {
+            assert_eq!(model.section_notice(feature), None);
+        }
+        assert_eq!(model.ddl_notice(), None);
+        assert!(
+            model
+                .section_notice(F::Columns)
+                .unwrap()
+                .contains("summary failure")
+        );
+    }
+    #[test]
+    fn section_notices_preserve_loaded_empty_unavailable_and_failed_states() {
+        use crate::workspace::metadata_state::MetadataState;
+        use db_wire::metadata::{MetadataFeature as F, MetadataSupport};
+        use std::sync::Arc;
+        let model = TableProperties::new(
+            DbDriverKind::Sqlite,
+            "main".into(),
+            "empty".into(),
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(
+            model
+                .section_notice(F::Columns)
+                .unwrap()
+                .contains("not been loaded")
+        );
+        let model = model.with_states(
+            Arc::new(std::collections::HashMap::from([
+                (F::Columns, MetadataState::Ready),
+                (F::Indexes, MetadataState::Failed("index fixture".into())),
+                (
+                    F::Constraints,
+                    MetadataState::Unavailable(MetadataSupport::NotImplemented),
+                ),
+                (
+                    F::ForeignKeys,
+                    MetadataState::PermissionDenied("native error".into()),
+                ),
+                (F::TableDetails, MetadataState::Ready),
+            ])),
+            vec![],
+        );
+        assert_eq!(model.section_notice(F::Columns), None);
+        assert!(
+            model
+                .section_notice(F::Indexes)
+                .unwrap()
+                .contains("index fixture")
+        );
+        assert_eq!(
+            model.section_notice(F::Constraints).as_deref(),
+            MetadataSupport::NotImplemented.explanation()
+        );
+        assert!(
+            model
+                .section_notice(F::ForeignKeys)
+                .unwrap()
+                .starts_with("Permission denied.")
+        );
+        assert!(
+            model
+                .section_notice(F::TableDetails)
+                .unwrap()
+                .contains("this relation")
+        );
+    }
     #[test]
     fn ddl_preview_includes_available_definitions_as_safe_comments() {
         let model = TableProperties::new(

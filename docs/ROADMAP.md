@@ -28,7 +28,7 @@ Paths below are relative to `crates/app/src/workspace/` unless linked otherwise.
 | Properties: Partitions | **Implemented for PostgreSQL**: direct parent/child links and native bounds; GUI acceptance pending. | Partition mutation actions remain separate. |
 | Properties: Triggers, Rules, Policies | **Read-only readers implemented for PostgreSQL**: native definitions, enabled states and RLS details. | Mutation actions remain separate. |
 | Properties: Permissions | **Read-only ACL reader implemented for PostgreSQL**. | Effective privileges and grant/revoke UI remain separate. |
-| Properties: Virtual | **UI only**: same fallback; no virtual-key/relationship workflow. | Persist user-defined keys/relationships and use them in navigation/editing with explicit semantics. |
+| Properties: Virtual | **Disabled with explanation**; no virtual-key/relationship workflow. | Persist user-defined keys/relationships and use them in navigation/editing with explicit semantics. |
 | Table toolbar: Expand | **Implemented**: navigator/value panes hide with preserved widths; Restore button/Escape works from every tab. | GUI acceptance pending. |
 | Table toolbar: Criteria | **Implemented**: catalog column picker, AND/OR predicates, NULL/value distinction, provider literals, source preview and execution. | GUI acceptance pending. |
 | Table toolbar: history | **Implemented**: per-tab executed filter/order/fetch-size snapshots with bounded back/forward and branching. | GUI acceptance pending. |
@@ -59,7 +59,7 @@ Priorities below are proposed implementation order, not release dates. PostgreSQ
 
 ### P0 — Make the existing UI truthful and finish its result paths
 
-- [ ] **P0-01 — Capability states.** Disable/hide unsupported controls with an explanation; distinguish not implemented, provider unsupported, permission denied, empty and failed metadata. Eliminate clickable no-op controls listed above. Acceptance: audit each visible control on supported and unsupported providers.
+- [ ] **P0-01 — Capability states (metadata implemented; full control/GUI audit pending).** Disable/hide unsupported controls with an explanation; distinguish not implemented, provider unsupported, permission denied, empty and failed metadata. Metadata readers now declare availability, retain per-section failures and distinguish native permission errors from empty data; Virtual is disabled with an explanation. Eliminate remaining clickable no-op controls listed above. Acceptance: audit each visible control on supported and unsupported providers.
 - [x] **P0-02 — Missing Properties readers (implemented; GUI acceptance pending).** Implement Dependencies, References, Partitions, Triggers, Rules, Policies and Permissions for PostgreSQL. Acceptance: catalog fixtures with real objects produce navigable rows; empty/error states and refresh work. Keep mutation actions a separate milestone.
 - [x] **P0-03 — Filter workflow (implemented; GUI acceptance pending).** Implement criteria builder and per-tab history; define expand behavior. Acceptance: generated predicate/order, executed SQL and returned rows agree; back/forward and refresh retain the intended state.
 - [x] **P0-04 — ER relationships (implemented; GUI acceptance pending).** Replace the single entity preview with a usable FK diagram. Acceptance: composite/self-referencing/incoming/outgoing FKs render correctly and open the right connection/schema/table; layout and viewport remain responsive.

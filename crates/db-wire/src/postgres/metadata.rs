@@ -30,7 +30,10 @@ pub(super) async fn columns(
             &[&schema, &table],
         )
         .await
-        .map_err(|e| anyhow::anyhow!(super::pg_error_message(&e)))?;
+        .map_err(|e| {
+            let message = super::pg_error_message(&e);
+            anyhow::Error::new(e).context(message)
+        })?;
     let mut tables = BTreeMap::<(String, String), Vec<crate::ColumnMeta>>::new();
     for row in rows {
         let mut column =
@@ -112,11 +115,10 @@ ORDER BY n.nspname, c.relname, con.conname
 
 pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDetails)>> {
     let mut tables = BTreeMap::new();
-    for row in client
-        .query(TABLES, &[])
-        .await
-        .map_err(|e| anyhow::anyhow!(super::pg_error_message(&e)))?
-    {
+    for row in client.query(TABLES, &[]).await.map_err(|e| {
+        let message = super::pg_error_message(&e);
+        anyhow::Error::new(e).context(message)
+    })? {
         tables.insert(
             (row.get::<_, String>("schema"), row.get::<_, String>("name")),
             TableDetails {
@@ -141,11 +143,10 @@ pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDe
             },
         );
     }
-    for row in client
-        .query(INDEXES, &[])
-        .await
-        .map_err(|e| anyhow::anyhow!(super::pg_error_message(&e)))?
-    {
+    for row in client.query(INDEXES, &[]).await.map_err(|e| {
+        let message = super::pg_error_message(&e);
+        anyhow::Error::new(e).context(message)
+    })? {
         if let Some(table) = tables.get_mut(&(row.get::<_, String>(0), row.get::<_, String>(1))) {
             table.indexes.push(IndexDetails {
                 name: row.get(2),
@@ -157,11 +158,10 @@ pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDe
             });
         }
     }
-    for row in client
-        .query(CONSTRAINTS, &[])
-        .await
-        .map_err(|e| anyhow::anyhow!(super::pg_error_message(&e)))?
-    {
+    for row in client.query(CONSTRAINTS, &[]).await.map_err(|e| {
+        let message = super::pg_error_message(&e);
+        anyhow::Error::new(e).context(message)
+    })? {
         if let Some(table) = tables.get_mut(&(row.get::<_, String>(0), row.get::<_, String>(1))) {
             table.constraints.push(ConstraintDetails {
                 name: row.get(2),
@@ -192,4 +192,47 @@ pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDe
         }
     }
     Ok(tables.into_iter().map(|((s, t), d)| (s, t, d)).collect())
+}
+
+#[cfg(test)]
+mod permission_tests {
+    #[test]
+    fn metadata_readers_keep_native_permission_errors() {
+        let Ok(port) = std::env::var("FASTDB_TEST_PG_PORT") else {
+            assert!(
+                std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none(),
+                "FASTDB_TEST_PG_PORT required"
+            );
+            return;
+        };
+        crate::get_runtime().block_on(async {
+            let mut config=tokio_postgres::Config::new();
+            config.host(std::env::var("FASTDB_TEST_PG_HOST").unwrap_or_else(|_|"127.0.0.1".into()))
+                .port(port.parse().unwrap()).dbname("postgres")
+                .user(std::env::var("FASTDB_TEST_PG_USER").unwrap_or_else(|_|"postgres".into()));
+            if let Ok(password)=std::env::var("FASTDB_TEST_PG_PASSWORD") { config.password(password); }
+            config.connect_timeout(std::time::Duration::from_secs(5));
+            let (client,connection)=config.connect(tokio_postgres::NoTls).await.unwrap();
+            let task=tokio::spawn(connection);
+            let role=format!("fastdb_metadata_denied_{}", std::process::id());
+            // Transaction-local catalog ACL changes are invisible to other test sessions.
+            client.batch_execute(&format!("BEGIN; SET LOCAL statement_timeout='5s'; CREATE ROLE {role}; REVOKE SELECT ON pg_catalog.pg_attribute, pg_catalog.pg_trigger FROM PUBLIC; SET LOCAL ROLE {role}")).await.unwrap();
+            let columns=super::columns(&client,None,None).await;
+            client.batch_execute("ROLLBACK").await.unwrap();
+            client.batch_execute(&format!("BEGIN; SET LOCAL statement_timeout='5s'; CREATE ROLE {role}; REVOKE SELECT ON pg_catalog.pg_attribute FROM PUBLIC; SET LOCAL ROLE {role}")).await.unwrap();
+            let details=super::load(&client).await;
+            client.batch_execute("ROLLBACK").await.unwrap();
+            client.batch_execute(&format!("BEGIN; SET LOCAL statement_timeout='5s'; CREATE ROLE {role}; REVOKE SELECT ON pg_catalog.pg_trigger FROM PUBLIC; SET LOCAL ROLE {role}")).await.unwrap();
+            let catalog=super::super::catalog::query_catalog_rows(&client, super::super::catalog::TRIGGERS, 0).await;
+            client.batch_execute("ROLLBACK").await.unwrap();
+            drop(client);
+            task.abort();
+            let error=columns.expect_err("columns must fail without catalog SELECT");
+            assert!(crate::metadata::MetadataFailure::from_error(&error).permission_denied,"{error:#}");
+            let error=details.expect_err("native details must fail without catalog SELECT");
+            assert!(crate::metadata::MetadataFailure::from_error(&error).permission_denied,"{error:#}");
+            let error=catalog.expect_err("catalog must fail without catalog SELECT");
+            assert!(crate::metadata::MetadataFailure::from_error(&error).permission_denied,"{error:#}");
+        });
+    }
 }

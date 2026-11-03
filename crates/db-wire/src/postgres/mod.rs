@@ -193,6 +193,28 @@ impl PostgresDriver {
 
 #[async_trait]
 impl DatabaseDriver for PostgresDriver {
+    fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
+        use crate::catalog::CatalogSection as C;
+        use crate::metadata::{MetadataCapabilities, MetadataFeature as F};
+        MetadataCapabilities::new(
+            &[
+                F::Columns,
+                F::Constraints,
+                F::Indexes,
+                F::ForeignKeys,
+                F::TableDetails,
+                F::Catalog(C::Dependencies),
+                F::Catalog(C::References),
+                F::Catalog(C::Partitions),
+                F::Catalog(C::Triggers),
+                F::Catalog(C::Rules),
+                F::Catalog(C::Policies),
+                F::Catalog(C::Permissions),
+            ],
+            &[],
+        )
+    }
+
     fn supports_script_session(&self) -> bool {
         true
     }
@@ -427,10 +449,11 @@ async fn stream_client(
     start_time: Instant,
 ) -> Result<()> {
     let statement = client.prepare(sql).await.map_err(|e| {
-        report_error(
+        let reported = report_error(
             &event_tx,
             format!("SQL Preparation Error: {}", pg_error_message(&e)),
-        )
+        );
+        anyhow::Error::new(e).context(reported.to_string())
     })?;
 
     let columns: Vec<ColumnMeta> = statement
@@ -443,12 +466,17 @@ async fn stream_client(
     let row_stream = client
         .query_raw(&statement, std::iter::empty::<i32>())
         .await
-        .map_err(|e| sink.fail(format!("Query execution error: {}", pg_error_message(&e))))?;
+        .map_err(|e| {
+            let reported = sink.fail(format!("Query execution error: {}", pg_error_message(&e)));
+            anyhow::Error::new(e).context(reported.to_string())
+        })?;
     futures::pin_mut!(row_stream);
 
     while let Some(row_res) = row_stream.next().await {
-        let row = row_res
-            .map_err(|e| sink.fail(format!("Row stream error: {}", pg_error_message(&e))))?;
+        let row = row_res.map_err(|e| {
+            let reported = sink.fail(format!("Row stream error: {}", pg_error_message(&e)));
+            anyhow::Error::new(e).context(reported.to_string())
+        })?;
         for (col_idx, cell) in sink.cells_mut().iter_mut().enumerate() {
             *cell = decode_pg_cell(&row, col_idx);
         }
