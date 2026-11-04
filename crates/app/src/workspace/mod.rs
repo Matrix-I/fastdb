@@ -49,6 +49,7 @@ mod properties_panel;
 mod query;
 mod query_history;
 mod query_plan;
+mod result_search;
 mod schema_action_modal;
 mod script_files;
 mod script_lines;
@@ -167,6 +168,8 @@ pub struct Workspace {
     query_history: query_history::QueryHistory,
     script_action: Option<script_tools::ScriptAction>,
     script_search: Option<script_search::Search>,
+    result_search: Option<result_search::Search>,
+    result_search_worker: Arc<std::sync::atomic::AtomicBool>,
     script_request_id: u64,
     clipboard_request_id: u64,
     pub(super) allow_quit: bool,
@@ -260,6 +263,8 @@ impl Workspace {
             script_chooser: None,
             script_action: None,
             script_search: None,
+            result_search: None,
+            result_search_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
 
             value_panel: ValuePanelState::default(),
             panes: None,
@@ -564,6 +569,9 @@ impl Render for Workspace {
         }
         if self.script_search.is_some() {
             root = root.child(self.render_script_search(cx));
+        }
+        if self.result_search.is_some() {
+            root = root.child(self.render_result_search(cx));
         }
         if self.updates.read(cx).is_open() {
             root = root.child(self.updates.clone());

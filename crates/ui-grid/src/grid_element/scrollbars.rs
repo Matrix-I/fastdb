@@ -48,6 +48,7 @@ impl VirtualDataGrid {
         // views around it that cache their frame are reused.
         let h_handle = self.horizontal_scroll_handle.clone();
         let v_handle = self.vertical_scroll_handle.clone();
+        let fetch_wheel = self.auto_fetch_paused.clone();
         let wheel_router = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
@@ -66,6 +67,7 @@ impl VirtualDataGrid {
                             cur.y,
                         ));
                     } else if dy != 0.0 {
+                        fetch_wheel.set(false);
                         let state = v_handle.0.borrow();
                         let max_y = f32::from(state.base_handle.max_offset().height);
                         let cur = state.base_handle.offset();
@@ -114,6 +116,9 @@ impl VirtualDataGrid {
             let handle_up = self.vertical_scroll_handle.clone();
             let handle_down = self.vertical_scroll_handle.clone();
             let handle_track = self.vertical_scroll_handle.clone();
+            let fetch_up = self.auto_fetch_paused.clone();
+            let fetch_down = self.auto_fetch_paused.clone();
+            let fetch_track = self.auto_fetch_paused.clone();
 
             let v_scrollbar = div()
                 .id("grid-vertical-scrollbar")
@@ -146,6 +151,7 @@ impl VirtualDataGrid {
                         })
                         .child("▲")
                         .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
+                            fetch_up.set(false);
                             let cur_offset = handle_up.0.borrow().base_handle.offset();
                             let cur_y = f32::from(cur_offset.y);
                             let new_y = (cur_y + 100.0).min(0.0);
@@ -200,6 +206,7 @@ impl VirtualDataGrid {
                                                 return;
                                             }
                                             let travel = f32::from(bounds.size.height) - height;
+                                            fetch_track.set(false);
                                             let ratio = if travel > 0.0 {
                                                 ((f32::from(event.position.y - bounds.top())
                                                     - height / 2.0)
@@ -241,6 +248,7 @@ impl VirtualDataGrid {
                         })
                         .child("▼")
                         .on_mouse_down(MouseButton::Left, move |_event, window, _app| {
+                            fetch_down.set(false);
                             let cur_offset = handle_down.0.borrow().base_handle.offset();
                             let cur_y = f32::from(cur_offset.y);
                             let max_scroll_y =

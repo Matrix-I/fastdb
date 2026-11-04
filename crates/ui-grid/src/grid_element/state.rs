@@ -31,6 +31,9 @@ pub struct VirtualDataGrid {
     pub(super) cell_widths_stale: bool,
     pub horizontal_scroll_handle: ScrollHandle,
     pub vertical_scroll_handle: UniformListScrollHandle,
+    /// Programmatic search navigation must not request more database rows.
+    /// Manual vertical scrolling clears this hold, including after Find closes.
+    pub auto_fetch_paused: Rc<std::cell::Cell<bool>>,
 }
 
 impl VirtualDataGrid {
@@ -59,12 +62,14 @@ impl VirtualDataGrid {
             cell_widths_stale: false,
             horizontal_scroll_handle: ScrollHandle::new(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
+            auto_fetch_paused: Rc::new(std::cell::Cell::new(false)),
         };
         grid.recalculate_all_widths();
         grid
     }
 
     pub fn set_pager(&mut self, pager: Arc<QueryResultPager>) {
+        self.auto_fetch_paused.set(false);
         self.pager = Some(pager);
         self.manual_column_widths.clear();
         self.header_widths.clear();
@@ -86,6 +91,7 @@ impl VirtualDataGrid {
     /// widths and the horizontal scroll stay as they are, only the rows start over from the top.
     /// A result with other columns is laid out from scratch, as `set_pager` does.
     pub fn refill_pager(&mut self, pager: Arc<QueryResultPager>) {
+        self.auto_fetch_paused.set(false);
         let same_columns = self.pager.as_ref().is_some_and(|old| {
             old.columns.len() == pager.columns.len()
                 && old
