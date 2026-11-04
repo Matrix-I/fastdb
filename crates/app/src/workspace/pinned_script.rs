@@ -1,11 +1,11 @@
 use super::*;
 use db_wire::script::{ScriptControl, ScriptEvent, ScriptOutcome};
 
-#[derive(Clone, Copy)]
 enum ExecutionKind {
     Script,
     Plan,
     Settings,
+    Schema(String),
 }
 
 impl Workspace {
@@ -44,6 +44,24 @@ impl Workspace {
             statements,
             ExecutionKind::Settings,
             Some(SETTINGS_TIMEOUT),
+            cx,
+        );
+    }
+
+    pub(super) fn start_pinned_schema_change(
+        &mut self,
+        index: usize,
+        driver: Arc<dyn DatabaseDriver>,
+        statements: Vec<String>,
+        schema: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_pinned_execution(
+            index,
+            driver,
+            statements,
+            ExecutionKind::Schema(schema),
+            Some(std::time::Duration::from_secs(15)),
             cx,
         );
     }
@@ -94,10 +112,10 @@ impl Workspace {
     ) {
         let control = Arc::new(super::transaction_mode::script_control(
             self.tab_provider(index),
-            !matches!(kind, ExecutionKind::Settings) && self.tabs[index].manual_transactions,
+            !matches!(kind, ExecutionKind::Settings | ExecutionKind::Schema(_))
+                && self.tabs[index].manual_transactions,
             timeout,
         ));
-        let plan_requested = matches!(kind, ExecutionKind::Plan);
         let tab = &mut self.tabs[index];
         let tab_id = tab.id;
         let Some(connection_id) = tab.connection_id.clone() else {
@@ -130,7 +148,7 @@ impl Workspace {
             while let Ok(event) = rx.recv_async().await {
                 finished = matches!(event, ScriptEvent::Finished(_));
                 let applied = this.update(cx, |this, cx| {
-                    this.apply_pinned_script_event(run, tab_id, event, &control, plan_requested);
+                    this.apply_pinned_script_event(run, tab_id, event, &control, &kind);
                     this.notify_result(cx);
                 });
                 if applied.is_err() {
@@ -151,7 +169,7 @@ impl Workspace {
                             ..Default::default()
                         }),
                         &control,
-                        plan_requested,
+                        &kind,
                     );
                     this.notify_result(cx);
                 });
@@ -178,7 +196,7 @@ impl Workspace {
         tab_id: u64,
         event: ScriptEvent,
         control: &ScriptControl,
-        plan_requested: bool,
+        kind: &ExecutionKind,
     ) {
         if !self.operations.matches(run, tab_id) {
             control.request_cancel();
@@ -204,11 +222,17 @@ impl Workspace {
             ScriptEvent::TransactionState { active } => {
                 tab.transaction_state = if active { "In transaction" } else { "Idle" }.into();
             }
+            ScriptEvent::TransactionFailed => {
+                tab.transaction_state = "Transaction failed; Rollback required".into();
+            }
             ScriptEvent::StatementStarted { sql } => {
                 if let Some(connection) = &tab.connection_id {
                     self.query_history.record(connection.clone(), sql.clone());
                 }
-                let is_plan = super::transaction_mode::statement_is_plan(plan_requested, &sql);
+                let is_plan = super::transaction_mode::statement_is_plan(
+                    matches!(kind, ExecutionKind::Plan),
+                    &sql,
+                );
                 tab.begin_session_statement(sql, is_plan);
                 tab.script_status = Some("Running script on a dedicated session…".into());
             }
@@ -226,7 +250,16 @@ impl Workspace {
                 tab.script_status =
                     Some("Closing script session and rolling back any open transaction…".into());
             }
-            ScriptEvent::Finished(outcome) => {
+            ScriptEvent::Finished(mut outcome) => {
+                if let ExecutionKind::Schema(expected) = kind
+                    && outcome.error.is_none()
+                    && !outcome.cancelled
+                    && !schema_readback_matches(tab.grid.pager.as_deref(), expected, provider)
+                {
+                    outcome.error = Some(format!(
+                        "Server did not confirm {expected} as the current schema"
+                    ));
+                }
                 if outcome.cancelled || outcome.cleanup_error.is_some() {
                     tab.transaction_state = "Session closed".into();
                 } else if outcome.error.is_some()
@@ -255,6 +288,23 @@ impl Workspace {
             }
         }
     }
+}
+
+fn schema_readback_matches(
+    pager: Option<&db_wire::QueryResultPager>,
+    expected: &str,
+    provider: DbDriverKind,
+) -> bool {
+    pager
+        .and_then(|pager| pager.get_cell(0, 0))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .is_some_and(|schema| {
+            if provider == DbDriverKind::Db2 {
+                schema.trim_end() == expected
+            } else {
+                schema == expected
+            }
+        })
 }
 
 fn transaction_error_state(provider: DbDriverKind) -> Option<&'static str> {

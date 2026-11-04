@@ -112,7 +112,13 @@ impl Workspace {
             && driver.supports_script_session()
         {
             let sql = self.tabs[index].editor.active_statement();
-            match sql_intel::split_session_script(&sql) {
+            let provider = self.tab_provider(index);
+            let parsed = if self.tabs[index].editor.buffer.selection().is_some() {
+                super::sql_script::split_selected_for_provider(&sql, provider)
+            } else {
+                super::sql_script::split_for_provider(&sql, provider)
+            };
+            match parsed {
                 Ok(statements) if !statements.is_empty() => {
                     self.start_pinned_script(index, driver, statements, cx)
                 }
@@ -176,7 +182,10 @@ impl Workspace {
             return;
         };
         if driver.supports_script_session() {
-            let parsed = sql_intel::split_session_script(&self.tabs[index].editor.buffer.text());
+            let parsed = super::sql_script::split_for_provider(
+                &self.tabs[index].editor.buffer.text(),
+                self.tab_provider(index),
+            );
             match parsed {
                 Ok(statements) if !statements.is_empty() => {
                     self.start_pinned_script(index, driver, statements, cx)

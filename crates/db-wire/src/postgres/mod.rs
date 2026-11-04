@@ -251,6 +251,13 @@ impl PostgresDriver {
 
 #[async_trait]
 impl DatabaseDriver for PostgresDriver {
+    fn with_database(&self, database: &str) -> Result<Arc<dyn DatabaseDriver>> {
+        crate::session_context::validate_name(database).map_err(anyhow::Error::msg)?;
+        let mut config = self.config.clone();
+        config.database = database.into();
+        Ok(Arc::new(Self::new(config)))
+    }
+
     fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
         use crate::catalog::CatalogSection as C;
         use crate::metadata::{MetadataCapabilities, MetadataFeature as F};

@@ -5,7 +5,10 @@ pub(super) const FAILED_TRANSACTION_STATE: &str =
     "Transaction failed; Rollback or ROLLBACK TO required";
 
 pub(super) fn client_managed(provider: DbDriverKind) -> bool {
-    matches!(provider, DbDriverKind::Postgres | DbDriverKind::Sqlite)
+    matches!(
+        provider,
+        DbDriverKind::Postgres | DbDriverKind::Sqlite | DbDriverKind::Oracle | DbDriverKind::Db2
+    )
 }
 
 /// Called after script preflight. Ordinary statements begin a manual transaction

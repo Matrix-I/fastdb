@@ -130,7 +130,9 @@ Connection**, then **Connect**, open a SQL script and run the statement at the
 caret. SQL for these three providers is sent without automatic SELECT wrapping;
 use the database's own `TOP`, `FETCH`, or other limits when needed. Oracle SQL and Db2 statement
 terminators are removed; Oracle PL/SQL block semicolons are retained.
-SQL*Plus commands and batch delimiters such as `GO` are not SQL statements.
+In Run script, standalone `GO` separates SQL Server batches, standalone `/`
+ends an Oracle PL/SQL block, and `--#SET TERMINATOR` sets the Db2 delimiter.
+FastDB strips these client directives. SQL Server executes each batch once.
 
 Result sets stream through the existing bounded result store. SQL NULL remains
 NULL, strings are decoded through UTF-16, exact decimals remain text, and binary
@@ -165,6 +167,8 @@ Run `cargo test -p db-wire --test provider_test -- --nocapture` after setting
 skipped. `FASTDB_REQUIRE_PROVIDER_TESTS=1` requires all three providers to be
 configured. The basic tests only read data; set `FASTDB_TEST_PROVIDER_WRITES=1` to
 also exercise DDL, DML and transactional row editing in uniquely named test tables.
+The write opt-in also checks dedicated tab transactions, native savepoints and
+rollback on session closure with read-back through a separate connection.
 The configured accounts need permission to create/drop their own test tables for
 that optional write check. These tests require actual vendor clients and servers;
 unit tests do not establish vendor compatibility.

@@ -64,6 +64,7 @@ mod script_saves;
 mod script_store;
 use script_saves::{AfterSave, SaveQueue};
 mod script_view;
+mod session_context;
 mod session_controls;
 mod software_update;
 mod sql_script;
@@ -593,6 +594,13 @@ impl Render for Workspace {
 
 impl Workspace {
     fn tab_session(&self, index: usize) -> &ConnectionSession {
+        if let Some(session) = self
+            .tabs
+            .get(index)
+            .and_then(|tab| tab.context_session.as_ref())
+        {
+            return session;
+        }
         self.tabs
             .get(index)
             .and_then(|t| t.connection_id.as_ref())

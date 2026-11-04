@@ -285,6 +285,13 @@ fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
 
 #[async_trait]
 impl DatabaseDriver for MySqlDriver {
+    fn with_database(&self, database: &str) -> Result<Arc<dyn DatabaseDriver>> {
+        crate::session_context::validate_name(database).map_err(anyhow::Error::msg)?;
+        let mut config = self.config.clone();
+        config.database = database.into();
+        Ok(Arc::new(Self::new(config)))
+    }
+
     fn supports_script_session(&self) -> bool {
         true
     }

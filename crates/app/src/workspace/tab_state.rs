@@ -60,6 +60,7 @@ pub struct TabState {
     pub(super) results: Vec<ScriptResult>,
     pub(super) active_result: usize,
     pub(super) tab_session: Arc<db_wire::script::TabSession>,
+    pub(super) context_session: Option<ConnectionSession>,
     pub(super) transaction_state: String,
     pub(super) manual_transactions: bool,
     pub(super) script_status: Option<String>,
@@ -239,6 +240,30 @@ impl TabState {
         }
     }
 
+    pub(super) fn database_script(
+        id: u64,
+        connection_id: String,
+        database: String,
+        kind: DbDriverKind,
+        driver: Arc<dyn DatabaseDriver>,
+        theme: Theme,
+    ) -> Self {
+        let session = ConnectionSession {
+            kind,
+            driver: Some(driver),
+            ..ConnectionSession::default()
+        };
+        Self {
+            title: format!("{database} · Temporary SQL"),
+            editor: SqlEditorView::new("", theme.clone(), Some(session.schema_cache.clone())),
+            grid: VirtualDataGrid::new(None, theme),
+            editor_focused: true,
+            connection_id: Some(connection_id),
+            context_session: Some(session),
+            ..Self::blank(id)
+        }
+    }
+
     /// Whether a script tab's editor holds changes not yet written to its file
     pub fn mark_saved(&mut self, revision: u64, text: String) {
         if revision >= self.saved_revision {
@@ -301,6 +326,7 @@ impl TabState {
             active_result: 0,
             pending_statements: Default::default(),
             tab_session: Arc::default(),
+            context_session: None,
             transaction_state: "Idle".into(),
             manual_transactions: false,
             script_status: None,

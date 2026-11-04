@@ -15,6 +15,10 @@ pub trait ScriptSession: Send + Sync {
     fn in_transaction(&self) -> Option<bool> {
         None
     }
+    /// True when the server requires rollback before this transaction can commit.
+    fn transaction_failed(&self) -> bool {
+        false
+    }
     async fn execute_streaming(&self, sql: &str, tx: flume::Sender<StreamEvent>) -> Result<()>;
     async fn cancel_active_query(&self) -> Result<()>;
     /// Roll back any remaining transaction and close the session.
@@ -92,6 +96,7 @@ pub enum ScriptEvent {
     StatementStarted { sql: String },
     Stream(StreamEvent),
     TransactionState { active: bool },
+    TransactionFailed,
     CleaningUp,
     Finished(ScriptOutcome),
 }
@@ -279,13 +284,17 @@ async fn run_script_inner(
             Some(Ok(())) => {}
         }
         // All events for this statement must precede the next StatementStarted.
-        if let Err(error) = relay.await {
+        if control.is_cancelled() {
+            relay.abort();
+        } else if let Err(error) = relay.await {
             outcome.error = Some(format!("Script event stream failed: {error}"));
         }
-        if !control.is_cancelled()
-            && let Some(active) = session.in_transaction()
-        {
-            send(&tx, &control, ScriptEvent::TransactionState { active });
+        if !control.is_cancelled() {
+            if session.transaction_failed() {
+                send(&tx, &control, ScriptEvent::TransactionFailed);
+            } else if let Some(active) = session.in_transaction() {
+                send(&tx, &control, ScriptEvent::TransactionState { active });
+            }
         }
         if outcome.error.is_some() || control.is_cancelled() {
             break;

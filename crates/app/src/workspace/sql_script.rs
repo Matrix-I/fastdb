@@ -1,5 +1,32 @@
 //! Helpers for SQL script tabs: paging a free-form SELECT like a table.
 
+pub(super) fn split_for_provider(
+    sql: &str,
+    provider: db_wire::DbDriverKind,
+) -> Result<Vec<String>, String> {
+    sql_intel::vendor_script::split(sql, script_dialect(provider))
+}
+
+pub(super) fn split_selected_for_provider(
+    sql: &str,
+    provider: db_wire::DbDriverKind,
+) -> Result<Vec<String>, String> {
+    sql_intel::vendor_script::split_selection(sql, script_dialect(provider))
+}
+
+fn script_dialect(provider: db_wire::DbDriverKind) -> sql_intel::vendor_script::ScriptDialect {
+    use db_wire::DbDriverKind::*;
+    use sql_intel::vendor_script::ScriptDialect;
+    match provider {
+        Postgres => ScriptDialect::Postgres,
+        MySql | MariaDb => ScriptDialect::MySql,
+        Sqlite => ScriptDialect::Sqlite,
+        SqlServer => ScriptDialect::SqlServer,
+        Oracle => ScriptDialect::Oracle,
+        Db2 => ScriptDialect::Db2,
+    }
+}
+
 /// Wraps a plain SELECT in a sub-select reading `size` rows from `offset`, so a script's
 /// result is fetched in chunks like a table's. Returns `None` for any other statement, or
 /// one that already limits or locks its rows, which then runs exactly as written.

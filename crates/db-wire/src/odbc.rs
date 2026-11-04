@@ -1,5 +1,7 @@
 //! SQL Server, Oracle and Db2 through installed vendor ODBC drivers.
 //! The driver manager is bundled; vendor clients are discovered at runtime.
+mod script;
+
 use crate::stream::{RowSink, report_error};
 use crate::{ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary};
 use anyhow::{Context, Result, bail};
@@ -125,6 +127,8 @@ pub struct OdbcDriver {
     connection: Arc<Mutex<Option<Connection<'static>>>>,
     active_statement: Arc<Mutex<Option<usize>>>,
     cancelled: Arc<AtomicBool>,
+    dedicated: bool,
+    closed: Arc<AtomicBool>,
 }
 
 // Declared after the statement so it clears the handle before the statement is freed,
@@ -143,6 +147,8 @@ impl OdbcDriver {
             connection: Arc::new(Mutex::new(None)),
             active_statement: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(AtomicBool::new(false)),
+            dedicated: false,
+            closed: Arc::default(),
         }
     }
 
@@ -193,7 +199,13 @@ impl OdbcDriver {
         crate::run_on_shared_runtime(async move {
             tokio::task::spawn_blocking(move || {
                 let mut connection = this.connection.lock();
+                if this.closed.load(Ordering::Acquire) {
+                    bail!("ODBC session is closed");
+                }
                 if connection.is_none() {
+                    if this.dedicated {
+                        bail!("ODBC session has no connection");
+                    }
                     *connection = Some(this.connect()?);
                 }
                 operation(connection.as_ref().unwrap(), &this)
@@ -228,6 +240,22 @@ impl OdbcDriver {
     }
 }
 
+fn without_leading_comments(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if sql.starts_with("--") {
+            sql = sql.split_once('\n').map_or("", |(_, rest)| rest);
+        } else if let Some(comment) = sql.strip_prefix("/*") {
+            let Some((_, rest)) = comment.split_once("*/") else {
+                return sql;
+            };
+            sql = rest;
+        } else {
+            return sql;
+        }
+    }
+}
+
 /// Oracle SQL does not accept SQL*Plus semicolons; PL/SQL blocks require theirs.
 fn executable_sql(kind: DbDriverKind, sql: &str) -> String {
     let sql = sql.trim();
@@ -237,7 +265,7 @@ fn executable_sql(kind: DbDriverKind, sql: &str) -> String {
     if kind != DbDriverKind::Oracle {
         return sql.to_owned();
     }
-    let upper = sql.to_ascii_uppercase();
+    let upper = without_leading_comments(sql).to_ascii_uppercase();
     let block = upper.starts_with("BEGIN")
         || upper.starts_with("DECLARE")
         || (upper.starts_with("CREATE")
@@ -287,6 +315,24 @@ fn engine_type(kind: odbc_api::DataType) -> DataType {
 
 #[async_trait]
 impl DatabaseDriver for OdbcDriver {
+    fn supports_script_session(&self) -> bool {
+        true
+    }
+
+    async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
+        script::open(self.config.clone()).await
+    }
+
+    fn with_database(&self, database: &str) -> Result<Arc<dyn DatabaseDriver>> {
+        if self.config.driver != DbDriverKind::SqlServer {
+            bail!("This ODBC provider requires a separate saved connection for another database");
+        }
+        crate::session_context::validate_name(database).map_err(anyhow::Error::msg)?;
+        let mut config = self.config.clone();
+        config.database = database.into();
+        Ok(Arc::new(Self::new(config)))
+    }
+
     async fn ping(&self) -> Result<()> {
         let sql = match self.config.driver {
             DbDriverKind::Oracle => "SELECT 1 FROM DUAL",
@@ -325,11 +371,16 @@ impl DatabaseDriver for OdbcDriver {
         control.check()?;
         let sql = executable_sql(self.config.driver, sql);
         let errors = event_tx.clone();
-        self.cancelled.store(false, Ordering::SeqCst);
+        if !self.dedicated {
+            self.cancelled.store(false, Ordering::SeqCst);
+        }
         let result = self
             .with_connection(move |conn, this| {
                 let started = Instant::now();
                 let mut statement = conn.preallocate()?;
+                if this.dedicated {
+                    statement.set_query_timeout_sec(script::QUERY_TIMEOUT_SECONDS)?;
+                }
                 *this.active_statement.lock() = Some(statement.as_stmt_ref().as_sys().0 as usize);
                 let _active = ActiveStatement(this.active_statement.clone());
                 if this.cancelled.load(Ordering::SeqCst) {
@@ -387,7 +438,7 @@ impl DatabaseDriver for OdbcDriver {
                         }
                         // Drain subsequent results so session state and late SQL errors are preserved.
                         while let Some(mut next) = cursor.more_results()? {
-                            while next.next_row()?.is_some() {
+                            while next.num_result_cols()? > 0 && next.next_row()?.is_some() {
                                 if this.cancelled.load(Ordering::SeqCst) {
                                     bail!("Query cancelled");
                                 }
@@ -404,6 +455,16 @@ impl DatabaseDriver for OdbcDriver {
                 };
                 if no_rows {
                     let affected_rows = statement.row_count()?.map(|n| n as u64);
+                    if this.dedicated && this.config.driver == DbDriverKind::SqlServer {
+                        let mut statement = statement.as_stmt_ref();
+                        // SAFETY: no cursor or bound buffers remain after execute returned None.
+                        // Advancing also surfaces errors from later commands in the same batch.
+                        while unsafe { statement.more_results() }.into_result_bool(&statement)? {
+                            if this.cancelled.load(Ordering::Acquire) {
+                                bail!("Query cancelled");
+                            }
+                        }
+                    }
                     let _ = event_tx.send(StreamEvent::CommandComplete { affected_rows });
                     RowSink::start(Vec::new(), event_tx, started)?.finish();
                 }
