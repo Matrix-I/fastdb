@@ -12,7 +12,9 @@ impl Workspace {
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
         let view_mode = tab.view_mode;
-        let show_right_panels = self.layout.show_right_panels && !self.layout.focus_data;
+        let show_right_panels = self.layout.show_right_panels
+            && !self.layout.focus_data
+            && view_mode != DataViewMode::Record;
         let mut data_row = div().flex().flex_row().flex_1().w_full().overflow_hidden();
 
         // Left vertical toolstrip (Grid / Text)
@@ -54,6 +56,7 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
                                 t.view_mode = DataViewMode::Grid;
+                                t.record_view = None;
                                 cx.notify();
                             }
                         }))
@@ -85,6 +88,7 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
                                 t.view_mode = DataViewMode::Text;
+                                t.record_view = None;
                                 cx.notify();
                             }
                         }))
@@ -164,9 +168,9 @@ impl Workspace {
                                     this.extend_grid_drag(row, col, cx);
                                 });
                             });
-                            // Ordering is added to the generated SELECT, so only table tabs offer it
+                            // Both table and SQL results offer column layout actions.
                             let on_header_menu: Option<ui_grid::HeaderMenuHandler> =
-                                self.tabs[active_tab_idx].table_name.is_some().then(|| {
+                                self.tabs[active_tab_idx].grid.pager.is_some().then(|| {
                                     let menu_view = view.clone();
                                     std::rc::Rc::new(move |col: usize, event: &MouseDownEvent, _window: &mut Window, app: &mut App| {
                                         let _ = menu_view.update(app, |this, cx| {
@@ -238,6 +242,7 @@ impl Workspace {
                                     .into_any_element()
                             }).into_any_element()
                         }
+                        DataViewMode::Record => self.render_record_view(active_tab_idx, cx).into_any_element(),
                         DataViewMode::Text => {
                             let tab = &self.tabs[active_tab_idx];
                             let mut text_lines = Vec::new();
@@ -362,6 +367,12 @@ impl Workspace {
         } else {
             finder.opacity(0.4)
         };
+        let record = super::script_tools::tool("Record");
+        let record = if self.tabs[active_tab_idx].grid.row_count() > 0 {
+            record.on_click(cx.listener(move |this, _, _, cx| this.open_record_view(tab_id, cx)))
+        } else {
+            record.opacity(0.4)
+        };
         div()
             .flex()
             .flex_col()
@@ -374,7 +385,36 @@ impl Workspace {
                     .px_2()
                     .py_1()
                     .bg(theme.bg_surface)
-                    .child(finder),
+                    .child(finder)
+                    .child(record)
+                    .children(
+                        (self.tabs[active_tab_idx].is_script()
+                            && self.tab_provider(active_tab_idx) == DbDriverKind::Postgres)
+                            .then(|| {
+                                super::script_tools::tool("Load editable result").on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.load_editable_result(tab_id, cx)
+                                    }),
+                                )
+                            }),
+                    )
+                    .children(
+                        (self.tabs[active_tab_idx].is_script()
+                            && (self.editable_query_result(active_tab_idx)
+                                || self.tabs[active_tab_idx].grid.changeset.is_dirty()
+                                || self.tabs[active_tab_idx].grid.editing_cell.is_some()))
+                        .then(|| self.render_edit_toolbar(cx)),
+                    )
+                    .children(
+                        self.tabs[active_tab_idx]
+                            .reference_picker
+                            .is_some()
+                            .then(|| {
+                                super::script_tools::tool("Use selected key").on_click(
+                                    cx.listener(|this, _, _, cx| this.accept_grid_reference(cx)),
+                                )
+                            }),
+                    ),
             )
             .child(data_row)
     }

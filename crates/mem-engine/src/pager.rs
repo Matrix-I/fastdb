@@ -11,8 +11,28 @@ use crate::types::ColumnMeta;
 
 pub const DEFAULT_MAX_RESIDENT_PAGES: usize = 1024; // 1,024 pages x 64KB ~= 64 MB RAM
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryEditColumn {
+    pub attribute: i16,
+    pub name: String,
+    pub type_oid: u32,
+    pub writable: bool,
+    pub key: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryEditOrigin {
+    pub database: String,
+    pub role: String,
+    pub schema: String,
+    pub table: String,
+    pub oid: u32,
+    pub columns: Vec<QueryEditColumn>,
+}
+
 pub struct QueryResultPager {
     pub columns: Vec<ColumnMeta>,
+    pub query_edit_origin: Option<QueryEditOrigin>,
     pub num_cols: u16,
     total_rows: AtomicU64,
     max_resident_pages: usize,
@@ -36,6 +56,7 @@ impl QueryResultPager {
 
         Ok(Self {
             columns,
+            query_edit_origin: None,
             num_cols,
             total_rows: AtomicU64::new(0),
             max_resident_pages: DEFAULT_MAX_RESIDENT_PAGES,

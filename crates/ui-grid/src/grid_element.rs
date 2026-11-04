@@ -194,8 +194,7 @@ impl VirtualDataGrid {
     where
         F: FnMut(usize, f32) -> AnyElement,
     {
-        let total_width =
-            (GUTTER_WIDTH + self.column_widths.iter().sum::<f32>()).max(self.viewport_width);
+        let total_width = (GUTTER_WIDTH + self.displayed_width()).max(self.viewport_width);
         // Horizontal scroller container
         let mut scroller = div()
             .id("grid-horizontal-scroller")

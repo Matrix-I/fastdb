@@ -281,11 +281,7 @@ impl Workspace {
             tab.filter_timeline
                 .record(super::filter_timeline::FilterSnapshot {
                     sql: tab.filter_sql.clone(),
-                    order: tab
-                        .grid
-                        .ordering
-                        .as_ref()
-                        .map(|o| (o.column.clone(), o.descending)),
+                    order: tab.grid.ordering.clone(),
                     fetch_size: tab.fetch.size,
                     criteria: tab.filter_spec.clone(),
                 });

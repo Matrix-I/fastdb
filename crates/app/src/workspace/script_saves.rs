@@ -178,6 +178,19 @@ impl Workspace {
         .detach();
     }
     pub(super) fn save_then(&mut self, ids: Vec<u64>, action: AfterSave, cx: &mut Context<Self>) {
+        if !matches!(action, AfterSave::None)
+            && let Some(index) = self.tabs.iter().position(|tab| {
+                ids.contains(&tab.id)
+                    && tab.is_script()
+                    && (tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some())
+            })
+        {
+            self.active_tab = index;
+            self.tabs[index].last_error =
+                Some("Save or Cancel query result edits before continuing".into());
+            cx.notify();
+            return;
+        }
         if self.guard_column_action(&ids, &action, cx) {
             return;
         }

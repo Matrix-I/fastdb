@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 pub struct RowChanges {
     pub changes: HashMap<(u64, usize), Option<String>>,
     pub inserted_rows: Vec<Vec<Option<String>>>,
+    pub inserted_nulls: BTreeSet<(usize, usize)>,
     pub deleted_rows: BTreeSet<u64>,
 }
 
@@ -172,11 +173,22 @@ impl RowChanges {
             ));
         }
 
-        for row in &self.inserted_rows {
-            let set: Vec<(usize, &str)> = row
+        anyhow::ensure!(
+            self.inserted_nulls.iter().all(|&(row, column)| self
+                .inserted_rows
+                .get(row)
+                .and_then(|values| values.get(column))
+                .is_some_and(Option::is_none)),
+            "Invalid explicit NULL in inserted row"
+        );
+        for (index, row) in self.inserted_rows.iter().enumerate() {
+            let set: Vec<(usize, Option<&str>)> = row
                 .iter()
                 .enumerate()
-                .filter_map(|(c, v)| v.as_deref().map(|v| (c, v)))
+                .filter_map(|(c, v)| {
+                    (v.is_some() || self.inserted_nulls.contains(&(index, c)))
+                        .then_some((c, v.as_deref()))
+                })
                 .collect();
             if set.is_empty() {
                 statements.push(dialect.default_insert(target)?);
@@ -188,7 +200,7 @@ impl RowChanges {
                     .join(", ");
                 let vals = set
                     .iter()
-                    .map(|&(_, v)| dialect.literal(Some(v)))
+                    .map(|&(_, v)| dialect.literal(v))
                     .collect::<Vec<_>>()
                     .join(", ");
                 statements.push(format!("INSERT INTO {target} ({cols}) VALUES ({vals});"));
@@ -226,6 +238,37 @@ mod tests {
         pager.append_row([Some(b"43".as_slice()), None]).unwrap();
         pager
     }
+    #[test]
+    fn explicit_insert_null_is_distinct_from_an_omitted_default() {
+        use crate::{DatabaseDriver, SqliteDriver};
+        crate::get_runtime().block_on(async {
+            let driver = SqliteDriver::new_memory();
+            driver
+                .execute_query(
+                    "CREATE TABLE users (id INT DEFAULT 7, username TEXT DEFAULT 'generated')",
+                )
+                .await
+                .unwrap();
+            let mut request = RowChanges::default();
+            request.inserted_rows.push(vec![None, None]);
+            request.inserted_nulls.insert((0, 1));
+            let statements = request
+                .plan_sql("users", &users(), &[0], SqlDialect(DbDriverKind::Sqlite))
+                .unwrap();
+            assert_eq!(
+                statements,
+                ["INSERT INTO users (\"username\") VALUES (NULL);"]
+            );
+            driver.apply_row_changes(&statements).await.unwrap();
+            let (pager, _, _) = driver
+                .execute_query("SELECT id, username FROM users")
+                .await
+                .unwrap();
+            assert_eq!(pager.get_cell(0, 0).unwrap(), b"7");
+            assert_eq!(pager.get_cell(0, 1), None);
+        });
+    }
+
     #[test]
     fn writes_preserve_order_keys_null_and_escaping() {
         let pager = users();

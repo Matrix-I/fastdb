@@ -2,7 +2,7 @@ use super::script_tools::tool;
 use super::*;
 use gpui::prelude::FluentBuilder;
 use std::sync::atomic::{AtomicBool, Ordering};
-use ui_grid::search::{FindDirection, FindOutcome, find_cell};
+use ui_grid::search::{FindDirection, FindOutcome, find_displayed_cell};
 
 const MAX_SEARCH_BYTES: usize = 4096;
 
@@ -38,7 +38,13 @@ fn reveal_match(grid: &mut VirtualDataGrid, cell: ui_grid::GridCoord) {
         grid.vertical_scroll_handle
             .scroll_to_item(row, ScrollStrategy::Center);
     }
-    let x: f32 = grid.column_widths.iter().take(cell.col).sum();
+    let x: f32 = grid
+        .display_columns()
+        .iter()
+        .copied()
+        .take_while(|&col| col != cell.col)
+        .map(|col| grid.displayed_column_width(col))
+        .sum();
     let handle = &grid.horizontal_scroll_handle;
     handle.set_offset(point(
         px(-x.min(f32::from(handle.max_offset().width))),
@@ -93,6 +99,7 @@ impl Workspace {
         };
         tab.grid.auto_fetch_paused.set(true);
         tab.view_mode = DataViewMode::Grid;
+        tab.record_view = None;
         self.close_result_search();
         self.result_search = Some(Search {
             tab: tab_id,
@@ -217,6 +224,8 @@ impl Workspace {
         let changes = Arc::new(tab.grid.changeset.clone());
         let rows = tab.grid.row_count();
         let from = tab.grid.selection.focus;
+        let columns = tab.grid.display_columns().to_vec();
+        let worker_columns = columns.clone();
         let needle = search.query.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         search.cancel = cancel.clone();
@@ -227,9 +236,10 @@ impl Workspace {
         let worker_cancel = cancel.clone();
         let job = cx.background_executor().spawn(async move {
             let _guard = worker_guard;
-            find_cell(
+            find_displayed_cell(
                 &worker_pager,
                 &worker_changes,
+                &worker_columns,
                 &needle,
                 from,
                 direction,
@@ -239,7 +249,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let outcome = job.await;
             let _ = this.update(cx, |this, cx| {
-                this.apply_result_search(&pager, &changes, rows, &cancel, outcome);
+                this.apply_result_search(&pager, &changes, (rows, &columns), &cancel, outcome);
                 this.notify_result(cx);
             });
         })
@@ -251,7 +261,7 @@ impl Workspace {
         &mut self,
         pager: &Arc<db_wire::QueryResultPager>,
         changes: &ui_grid::Changeset,
-        rows: u64,
+        (rows, columns): (u64, &[usize]),
         cancel: &Arc<AtomicBool>,
         outcome: FindOutcome,
     ) {
@@ -265,7 +275,7 @@ impl Workspace {
             search.message = "The original result was closed.".into();
             return;
         };
-        if !same_result(&tab.grid, pager, rows, changes) {
+        if !same_result(&tab.grid, pager, rows, changes) || tab.grid.display_columns() != columns {
             search.message = "Result or staged edits changed during search; search again.".into();
             return;
         }

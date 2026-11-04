@@ -416,6 +416,16 @@ impl Workspace {
                 }
                 self.input.cursor_visible = true;
                 cx.notify();
+            } else if tab.view_mode == DataViewMode::Record {
+                // The read-only view does not route shortcuts to the hidden grid.
+                if event.keystroke.key == "escape" {
+                    tab.close_record_view();
+                    cx.notify();
+                }
+            } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                && event.keystroke.key.eq_ignore_ascii_case("v")
+            {
+                self.paste_grid_cells(cx);
             } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                 && event.keystroke.key.eq_ignore_ascii_case("c")
             {
@@ -425,7 +435,7 @@ impl Workspace {
                 }
             } else if let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke) {
                 let redo = undo_key == UndoKey::Redo;
-                if !tab.is_script() && tab.active_subtab == TableSubTab::Data {
+                if tab.active_subtab == TableSubTab::Data {
                     self.step_pending_edits(redo);
                 }
                 cx.notify();
@@ -477,13 +487,9 @@ impl Workspace {
             "tab" => {
                 let next = self.tabs.get(self.active_tab).and_then(|t| {
                     let edit = t.grid.editing_cell.as_ref()?;
-                    let num_cols = t.grid.pager.as_ref()?.num_cols() as usize;
-                    let col = if keystroke.modifiers.shift {
-                        edit.col.checked_sub(1)?
-                    } else {
-                        edit.col + 1
-                    };
-                    (col < num_cols).then_some((edit.row, col))
+                    t.grid
+                        .adjacent_column(edit.col, !keystroke.modifiers.shift)
+                        .map(|col| (edit.row, col))
                 });
                 self.commit_cell_edit();
                 if let Some((row, col)) = next {

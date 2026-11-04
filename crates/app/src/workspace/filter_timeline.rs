@@ -2,7 +2,7 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FilterSnapshot {
     pub sql: String,
-    pub order: Option<(String, bool)>,
+    pub order: Vec<ui_grid::ColumnOrder>,
     pub fetch_size: usize,
     pub criteria: Option<db_wire::filter::FilterSpec>,
 }
@@ -35,6 +35,7 @@ impl FilterTimeline {
                     .iter()
                     .map(|s| {
                         s.sql.len()
+                            + s.order.iter().map(|key| key.column.len()).sum::<usize>()
                             + s.criteria
                                 .as_ref()
                                 .map(|c| c.criteria.iter().map(|v| v.value.len()).sum::<usize>())
@@ -73,7 +74,7 @@ mod tests {
     fn snapshot(value: &str) -> FilterSnapshot {
         FilterSnapshot {
             sql: value.into(),
-            order: None,
+            order: Vec::new(),
             fetch_size: 200,
             criteria: None,
         }

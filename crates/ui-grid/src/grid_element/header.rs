@@ -39,7 +39,8 @@ impl VirtualDataGrid {
             );
 
         if let Some(ref pager) = self.pager {
-            for (col_idx, col) in pager.columns.iter().enumerate() {
+            for &col_idx in self.display_columns() {
+                let col = &pager.columns[col_idx];
                 let width = self
                     .column_widths
                     .get(col_idx)
@@ -51,8 +52,8 @@ impl VirtualDataGrid {
                 let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
                 let sort_glyph = self
                     .ordering
-                    .as_ref()
-                    .filter(|o| o.column == col.name)
+                    .iter()
+                    .find(|o| o.column == col.name)
                     .map(|o| if o.descending { "↓" } else { "↑" });
                 let mut arrow = div()
                     .id(("header-menu-arrow", col_idx))

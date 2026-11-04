@@ -395,6 +395,7 @@ impl Workspace {
                 if let Some(c) = &mut tab.column_editor {
                     c.source_driver = None;
                 }
+                tab.query_edit_driver = None;
                 tab.transaction_state = "Session closed".into();
                 tab.script_status = Some("Session closed by disconnect".into());
             }

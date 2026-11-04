@@ -25,7 +25,7 @@ impl VirtualDataGrid {
 
         let total_rows = self.row_count();
 
-        let total_cols_width: f32 = self.column_widths.iter().sum();
+        let total_cols_width: f32 = self.displayed_width();
         let content_total_width = gutter_width + total_cols_width;
         let has_horizontal_overflow = content_total_width > self.viewport_width + 1.0;
 

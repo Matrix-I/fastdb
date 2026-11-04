@@ -34,7 +34,7 @@ impl ScriptSession for PostgresScriptSession {
             .as_ref()
             .ok_or_else(|| report_error(&tx, "Script session is closed"))?;
         // Never call get_or_connect: a lost session is terminal for this run.
-        stream_client(client, sql, tx, Instant::now(), &self.notices, None).await
+        stream_client(client, sql, tx, Instant::now(), &self.notices, None, false).await
     }
 
     async fn cancel_active_query(&self) -> Result<()> {
