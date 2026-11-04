@@ -134,13 +134,16 @@ async fn run_script_inner(
         .as_ref()
         .and_then(|o| o.upgrade())
         .and_then(|o| o.session.lock().unwrap().clone());
-    let opened = tokio::select! {
-        biased;
-        _ = control.cancelled() => None,
-        result = async {
-            if let Some(session) = existing { Ok(session) }
-            else { driver.open_script_session().await }
-        } => Some(result),
+    // An already-owned session must enter normal cleanup even if cancellation
+    // arrived before this run started; it may contain an earlier transaction.
+    let opened = if let Some(session) = existing {
+        Some(Ok(session))
+    } else {
+        tokio::select! {
+            biased;
+            _ = control.cancelled() => None,
+            result = driver.open_script_session() => Some(result),
+        }
     };
     let session = match opened {
         None => {
