@@ -19,3 +19,5 @@ pub use script::{
     FilterClauses, filter_clauses, format_sql, session_transaction_transition, split_script,
     split_script_with_transactions, split_session_script,
 };
+
+pub mod vendor_script;

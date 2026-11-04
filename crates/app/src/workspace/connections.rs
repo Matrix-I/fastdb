@@ -228,6 +228,9 @@ impl Workspace {
                             )
                         });
 
+                        if this.connections.sessions.contains_key(&conn_id) {
+                            this.disconnect_by_id_now(&conn_id);
+                        }
                         this.connections.active_connection_id = Some(conn_id.clone());
                         this.connections.sessions.insert(
                             conn_id.clone(),
@@ -386,6 +389,9 @@ impl Workspace {
             if tab.connection_id.as_deref() == Some(conn_id) {
                 tab.tab_session.close();
                 tab.tab_session = Arc::default();
+                if let Some(session) = &mut tab.context_session {
+                    session.driver = None;
+                }
                 if let Some(c) = &mut tab.column_editor {
                     c.source_driver = None;
                 }

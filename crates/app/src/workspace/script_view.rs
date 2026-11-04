@@ -163,6 +163,9 @@ impl Workspace {
                             | DbDriverKind::Sqlite
                             | DbDriverKind::MySql
                             | DbDriverKind::MariaDb
+                            | DbDriverKind::SqlServer
+                            | DbDriverKind::Oracle
+                            | DbDriverKind::Db2
                     ),
                 |toolbar| {
                     toolbar.child(tool(autocommit_label).on_click(cx.listener(
@@ -172,6 +175,29 @@ impl Workspace {
                     )))
                 },
             )
+            .when(supports_transactions && !is_running_query, |toolbar| {
+                toolbar
+                    .child(
+                        tool("Database…").on_click(cx.listener(move |this, _, window, cx| {
+                            this.choose_sql_context(
+                                script_tab_id,
+                                db_wire::session_context::ContextKind::Database,
+                                window,
+                                cx,
+                            )
+                        })),
+                    )
+                    .child(
+                        tool("Schema…").on_click(cx.listener(move |this, _, window, cx| {
+                            this.choose_sql_context(
+                                script_tab_id,
+                                db_wire::session_context::ContextKind::Schema,
+                                window,
+                                cx,
+                            )
+                        })),
+                    )
+            })
             .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
             .child(
                 tool("Snippets…")
@@ -210,14 +236,19 @@ impl Workspace {
                         cx.listener(|this, _, _, cx| this.explain_active_statement(true, cx)),
                     ))
             })
-            .child(
-                tool("Rename")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_script_action(false, cx))),
-            )
-            .child(
-                tool("Delete")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_script_action(true, cx))),
-            )
+            .when(self.tabs[tab_idx].script_path.is_some(), |toolbar| {
+                toolbar
+                    .child(
+                        tool("Rename").on_click(
+                            cx.listener(|this, _, _, cx| this.open_script_action(false, cx)),
+                        ),
+                    )
+                    .child(
+                        tool("Delete").on_click(
+                            cx.listener(|this, _, _, cx| this.open_script_action(true, cx)),
+                        ),
+                    )
+            })
             .child(div().flex_1())
             .child(
                 div()

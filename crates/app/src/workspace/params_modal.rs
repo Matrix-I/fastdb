@@ -13,7 +13,9 @@ use sql_intel::{
 
 pub(super) fn at_sign_mode(provider: DbDriverKind) -> AtSignMode {
     match provider {
-        DbDriverKind::MySql | DbDriverKind::MariaDb => AtSignMode::ServerVariable,
+        DbDriverKind::MySql | DbDriverKind::MariaDb | DbDriverKind::SqlServer => {
+            AtSignMode::ServerVariable
+        }
         _ => AtSignMode::BindParameter,
     }
 }
@@ -33,6 +35,7 @@ pub struct ParameterBindingModal {
     pub tab_id: u64,
     pub original_sql: String,
     pub is_explain: bool,
+    explicit_selection: bool,
     pub explain_analyze: bool,
     pub active_field: usize,
     pub bindings: Vec<ParamInputState>,
@@ -76,6 +79,7 @@ impl ParameterBindingModal {
             tab_id,
             original_sql: sql,
             is_explain,
+            explicit_selection: false,
             explain_analyze,
             active_field: 0,
             bindings,
@@ -143,7 +147,7 @@ impl Workspace {
         let Some(tab_idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
             return;
         };
-        let modal = ParameterBindingModal::new(
+        let mut modal = ParameterBindingModal::new(
             tab_id,
             sql,
             is_explain,
@@ -151,6 +155,7 @@ impl Workspace {
             &self.tabs[tab_idx].saved_params,
             self.tab_provider(tab_idx),
         );
+        modal.explicit_selection = self.tabs[tab_idx].editor.buffer.selection().is_some();
         self.params_modal = Some(modal);
         cx.notify();
     }
@@ -171,6 +176,7 @@ impl Workspace {
 
         let tab_id = modal.tab_id;
         let is_explain = modal.is_explain;
+        let explicit_selection = modal.explicit_selection;
         let explain_analyze = modal.explain_analyze;
         let substituted_sql = modal.preview_sql.clone();
 
@@ -207,7 +213,13 @@ impl Workspace {
             && let Some(driver) = self.tab_session(tab_idx).driver.clone()
             && driver.supports_script_session()
         {
-            match sql_intel::split_session_script(&substituted_sql) {
+            let provider = self.tab_provider(tab_idx);
+            let parsed = if explicit_selection {
+                super::sql_script::split_selected_for_provider(&substituted_sql, provider)
+            } else {
+                super::sql_script::split_for_provider(&substituted_sql, provider)
+            };
+            match parsed {
                 Ok(statements) if !statements.is_empty() => {
                     self.start_pinned_script(tab_idx, driver, statements, cx)
                 }

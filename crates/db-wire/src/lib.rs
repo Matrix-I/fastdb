@@ -13,6 +13,7 @@ pub mod odbc;
 pub mod postgres;
 pub mod query_plan;
 pub mod script;
+pub mod session_context;
 pub mod sqlite;
 pub mod ssh_tunnel;
 mod stream;

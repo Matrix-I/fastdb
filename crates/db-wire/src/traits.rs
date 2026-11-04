@@ -214,6 +214,12 @@ pub struct ForeignKey {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    /// Creates an independent driver with the same endpoint/authentication and a new database.
+    /// Does not open a session, execute SQL or modify this driver.
+    fn with_database(&self, _database: &str) -> Result<Arc<dyn DatabaseDriver>> {
+        anyhow::bail!("Database switching is not supported by this provider")
+    }
+
     /// None denotes unsupported discovery, distinct from a successfully empty page.
     async fn list_objects(
         &self,

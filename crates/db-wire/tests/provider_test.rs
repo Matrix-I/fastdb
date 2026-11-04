@@ -83,6 +83,78 @@ async fn check_writes(driver: &dyn DatabaseDriver, kind: DbDriverKind) -> anyhow
     Ok(())
 }
 
+async fn check_script_session(
+    driver: &dyn DatabaseDriver,
+    kind: DbDriverKind,
+) -> anyhow::Result<()> {
+    let session = driver.open_script_session().await?;
+    let table = format!(
+        "FASTDB_P105_{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..10]
+    );
+    let setup = format!("CREATE TABLE {table} (ID INTEGER PRIMARY KEY)");
+    driver.execute_query(&setup).await?;
+    let result = async {
+        let execute = |sql: String| {
+            let session = session.clone();
+            async move {
+                let (tx, _rx) = flume::unbounded();
+                session.execute_streaming(&sql, tx).await
+            }
+        };
+        if kind == DbDriverKind::SqlServer {
+            execute("SET XACT_ABORT ON; SET IMPLICIT_TRANSACTIONS ON".into()).await?;
+            assert!(execute("BEGIN".into()).await.is_err());
+            assert_eq!(session.in_transaction(), Some(false));
+            execute(format!("INSERT INTO {table} VALUES (9)")).await?;
+            assert!(execute("BEGIN".into()).await.is_err());
+            assert_eq!(session.in_transaction(), Some(true));
+            assert!(!session.transaction_failed());
+            execute("ROLLBACK".into()).await?;
+            execute("SET IMPLICIT_TRANSACTIONS OFF; SET XACT_ABORT OFF".into()).await?;
+        }
+        execute("BEGIN".into()).await?;
+        assert_eq!(session.in_transaction(), Some(true));
+        execute(format!("INSERT INTO {table} VALUES (1)")).await?;
+        let savepoint = match kind {
+            DbDriverKind::SqlServer => "SAVE TRANSACTION fastdb_point",
+            DbDriverKind::Db2 => "SAVEPOINT fastdb_point ON ROLLBACK RETAIN CURSORS",
+            _ => "SAVEPOINT fastdb_point",
+        };
+        execute(savepoint.into()).await?;
+        execute(format!("INSERT INTO {table} VALUES (2)")).await?;
+        let rollback = match kind {
+            DbDriverKind::SqlServer => "ROLLBACK TRANSACTION fastdb_point",
+            DbDriverKind::Db2 => "ROLLBACK TO SAVEPOINT fastdb_point",
+            _ => "ROLLBACK TO fastdb_point",
+        };
+        execute(rollback.into()).await?;
+        execute("COMMIT".into()).await?;
+        assert_eq!(session.in_transaction(), Some(false));
+        execute("BEGIN".into()).await?;
+        execute(format!("INSERT INTO {table} VALUES (3)")).await?;
+        session.finish().await?;
+        assert!(session.is_closed());
+        let (pager, _, _) = driver
+            .execute_query(&format!("SELECT ID FROM {table} ORDER BY ID"))
+            .await?;
+        assert_eq!(pager.total_rows(), 1);
+        assert_eq!(pager.get_cell(0, 0).as_deref(), Some(b"1".as_slice()));
+        anyhow::Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let cleanup = session.finish().await;
+        if let Err(error) = cleanup {
+            eprintln!("Session cleanup failed: {error}");
+        }
+    }
+    let drop_result = driver.execute_query(&format!("DROP TABLE {table}")).await;
+    result?;
+    drop_result?;
+    Ok(())
+}
+
 fn check(kind: DbDriverKind, prefix: &str) {
     let Some(config) = config(kind, prefix) else {
         return;
@@ -110,7 +182,7 @@ fn check(kind: DbDriverKind, prefix: &str) {
         assert!(driver.execute_streaming("SELECT * FROM fastdb_missing_object_9d08cbe1", tx).await.is_err());
         assert!(rx.drain().any(|e| matches!(e, StreamEvent::Error(_))));
         driver.ping().await.unwrap();
-        if std::env::var("FASTDB_TEST_PROVIDER_WRITES").is_ok_and(|v| v == "1") { check_writes(driver.as_ref(), kind).await.unwrap(); }
+        if std::env::var("FASTDB_TEST_PROVIDER_WRITES").is_ok_and(|v| v == "1") { check_writes(driver.as_ref(), kind).await.unwrap(); check_script_session(driver.as_ref(), kind).await.unwrap(); }
     });
 }
 

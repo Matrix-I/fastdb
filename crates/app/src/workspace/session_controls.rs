@@ -33,24 +33,27 @@ fn isolation_levels(provider: DbDriverKind) -> &'static [IsolationLevel] {
             &[ReadUncommitted, ReadCommitted, RepeatableRead, Serializable]
         }
         DbDriverKind::Sqlite => &[Serializable],
-        _ => &[],
+        DbDriverKind::Oracle => &[ReadCommitted, Serializable],
+        DbDriverKind::SqlServer | DbDriverKind::Db2 => {
+            &[ReadUncommitted, ReadCommitted, RepeatableRead, Serializable]
+        }
     }
 }
 
 fn isolation_statements(
     provider: DbDriverKind,
     level: IsolationLevel,
-) -> Result<[String; 2], String> {
+) -> Result<Vec<String>, String> {
     if !isolation_levels(provider).contains(&level) {
         return Err("This isolation level is not supported by this provider".into());
     }
     let level = level.label().to_ascii_uppercase();
     Ok(match provider {
-        DbDriverKind::Postgres => [
+        DbDriverKind::Postgres => vec![
             format!("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL {level}"),
             "SHOW transaction_isolation".into(),
         ],
-        DbDriverKind::MySql | DbDriverKind::MariaDb => [
+        DbDriverKind::MySql | DbDriverKind::MariaDb => vec![
             format!("SET SESSION TRANSACTION ISOLATION LEVEL {level}"),
             if provider == DbDriverKind::MariaDb {
                 "SELECT @@SESSION.tx_isolation AS transaction_isolation".into()
@@ -58,11 +61,27 @@ fn isolation_statements(
                 "SELECT @@SESSION.transaction_isolation AS transaction_isolation".into()
             },
         ],
-        DbDriverKind::Sqlite => [
+        DbDriverKind::Sqlite => vec![
             "PRAGMA read_uncommitted = 0".into(),
             "PRAGMA read_uncommitted".into(),
         ],
-        _ => unreachable!("unsupported providers rejected above"),
+        DbDriverKind::Oracle => vec![format!("ALTER SESSION SET ISOLATION_LEVEL = {level}")],
+        DbDriverKind::SqlServer => vec![
+            format!("SET TRANSACTION ISOLATION LEVEL {level}"),
+            "DBCC USEROPTIONS WITH NO_INFOMSGS".into(),
+        ],
+        DbDriverKind::Db2 => vec![
+            format!(
+                "SET CURRENT ISOLATION = {}",
+                match level.as_str() {
+                    "READ UNCOMMITTED" => "UR",
+                    "READ COMMITTED" => "CS",
+                    "REPEATABLE READ" => "RS",
+                    _ => "RR",
+                }
+            ),
+            "VALUES CURRENT ISOLATION".into(),
+        ],
     })
 }
 
@@ -75,6 +94,16 @@ fn autocommit_statements(
     enabled: bool,
     state: &str,
 ) -> Result<[String; 2], String> {
+    if provider == DbDriverKind::SqlServer {
+        check_autocommit_change(enabled, state)?;
+        return Ok([
+            format!(
+                "SET IMPLICIT_TRANSACTIONS {}",
+                if enabled { "OFF" } else { "ON" }
+            ),
+            "SELECT CASE WHEN (2 & @@OPTIONS) = 2 THEN 0 ELSE 1 END AS autocommit".into(),
+        ]);
+    }
     if !matches!(provider, DbDriverKind::MySql | DbDriverKind::MariaDb) {
         return Err(
             "Native autocommit controls are currently available for MySQL/MariaDB only".into(),
@@ -113,7 +142,7 @@ fn setting_statements(
     provider: DbDriverKind,
     setting: SessionSetting,
     state: &str,
-) -> Result<[String; 2], String> {
+) -> Result<Vec<String>, String> {
     match setting {
         SessionSetting::Isolation(level) => {
             if !isolation_change_allowed(state) {
@@ -121,7 +150,9 @@ fn setting_statements(
             }
             isolation_statements(provider, level)
         }
-        SessionSetting::AutoCommit(enabled) => autocommit_statements(provider, enabled, state),
+        SessionSetting::AutoCommit(enabled) => {
+            autocommit_statements(provider, enabled, state).map(Vec::from)
+        }
     }
 }
 
@@ -168,7 +199,7 @@ impl Workspace {
         }
         match setting_statements(provider, setting, &self.tabs[index].transaction_state) {
             Ok(statements) => {
-                self.start_pinned_session_settings(index, driver.clone(), statements.into(), cx)
+                self.start_pinned_session_settings(index, driver.clone(), statements, cx)
             }
             Err(error) => {
                 self.tabs[index].last_error = Some(error);
@@ -230,7 +261,20 @@ impl Workspace {
                 return;
             }
         };
-        let answer = window.prompt(PromptLevel::Info, "Set SQL tab isolation", Some(&format!("Applies to future transactions on this SQL tab. The final result reads back the server setting.\n\n{preview}")), &choices, cx);
+        let feedback = if provider == DbDriverKind::Oracle {
+            "Oracle acknowledges the session change without a read-back query."
+        } else {
+            "The final result reads back the server setting."
+        };
+        let answer = window.prompt(
+            PromptLevel::Info,
+            "Set SQL tab isolation",
+            Some(&format!(
+                "Applies to future transactions on this SQL tab. {feedback}\n\n{preview}"
+            )),
+            &choices,
+            cx,
+        );
         cx.spawn(async move |this, cx| {
             let Ok(choice) = answer.await else {
                 return;
@@ -278,6 +322,9 @@ impl Workspace {
                 | DbDriverKind::Sqlite
                 | DbDriverKind::MySql
                 | DbDriverKind::MariaDb
+                | DbDriverKind::SqlServer
+                | DbDriverKind::Oracle
+                | DbDriverKind::Db2
         ) {
             return;
         }
@@ -297,6 +344,8 @@ impl Workspace {
         };
         let message = if super::transaction_mode::client_managed(provider) {
             "SQL tab only. Off opens a transaction before ordinary SQL when idle, including after Commit/Rollback. It stays selected while the tab is open. On is blocked during active/unknown transactions; it never commits pending work. No SQL runs just by changing this client setting."
+        } else if provider == DbDriverKind::SqlServer {
+            "SQL tab only. Off enables implicit transactions. On disables them and requires Commit or Rollback first when a transaction is active."
         } else if can_enable {
             "SQL tab only. Off: SET SESSION autocommit = 0. On: SET SESSION autocommit = 1. The final result reads back @@SESSION.autocommit. Commit or Rollback is required before enabling during a transaction."
         } else {
@@ -640,7 +689,10 @@ mod tests {
         );
         assert_eq!(isolation_levels(DbDriverKind::Postgres).len(), 3);
         assert_eq!(isolation_levels(DbDriverKind::MySql).len(), 4);
-        assert!(isolation_levels(DbDriverKind::Oracle).is_empty());
+        assert_eq!(
+            isolation_statements(DbDriverKind::Oracle, IsolationLevel::Serializable).unwrap(),
+            ["ALTER SESSION SET ISOLATION_LEVEL = SERIALIZABLE"]
+        );
         assert!(
             isolation_statements(DbDriverKind::Postgres, IsolationLevel::ReadUncommitted).is_err()
         );
