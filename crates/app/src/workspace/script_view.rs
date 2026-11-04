@@ -40,6 +40,22 @@ impl Workspace {
             _ => "Timeout: off",
         };
         let supports_plan = self.tab_provider(tab_idx) == DbDriverKind::Postgres;
+        let script_tab_id = self.tabs[tab_idx].id;
+        let autocommit_label =
+            if super::transaction_mode::client_managed(self.tab_provider(tab_idx)) {
+                if self.tabs[tab_idx].manual_transactions {
+                    "Autocommit: off…"
+                } else {
+                    "Autocommit: on…"
+                }
+            } else {
+                "Autocommit…"
+            };
+        let supports_transactions = self
+            .tab_session(tab_idx)
+            .driver
+            .as_ref()
+            .is_some_and(|driver| driver.supports_script_session());
         let toolbar = div()
             .id("script-toolbar")
             .overflow_x_scroll()
@@ -121,7 +137,7 @@ impl Workspace {
                         }
                     })),
             )
-            .when(supports_plan && !is_running_query, |toolbar| {
+            .when(supports_transactions && !is_running_query, |toolbar| {
                 toolbar
                     .child(tool("Begin").on_click(
                         cx.listener(|this, _, _, cx| this.transaction_command("BEGIN", cx)),
@@ -132,7 +148,30 @@ impl Workspace {
                     .child(tool("Rollback").on_click(
                         cx.listener(|this, _, _, cx| this.transaction_command("ROLLBACK", cx)),
                     ))
+                    .child(
+                        tool("Isolation…").on_click(cx.listener(move |this, _, window, cx| {
+                            this.choose_session_isolation(script_tab_id, window, cx)
+                        })),
+                    )
             })
+            .when(
+                supports_transactions
+                    && !is_running_query
+                    && matches!(
+                        self.tab_provider(tab_idx),
+                        DbDriverKind::Postgres
+                            | DbDriverKind::Sqlite
+                            | DbDriverKind::MySql
+                            | DbDriverKind::MariaDb
+                    ),
+                |toolbar| {
+                    toolbar.child(tool(autocommit_label).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            this.choose_session_autocommit(script_tab_id, window, cx)
+                        },
+                    )))
+                },
+            )
             .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
             .child(
                 tool("Snippets…")

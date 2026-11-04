@@ -1,6 +1,13 @@
 use super::*;
 use db_wire::script::{ScriptControl, ScriptEvent, ScriptOutcome};
 
+#[derive(Clone, Copy)]
+enum ExecutionKind {
+    Script,
+    Plan,
+    Settings,
+}
+
 impl Workspace {
     pub(super) fn start_pinned_script(
         &mut self,
@@ -9,7 +16,36 @@ impl Workspace {
         statements: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        self.start_pinned_execution(index, driver, statements, false, cx);
+        let Some(statements) = self.plan_user_transactions(index, statements, cx) else {
+            return;
+        };
+        let timeout = self.tabs[index].statement_timeout();
+        self.start_pinned_execution(
+            index,
+            driver,
+            statements,
+            ExecutionKind::Script,
+            timeout,
+            cx,
+        );
+    }
+
+    pub(super) fn start_pinned_session_settings(
+        &mut self,
+        index: usize,
+        driver: Arc<dyn DatabaseDriver>,
+        statements: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        const SETTINGS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+        self.start_pinned_execution(
+            index,
+            driver,
+            statements,
+            ExecutionKind::Settings,
+            Some(SETTINGS_TIMEOUT),
+            cx,
+        );
     }
 
     pub(super) fn start_pinned_plan(
@@ -19,7 +55,32 @@ impl Workspace {
         sql: String,
         cx: &mut Context<Self>,
     ) {
-        self.start_pinned_execution(index, driver, vec![sql], true, cx);
+        let Some(statements) = self.plan_user_transactions(index, vec![sql], cx) else {
+            return;
+        };
+        let timeout = self.tabs[index].statement_timeout();
+        self.start_pinned_execution(index, driver, statements, ExecutionKind::Plan, timeout, cx);
+    }
+
+    fn plan_user_transactions(
+        &mut self,
+        index: usize,
+        statements: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<String>> {
+        match super::transaction_mode::manual_statements(
+            self.tab_provider(index),
+            self.tabs[index].manual_transactions,
+            &self.tabs[index].transaction_state,
+            statements,
+        ) {
+            Ok(statements) => Some(statements),
+            Err(error) => {
+                self.tabs[index].last_error = Some(error);
+                cx.notify();
+                None
+            }
+        }
     }
 
     fn start_pinned_execution(
@@ -27,12 +88,16 @@ impl Workspace {
         index: usize,
         driver: Arc<dyn DatabaseDriver>,
         statements: Vec<String>,
-        plan_requested: bool,
+        kind: ExecutionKind,
+        timeout: Option<std::time::Duration>,
         cx: &mut Context<Self>,
     ) {
-        let control = Arc::new(ScriptControl::with_timeout(
-            self.tabs[index].statement_timeout(),
+        let control = Arc::new(super::transaction_mode::script_control(
+            self.tab_provider(index),
+            !matches!(kind, ExecutionKind::Settings) && self.tabs[index].manual_transactions,
+            timeout,
         ));
+        let plan_requested = matches!(kind, ExecutionKind::Plan);
         let tab = &mut self.tabs[index];
         let tab_id = tab.id;
         let Some(connection_id) = tab.connection_id.clone() else {
@@ -133,13 +198,18 @@ impl Workspace {
             }
             return;
         };
+        let provider = self.tab_provider(index);
         let tab = &mut self.tabs[index];
         match event {
+            ScriptEvent::TransactionState { active } => {
+                tab.transaction_state = if active { "In transaction" } else { "Idle" }.into();
+            }
             ScriptEvent::StatementStarted { sql } => {
                 if let Some(connection) = &tab.connection_id {
                     self.query_history.record(connection.clone(), sql.clone());
                 }
-                tab.begin_session_statement(sql, plan_requested);
+                let is_plan = super::transaction_mode::statement_is_plan(plan_requested, &sql);
+                tab.begin_session_statement(sql, is_plan);
                 tab.script_status = Some("Running script on a dedicated session…".into());
             }
             ScriptEvent::Stream(event) => {
@@ -152,15 +222,18 @@ impl Workspace {
                 tab.apply_stream_event(event);
             }
             ScriptEvent::CleaningUp => {
+                tab.transaction_state = "Session closed".into();
                 tab.script_status =
                     Some("Closing script session and rolling back any open transaction…".into());
             }
             ScriptEvent::Finished(outcome) => {
                 if outcome.cancelled || outcome.cleanup_error.is_some() {
                     tab.transaction_state = "Session closed".into();
-                } else if outcome.error.is_some() && tab.transaction_state == "In transaction" {
-                    tab.transaction_state =
-                        "Transaction failed; Rollback or ROLLBACK TO required".into();
+                } else if outcome.error.is_some()
+                    && tab.transaction_state == "In transaction"
+                    && let Some(state) = transaction_error_state(provider)
+                {
+                    tab.transaction_state = state.into();
                 }
                 let message = if !outcome.cancelled
                     && outcome.error.is_none()
@@ -184,6 +257,13 @@ impl Workspace {
     }
 }
 
+fn transaction_error_state(provider: DbDriverKind) -> Option<&'static str> {
+    match provider {
+        DbDriverKind::Postgres => Some(super::transaction_mode::FAILED_TRANSACTION_STATE),
+        _ => None,
+    }
+}
+
 fn outcome_message(outcome: &ScriptOutcome) -> String {
     let mut message = match (&outcome.error, outcome.cancelled) {
         (Some(error), _) => format!("SQL stopped: {error}. Earlier committed/autocommit statements may remain applied"),
@@ -201,6 +281,23 @@ fn outcome_message(outcome: &ScriptOutcome) -> String {
 mod tests {
     use super::outcome_message;
     use db_wire::script::ScriptOutcome;
+
+    #[test]
+    fn transaction_errors_do_not_assume_postgres_failure_semantics() {
+        assert!(
+            super::transaction_error_state(db_wire::DbDriverKind::Postgres)
+                .unwrap()
+                .contains("Transaction failed")
+        );
+        assert_eq!(
+            super::transaction_error_state(db_wire::DbDriverKind::Sqlite),
+            None
+        );
+        assert_eq!(
+            super::transaction_error_state(db_wire::DbDriverKind::MySql),
+            None
+        );
+    }
 
     #[test]
     fn errors_and_cleanup_failure_do_not_claim_all_writes_were_rolled_back() {
