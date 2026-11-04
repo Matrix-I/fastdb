@@ -476,3 +476,25 @@ cargo test -p db-wire --test query_edit_test --locked -- --nocapture
 ```
 
 MySQL/MariaDB, SQLite and ODBC query results remain read-only.
+
+## Typed value edits (P1-07)
+
+Table Save plans binary edits as native binary literals, preserving raw SQLite/
+MySQL bytes and decoded PostgreSQL/ODBC hex values. PostgreSQL text literals use
+explicit escape strings; MySQL/MariaDB use UTF-8 hex conversion so session
+backslash modes cannot change the intended value. This shares the validated
+structured-filter literal encoder. Query-result editing retains its narrower
+scalar type whitelist.
+
+SQLite tests cover binary INSERT/UPDATE/DELETE, duplicate/Save read-back, NULL,
+empty bytes and literal `\x` prefix bytes. PostgreSQL live tests cover exact
+binary, JSON number/duplicate-key text, XML mixed content, empty/NULL and text
+under both `standard_conforming_strings` modes. MySQL 8.4 tests cover the table
+Save path and literals on pinned sessions with/without `NO_BACKSLASH_ESCAPES`.
+Oracle empty binary edits are explicitly unavailable until native RAW/BLOB
+metadata can distinguish empty BLOB from Oracle NULL semantics. Other ODBC binary literal variants have unit coverage;
+live verification remains deferred to Linux by user request.
+
+```bash
+FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --test postgres_test value_edits_roundtrip
+```

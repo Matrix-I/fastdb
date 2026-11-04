@@ -26,6 +26,10 @@ impl Workspace {
         }
     }
     fn handle_workspace_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.value_editor.is_some() {
+            self.value_editor_key(&event.keystroke, cx);
+            return;
+        }
         // Intercept Cmd+Q (macOS) / Ctrl+Q (Linux/Windows) unconditionally to close the app
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.key.eq_ignore_ascii_case("q")

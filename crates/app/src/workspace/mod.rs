@@ -78,6 +78,8 @@ mod text_input;
 mod top_bar;
 mod transaction_mode;
 use software_update::UpdateController;
+mod value_editor;
+mod value_files;
 mod value_format;
 mod value_panel;
 mod widgets;
@@ -188,6 +190,8 @@ pub struct Workspace {
     pub script_chooser: Option<ScriptChooser>,
 
     pub value_panel: ValuePanelState,
+    value_editor: Option<value_editor::ValueEditor>,
+    value_job: Arc<std::sync::atomic::AtomicBool>,
     /// Cached views of the window regions, created on the first render
     pub panes: Option<Panes>,
     updates: Entity<UpdateController>,
@@ -273,6 +277,8 @@ impl Workspace {
             result_search_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
 
             value_panel: ValuePanelState::default(),
+            value_editor: None,
+            value_job: Arc::default(),
             panes: None,
             show_about_dialog: false,
             form: ConnectionFormState::from_saved(initial_active_conn.as_ref()),
@@ -591,6 +597,9 @@ impl Render for Workspace {
         }
         if self.show_about_dialog {
             root = root.child(self.render_about_dialog(cx));
+        }
+        if self.value_editor.is_some() {
+            root = root.child(self.render_value_editor(window, cx));
         }
 
         root

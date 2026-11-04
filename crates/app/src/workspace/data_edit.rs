@@ -10,6 +10,47 @@ use ui_grid::{CellEdit, CellEditorRenderer, RowRef};
 use super::*;
 use db_wire::sql::{RowChanges, SqlDialect};
 
+const MAX_DUPLICATE_CELLS: u64 = 1024;
+
+fn validate_duplicate_range(first: u64, last: u64, columns: usize) -> Result<(), String> {
+    let rows = last
+        .checked_sub(first)
+        .and_then(|span| span.checked_add(1))
+        .ok_or("The selected row range is unavailable")?;
+    if rows.saturating_mul(columns as u64) > MAX_DUPLICATE_CELLS {
+        return Err("Duplicate supports up to 1,024 cells at a time".into());
+    }
+    Ok(())
+}
+
+fn duplicate_cell(
+    grid: &VirtualDataGrid,
+    row: u64,
+    column: usize,
+    provider: DbDriverKind,
+) -> Result<Option<String>, String> {
+    let pager = grid.pager.clone().ok_or("No loaded result")?;
+    let row = grid.changeset.resolve_row(row);
+    let staged = match row {
+        RowRef::Fetched(row) => grid.changeset.edited_value(row, column),
+        RowRef::New(index) => Some(grid.changeset.inserted_rows[index].values[column].as_deref()),
+    };
+    if staged
+        .flatten()
+        .is_some_and(|value| value.len() > super::value_files::MAX_VALUE_BYTES * 2 + 2)
+    {
+        return Err("Value exceeds the duplication size limit".into());
+    }
+    super::value_editor::read_value(super::value_editor::ValueRead {
+        pager,
+        row,
+        column,
+        staged: staged.map(|value| value.map(str::to_owned)),
+        provider,
+    })
+    .map(|(value, _)| value)
+}
+
 impl Workspace {
     /// Whether the active tab shows a table whose rows can be edited
     pub(super) fn can_edit_active_rows(&self) -> bool {
@@ -51,6 +92,17 @@ impl Workspace {
                 .is_some_and(|column| column.writable && !column.key)
         {
             tab.last_error = Some("This query result column is read-only".into());
+            return;
+        }
+        if tab
+            .grid
+            .pager
+            .as_ref()
+            .and_then(|pager| pager.columns.get(col))
+            .is_some_and(|column| column.data_type == DataType::Bytea)
+        {
+            tab.last_error =
+                Some("Use Value editor to edit binary bytes without text conversion".into());
             return;
         }
         let text = tab.grid.cell_value(row, col).unwrap_or_default();
@@ -263,6 +315,7 @@ impl Workspace {
             return;
         }
         self.commit_cell_edit();
+        let provider = self.tab_provider(self.active_tab);
         let tab = &mut self.tabs[self.active_tab];
         let Some((min_r, max_r, _, _)) = tab.grid.selection.bounding_box() else {
             return;
@@ -280,11 +333,23 @@ impl Workspace {
         ) else {
             return;
         };
-        let copies: Vec<_> = (min_r..=max_r)
+        if let Err(error) = validate_duplicate_range(min_r, max_r, num_cols) {
+            tab.last_error = Some(error);
+            return;
+        }
+        let mut bytes = 0usize;
+        let copies: Result<Vec<_>, String> = (min_r..=max_r)
             .map(|row| {
-                let values: Vec<_> = (0..num_cols)
-                    .map(|column| tab.grid.cell_value(row, column))
-                    .collect();
+                let values = (0..num_cols)
+                    .map(|column| {
+                        let value = duplicate_cell(&tab.grid, row, column, provider)?;
+                        bytes += value.as_ref().map_or(0, String::len);
+                        if bytes > super::value_files::MAX_VALUE_BYTES {
+                            return Err("Duplicate values exceed the 256 KiB budget".into());
+                        }
+                        Ok(value)
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
                 let nulls = match tab.grid.changeset.resolve_row(row) {
                     RowRef::New(index) => tab.grid.changeset.inserted_rows[index]
                         .explicit_nulls
@@ -295,9 +360,16 @@ impl Workspace {
                         .filter_map(|(column, value)| value.is_none().then_some(column))
                         .collect(),
                 };
-                (values, nulls)
+                Ok((values, nulls))
             })
             .collect();
+        let copies = match copies {
+            Ok(copies) => copies,
+            Err(error) => {
+                tab.last_error = Some(error);
+                return;
+            }
+        };
         if copies.is_empty() {
             return;
         }
@@ -694,5 +766,70 @@ impl Workspace {
             .into_any_element()
         });
         Some((row, col, render))
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::{duplicate_cell, validate_duplicate_range};
+    use db_wire::{DatabaseDriver, DbDriverKind, SqliteDriver};
+    use ui_core::theme::Theme;
+    use ui_grid::VirtualDataGrid;
+
+    #[test]
+    fn duplication_rejects_stale_overflowing_or_oversized_selections() {
+        assert!(validate_duplicate_range(9, 8, 1).is_err());
+        assert!(validate_duplicate_range(0, u64::MAX, 1).is_err());
+        assert!(validate_duplicate_range(0, 1024, 1).is_err());
+        assert!(validate_duplicate_range(0, 0, 1025).is_err());
+        assert!(validate_duplicate_range(0, 1023, 1).is_ok());
+        assert!(validate_duplicate_range(12, 12, 2).is_ok());
+    }
+
+    #[test]
+    fn duplicate_then_save_preserves_raw_binary_prefix_and_non_utf8() {
+        db_wire::get_runtime().block_on(async {
+            let driver = SqliteDriver::new_memory();
+            driver
+                .execute_query("CREATE TABLE blobs (value BLOB)")
+                .await
+                .unwrap();
+            driver
+                .execute_query(
+                    "INSERT INTO blobs VALUES (X'5c7864656164'), (X'00ff'), (NULL), (X'')",
+                )
+                .await
+                .unwrap();
+            let (pager, _, _) = driver
+                .execute_query("SELECT value FROM blobs")
+                .await
+                .unwrap();
+            let grid = VirtualDataGrid::new(Some(pager), Theme::dark());
+            let mut changes = db_wire::sql::RowChanges::default();
+            for row in 0..4 {
+                let value = duplicate_cell(&grid, row, 0, DbDriverKind::Sqlite).unwrap();
+                if value.is_none() {
+                    changes.inserted_nulls.insert((row as usize, 0));
+                }
+                changes.inserted_rows.push(vec![value]);
+            }
+            let sql = changes
+                .plan_sql(
+                    "blobs",
+                    grid.pager.as_ref().unwrap(),
+                    &[],
+                    db_wire::sql::SqlDialect(DbDriverKind::Sqlite),
+                )
+                .unwrap();
+            driver.apply_row_changes(&sql).await.unwrap();
+            let (stored, _, _) = driver
+                .execute_query("SELECT value FROM blobs")
+                .await
+                .unwrap();
+            assert_eq!(stored.total_rows(), 8);
+            for row in 0..4 {
+                assert_eq!(stored.get_cell(row, 0), stored.get_cell(row + 4, 0));
+            }
+        });
     }
 }
