@@ -11,7 +11,7 @@ postgres-types.workspace = true
 postgres-native-tls = "0.5"
 native-tls = "0.2"
 mysql_async.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["hooks"] }
 russh.workspace = true
 russh-keys.workspace = true
 parking_lot.workspace = true

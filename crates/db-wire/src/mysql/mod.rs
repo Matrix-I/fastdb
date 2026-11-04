@@ -9,6 +9,8 @@ use platform_hal::socket::{DbKind, detect_local_unix_socket};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod script;
+
 use crate::stream::{RowSink, report_error};
 use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary, row_count_error};
 
@@ -103,89 +105,96 @@ impl MySqlDriver {
             .map_err(|e| report_error(&event_tx, format!("MySQL connection error: {e}")))?;
         *active_conn_id.lock() = Some(conn.id());
 
-        let result = async {
-            if let Some(control) = &control {
-                control.check()?;
-            }
-            let mut query_result = conn.query_iter(sql).await.map_err(|e| {
-                report_error(&event_tx, format!("MySQL query execution error: {e}"))
-            })?;
-
-            let columns: Vec<ColumnMeta> = query_result
-                .columns()
-                .as_ref()
-                .map(|cols| {
-                    cols.iter()
-                        .map(|c| {
-                            ColumnMeta::new(c.name_str().to_string(), mysql_column_data_type(c))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let has_columns = !columns.is_empty();
-            if !has_columns {
-                let _ = event_tx.send(StreamEvent::CommandComplete {
-                    affected_rows: Some(query_result.affected_rows()),
-                });
-            }
-            let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
-
-            {
-                let stream = query_result
-                    .stream::<mysql_async::Row>()
-                    .await
-                    .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
-                if let Some(mut stream) = stream {
-                    while let Some(row_res) = stream.next().await {
-                        let row = row_res
-                            .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
-                        for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
-                            *cell = mysql_value_to_bytes(row.get(i));
-                        }
-                        sink.commit_row()?;
-                    }
-                }
-            }
-            let warnings = query_result.warnings();
-            let info = query_result.info().into_owned();
-            drop(query_result);
-            if !info.is_empty() {
-                let _ = event_tx.send(StreamEvent::Notice(info));
-            }
-            if warnings > 0 {
-                let _ = event_tx.send(StreamEvent::Notice(format!(
-                    "MySQL: {warnings} server warning(s); showing up to 20"
-                )));
-                let messages = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    conn.query::<(String, u16, String), _>("SHOW WARNINGS LIMIT 20"),
-                )
-                .await;
-                match messages {
-                    Ok(Ok(messages)) => {
-                        for (level, code, text) in messages {
-                            let _ = event_tx
-                                .send(StreamEvent::Notice(format!("{level} {code}: {text}")));
-                        }
-                    }
-                    Ok(Err(error)) => {
-                        let _ = event_tx.send(StreamEvent::Notice(format!(
-                            "Cannot load warning details: {error}"
-                        )));
-                    }
-                    Err(_) => {
-                        let _ = event_tx.send(StreamEvent::Notice(
-                            "Loading warning details timed out".into(),
-                        ));
-                    }
-                }
-            }
-            Ok::<RowSink, anyhow::Error>(sink)
-        }
-        .await;
+        let result =
+            Self::stream_connection(&mut conn, sql, event_tx, control.as_deref(), start_time).await;
         *active_conn_id.lock() = None;
 
-        result?.finish();
+        result
+    }
+
+    async fn stream_connection(
+        conn: &mut mysql_async::Conn,
+        sql: String,
+        event_tx: flume::Sender<StreamEvent>,
+        control: Option<&crate::execution::ExecutionControl>,
+        start_time: Instant,
+    ) -> Result<()> {
+        if let Some(control) = &control {
+            control.check()?;
+        }
+        let mut query_result = conn
+            .query_iter(sql)
+            .await
+            .map_err(|e| report_error(&event_tx, format!("MySQL query execution error: {e}")))?;
+
+        let columns: Vec<ColumnMeta> = query_result
+            .columns()
+            .as_ref()
+            .map(|cols| {
+                cols.iter()
+                    .map(|c| ColumnMeta::new(c.name_str().to_string(), mysql_column_data_type(c)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has_columns = !columns.is_empty();
+        if !has_columns {
+            let _ = event_tx.send(StreamEvent::CommandComplete {
+                affected_rows: Some(query_result.affected_rows()),
+            });
+        }
+        let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
+
+        {
+            let stream = query_result
+                .stream::<mysql_async::Row>()
+                .await
+                .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+            if let Some(mut stream) = stream {
+                while let Some(row_res) = stream.next().await {
+                    let row =
+                        row_res.map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+                    for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
+                        *cell = mysql_value_to_bytes(row.get(i));
+                    }
+                    sink.commit_row()?;
+                }
+            }
+        }
+        let warnings = query_result.warnings();
+        let info = query_result.info().into_owned();
+        drop(query_result);
+        if !info.is_empty() {
+            let _ = event_tx.send(StreamEvent::Notice(info));
+        }
+        if warnings > 0 {
+            let _ = event_tx.send(StreamEvent::Notice(format!(
+                "MySQL: {warnings} server warning(s); showing up to 20"
+            )));
+            let messages = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                conn.query::<(String, u16, String), _>("SHOW WARNINGS LIMIT 20"),
+            )
+            .await;
+            match messages {
+                Ok(Ok(messages)) => {
+                    for (level, code, text) in messages {
+                        let _ =
+                            event_tx.send(StreamEvent::Notice(format!("{level} {code}: {text}")));
+                    }
+                }
+                Ok(Err(error)) => {
+                    let _ = event_tx.send(StreamEvent::Notice(format!(
+                        "Cannot load warning details: {error}"
+                    )));
+                }
+                Err(_) => {
+                    let _ = event_tx.send(StreamEvent::Notice(
+                        "Loading warning details timed out".into(),
+                    ));
+                }
+            }
+        }
+        sink.finish();
         Ok(())
     }
 }
@@ -276,6 +285,23 @@ fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
 
 #[async_trait]
 impl DatabaseDriver for MySqlDriver {
+    fn supports_script_session(&self) -> bool {
+        true
+    }
+
+    async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
+        let opts = self.get_opts();
+        let timeout = self.config.connect_timeout;
+        crate::run_on_shared_runtime(async move {
+            let conn = tokio::time::timeout(timeout, mysql_async::Conn::new(opts))
+                .await
+                .map_err(|_| anyhow::anyhow!("MySQL script connection timed out"))??;
+            Ok(Arc::new(script::MySqlScriptSession::new(conn))
+                as Arc<dyn crate::script::ScriptSession>)
+        })
+        .await
+    }
+
     fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
         use crate::catalog::CatalogSection as C;
         use crate::metadata::{MetadataCapabilities, MetadataFeature as F};

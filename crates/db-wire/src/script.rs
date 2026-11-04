@@ -7,6 +7,14 @@ use std::{sync::Arc, time::Duration};
 
 #[async_trait]
 pub trait ScriptSession: Send + Sync {
+    /// A terminal session must never be retained for another tab run.
+    fn is_closed(&self) -> bool {
+        false
+    }
+    /// Native transaction state, when available without blocking or network I/O.
+    fn in_transaction(&self) -> Option<bool> {
+        None
+    }
     async fn execute_streaming(&self, sql: &str, tx: flume::Sender<StreamEvent>) -> Result<()>;
     async fn cancel_active_query(&self) -> Result<()>;
     /// Roll back any remaining transaction and close the session.
@@ -36,6 +44,7 @@ impl Drop for TabSession {
 
 pub struct ScriptControl {
     timeout: Option<Duration>,
+    native_manual_statement: Option<fn(&str) -> bool>,
     cancel: tokio::sync::watch::Sender<bool>,
     finished: tokio::sync::watch::Sender<bool>,
 }
@@ -43,6 +52,7 @@ impl Default for ScriptControl {
     fn default() -> Self {
         Self {
             timeout: None,
+            native_manual_statement: None,
             cancel: tokio::sync::watch::channel(false).0,
             finished: tokio::sync::watch::channel(false).0,
         }
@@ -54,6 +64,12 @@ impl ScriptControl {
             timeout,
             ..Self::default()
         }
+    }
+    /// Begin before marked statements when native state is idle. The classifier
+    /// must exclude explicit transaction controls; unknown state fails closed.
+    pub fn with_native_manual_transactions(mut self, classifier: fn(&str) -> bool) -> Self {
+        self.native_manual_statement = Some(classifier);
+        self
     }
     pub fn request_cancel(&self) {
         self.cancel.send_replace(true);
@@ -75,6 +91,7 @@ impl ScriptControl {
 pub enum ScriptEvent {
     StatementStarted { sql: String },
     Stream(StreamEvent),
+    TransactionState { active: bool },
     CleaningUp,
     Finished(ScriptOutcome),
 }
@@ -188,9 +205,32 @@ async fn run_script_inner(
         }
     }
     let mut outcome = ScriptOutcome::default();
-    for sql in statements {
+    let mut statements: std::collections::VecDeque<_> =
+        statements.into_iter().map(|sql| (sql, true)).collect();
+    while let Some((sql, check_manual)) = statements.pop_front() {
         if control.is_cancelled() {
             break;
+        }
+        if check_manual
+            && control
+                .native_manual_statement
+                .is_some_and(|classify| classify(&sql))
+        {
+            match session.in_transaction() {
+                Some(false) => {
+                    statements.push_front((sql, false));
+                    statements.push_front(("BEGIN".into(), false));
+                    continue;
+                }
+                Some(true) => {}
+                None => {
+                    outcome.error = Some(
+                        "Native transaction state is unknown; Commit or Rollback before manual SQL"
+                            .into(),
+                    );
+                    break;
+                }
+            }
         }
         send(
             &tx,
@@ -242,6 +282,11 @@ async fn run_script_inner(
         if let Err(error) = relay.await {
             outcome.error = Some(format!("Script event stream failed: {error}"));
         }
+        if !control.is_cancelled()
+            && let Some(active) = session.in_transaction()
+        {
+            send(&tx, &control, ScriptEvent::TransactionState { active });
+        }
         if outcome.error.is_some() || control.is_cancelled() {
             break;
         }
@@ -250,6 +295,7 @@ async fn run_script_inner(
     if owner.as_ref().is_some_and(|o| o.strong_count() > 0)
         && !outcome.cancelled
         && outcome.cleanup_error.is_none()
+        && !session.is_closed()
     {
         guard.0 = None;
         send(&tx, &control, ScriptEvent::Finished(outcome));
@@ -400,6 +446,43 @@ mod tests {
                 _ => None,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn native_manual_mode_fails_closed_on_unknown_state_but_allows_recovery() {
+        crate::get_runtime().block_on(async {
+            let session = FakeSession::new(false, None);
+            let owner = Arc::new(super::TabSession::default());
+            let driver = fake_driver(session.clone());
+            let (tx, rx) = flume::unbounded();
+            super::run_tab_script(
+                driver.clone(),
+                vec!["write".into()],
+                Arc::new(
+                    ScriptControl::default()
+                        .with_native_manual_transactions(|sql| sql != "ROLLBACK"),
+                ),
+                tx,
+                Arc::downgrade(&owner),
+            )
+            .await;
+            assert!(outcome(&rx).error.unwrap().contains("state is unknown"));
+            assert!(session.calls.lock().unwrap().is_empty());
+            let (tx, rx) = flume::unbounded();
+            super::run_tab_script(
+                driver,
+                vec!["ROLLBACK".into()],
+                Arc::new(
+                    ScriptControl::default()
+                        .with_native_manual_transactions(|sql| sql != "ROLLBACK"),
+                ),
+                tx,
+                Arc::downgrade(&owner),
+            )
+            .await;
+            assert!(outcome(&rx).error.is_none());
+            assert_eq!(*session.calls.lock().unwrap(), ["ROLLBACK"]);
+        });
     }
 
     #[test]
