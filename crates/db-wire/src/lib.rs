@@ -18,6 +18,7 @@ pub mod sqlite;
 pub mod ssh_tunnel;
 mod stream;
 pub mod traits;
+pub mod transfer;
 pub mod value;
 
 pub use export::*;

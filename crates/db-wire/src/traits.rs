@@ -220,6 +220,10 @@ pub struct QueryCellUpdate {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    fn supports_transfer(&self) -> bool {
+        false
+    }
+
     async fn load_editable_query(&self, _sql: &str) -> Result<Arc<QueryResultPager>> {
         anyhow::bail!("Editable query results are unavailable for this provider")
     }

@@ -187,7 +187,7 @@ pub(super) fn timestamp_display(text: &str, utc: bool) -> Result<String, String>
     if !utc {
         return Ok(text.into());
     }
-    chrono::DateTime::parse_from_rfc3339(text)
+    db_wire::value::parse_timestamp_with_offset(text)
         .map(|value| value.with_timezone(&chrono::Utc).to_rfc3339())
         .map_err(|error| format!("Cannot display timestamp in UTC: {error}"))
 }
@@ -208,7 +208,7 @@ mod timestamp_tests {
 
 /// Format JSON whitespace without reserializing numbers or duplicate object keys.
 pub(super) fn format_json(text: &str) -> Result<String, String> {
-    serde_json::from_str::<serde_json::Value>(text).map_err(|error| error.to_string())?;
+    db_wire::value::validate_json_source(text).map_err(|error| error.to_string())?;
     let mut output = String::new();
     let mut depth = 0usize;
     let mut quoted = false;
@@ -262,8 +262,9 @@ mod json_tests {
     #[test]
     fn formatting_preserves_numbers_duplicate_keys_and_string_escapes() {
         let input = r#"{"n":1.2345678901234567890123,"n":1e999,"text":"a \" b"}"#;
-        // Out-of-range numbers remain rejected rather than silently rounded.
-        assert!(super::format_json(input).is_err());
+        // Native JSON accepts these tokens; formatting must not pass through f64.
+        assert!(super::format_json(input).unwrap().contains("1e999"));
+        assert!(super::format_json(r#"{"n":1e}"#).is_err());
         let input = r#"{"n":1.2345678901234567890123,"n":1e2,"text":"a \" b"}"#;
         let output = super::format_json(input).unwrap();
         assert!(output.contains("1.2345678901234567890123"));
@@ -273,5 +274,29 @@ mod json_tests {
             serde_json::from_str::<serde_json::Value>(input).unwrap(),
             serde_json::from_str::<serde_json::Value>(&output).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod native_timestamp_tests {
+    #[test]
+    fn native_utc_timestamp_display_accepts_postgres_pager_values() {
+        assert_eq!(
+            super::timestamp_display("2026-11-04 00:08:09.123456 UTC", true).unwrap(),
+            "2026-11-04T00:08:09.123456+00:00"
+        );
+        assert!(super::timestamp_display("2026-11-04 00:08:09", true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_json_tests {
+    #[test]
+    fn native_json_numbers_are_not_limited_to_binary_float_range() {
+        let input = r#"{"huge":1e999,"precise":0.12345678901234567890123456789}"#;
+        let output = super::format_json(input).unwrap();
+        assert!(output.contains("1e999"));
+        assert!(output.contains("0.12345678901234567890123456789"));
+        assert!(super::format_json(r#"{"bad":1e}"#).is_err());
     }
 }

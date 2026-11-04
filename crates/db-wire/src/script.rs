@@ -7,6 +7,11 @@ use std::{sync::Arc, time::Duration};
 
 #[async_trait]
 pub trait ScriptSession: Send + Sync {
+    /// Executes one checked batch with native bound parameters; caller owns transaction boundaries.
+    async fn insert_batch(&self, _batch: crate::transfer::batch::Batch) -> Result<u64> {
+        anyhow::bail!("Parameterized transfer inserts are unavailable for this provider")
+    }
+
     /// A terminal session must never be retained for another tab run.
     fn is_closed(&self) -> bool {
         false

@@ -18,10 +18,16 @@ enum CloseReason {
     Lost,
 }
 
+enum Action {
+    Sql {
+        sql: String,
+        events: flume::Sender<StreamEvent>,
+    },
+    Insert(crate::transfer::batch::Batch),
+}
 struct Command {
-    sql: String,
-    events: flume::Sender<StreamEvent>,
-    reply: tokio::sync::oneshot::Sender<Result<()>>,
+    action: Action,
+    reply: tokio::sync::oneshot::Sender<Result<u64>>,
 }
 
 pub(super) struct MySqlScriptSession {
@@ -53,6 +59,21 @@ impl MySqlScriptSession {
             closed,
             transaction,
         }
+    }
+
+    async fn dispatch(&self, action: Action) -> Result<u64> {
+        anyhow::ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "Script session is closed"
+        );
+        let (reply, result) = tokio::sync::oneshot::channel();
+        self.commands
+            .send(Command { action, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("MySQL script session is closed"))?;
+        result
+            .await
+            .map_err(|_| anyhow::anyhow!("MySQL script session closed during execution"))?
     }
 
     async fn close_and_wait(&self) -> Result<()> {
@@ -89,22 +110,16 @@ impl ScriptSession for MySqlScriptSession {
     }
 
     async fn execute_streaming(&self, sql: &str, events: flume::Sender<StreamEvent>) -> Result<()> {
-        anyhow::ensure!(
-            !self.closed.load(Ordering::SeqCst),
-            "Script session is closed"
-        );
-        let (reply, result) = tokio::sync::oneshot::channel();
-        self.commands
-            .send(Command {
-                sql: sql.into(),
-                events,
-                reply,
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("MySQL script session is closed"))?;
-        result
-            .await
-            .map_err(|_| anyhow::anyhow!("MySQL script session closed during execution"))?
+        self.dispatch(Action::Sql {
+            sql: sql.into(),
+            events,
+        })
+        .await
+        .map(|_| ())
+    }
+
+    async fn insert_batch(&self, batch: crate::transfer::batch::Batch) -> Result<u64> {
+        self.dispatch(Action::Insert(batch)).await
     }
 
     async fn cancel_active_query(&self) -> Result<()> {
@@ -145,7 +160,22 @@ async fn worker(
         let executed = tokio::select! {
             biased;
             _ = closing.changed() => None,
-            result = MySqlDriver::stream_connection(&mut connection, command.sql, command.events, None, Instant::now()) => Some(result),
+            result = async {
+                match command.action {
+                    Action::Sql { sql, events } => MySqlDriver::stream_connection(&mut connection, sql, events, None, Instant::now()).await.map(|_| 0),
+                    Action::Insert(batch) => {
+                        let sql = batch.sql(crate::DbDriverKind::MySql)?;
+                        let values = batch.into_values().map(|value| match value {
+                            crate::transfer::mapping::Value::Null => mysql_async::Value::NULL,
+                            crate::transfer::mapping::Value::Boolean(value) => mysql_async::Value::Int(i64::from(value)),
+                            crate::transfer::mapping::Value::Text(text) => mysql_async::Value::Bytes(text.into_bytes()),
+                            crate::transfer::mapping::Value::Binary(bytes) => mysql_async::Value::Bytes(bytes),
+                        }).collect::<Vec<_>>();
+                        connection.exec_drop(sql, Params::Positional(values)).await?;
+                        Ok(connection.affected_rows())
+                    }
+                }
+            } => Some(result),
         };
         let Some(result) = executed else {
             break CloseReason::Interrupted;
