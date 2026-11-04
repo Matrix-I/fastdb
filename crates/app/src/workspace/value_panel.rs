@@ -1,6 +1,8 @@
+use super::value_editor::{ValueRead, read_value};
 use super::value_format::{FormattedValue, ValueFormat, detect_format, format_value};
 use super::*;
 use gpui::prelude::FluentBuilder;
+use std::sync::atomic::{AtomicBool, Ordering};
 use ui_grid::RowRef;
 
 /// Default width of the record value side panel
@@ -17,9 +19,13 @@ pub struct ValuePanelState {
     /// Format the user picked from the menu; `None` follows the detected format
     pub format_override: Option<ValueFormat>,
     pub word_wrap: bool,
+    pub(super) file_encoding: super::value_files::Encoding,
     pub auto_format: bool,
+    pub(super) utc_timestamps: bool,
     pub show_format_menu: bool,
-    cache: Option<(CacheKey, Arc<FormattedValue>)>,
+    request: Option<PreviewKey>,
+    preview: Option<Arc<CellValue>>,
+    job: Arc<AtomicBool>,
 }
 
 impl Default for ValuePanelState {
@@ -27,29 +33,109 @@ impl Default for ValuePanelState {
         Self {
             format_override: None,
             word_wrap: false,
+            file_encoding: Default::default(),
             auto_format: true,
+            utc_timestamps: false,
             show_format_menu: false,
-            cache: None,
+            request: None,
+            preview: None,
+            job: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
-#[derive(PartialEq, Eq)]
-struct CacheKey {
-    bytes: Vec<u8>,
-    data_type: DataType,
-    format: ValueFormat,
+#[derive(Clone, PartialEq, Eq)]
+struct PreviewKey {
+    tab: u64,
+    pager: usize,
+    row: u64,
+    column: usize,
+    revision: u64,
+    format: Option<ValueFormat>,
     auto_format: bool,
+    utc: bool,
+    default: bool,
 }
 
-/// The focused cell of the active grid, read for display
 struct CellValue {
     column: String,
     type_name: String,
-    data_type: DataType,
     row: u64,
-    /// `None` for SQL NULL
     bytes: Option<Vec<u8>>,
+    byte_len: Option<usize>,
+    format: ValueFormat,
+    formatted: Option<Arc<FormattedValue>>,
+    copy_text: Option<Arc<String>>,
+    error: Option<String>,
+    default: bool,
+}
+
+struct PreviewJob(Arc<AtomicBool>);
+impl Drop for PreviewJob {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn preview_value(read: ValueRead, key: &PreviewKey, name: String, type_name: String) -> CellValue {
+    let data_type = read.pager.columns[read.column].data_type;
+    let mut cell = CellValue {
+        column: name,
+        type_name,
+        row: key.row,
+        bytes: None,
+        byte_len: None,
+        format: ValueFormat::Text,
+        formatted: None,
+        copy_text: None,
+        error: None,
+        default: key.default,
+    };
+    match read_value(read) {
+        Err(error) => cell.error = Some(error),
+        Ok((value, _)) => {
+            cell.bytes = value.map(String::into_bytes);
+            if let Some(bytes) = &cell.bytes {
+                cell.byte_len = Some(if data_type == DataType::Bytea {
+                    bytes.len().saturating_sub(2) / 2
+                } else {
+                    bytes.len()
+                });
+                cell.format = key.format.unwrap_or_else(|| {
+                    if data_type == DataType::Bytea {
+                        ValueFormat::Binary
+                    } else {
+                        detect_format(bytes, data_type)
+                    }
+                });
+                let text = std::str::from_utf8(bytes).unwrap_or("");
+                // Pretty printing is presentation only and must keep original JSON tokens.
+                let result = if key.utc && data_type == DataType::TimestampTz {
+                    super::value_files::timestamp_display(text, true)
+                } else if key.auto_format && cell.format == ValueFormat::Json {
+                    super::value_files::format_json(text)
+                } else {
+                    Ok(text.to_owned())
+                };
+                let mut formatted = match result {
+                    Ok(text) => format_value(text.as_bytes(), data_type, cell.format, false),
+                    Err(error) => {
+                        let mut value = format_value(bytes, data_type, cell.format, false);
+                        value.error = Some(error);
+                        value
+                    }
+                };
+                if key.auto_format && cell.format == ValueFormat::Xml {
+                    formatted.error = Some(
+                        "XML source shown unchanged to preserve significant whitespace".into(),
+                    );
+                }
+                cell.copy_text = Some(Arc::new(formatted.lines.join("\n")));
+                cell.formatted = Some(Arc::new(formatted));
+            }
+        }
+    }
+    cell
 }
 
 impl Workspace {
@@ -88,52 +174,107 @@ impl Workspace {
         cx.notify();
     }
 
-    fn focused_cell_value(&self, active_tab_idx: usize) -> Option<CellValue> {
-        let grid = &self.tabs.get(active_tab_idx)?.grid;
+    fn focused_cell_value(
+        &mut self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<CellValue>> {
+        let tab = self.tabs.get(index)?;
+        let grid = &tab.grid;
         let focus = grid.selection.focus?;
         let pager = grid.pager.as_ref()?;
-        let col = pager.columns.get(focus.col)?;
+        let column = pager.columns.get(focus.col)?;
         if focus.row >= grid.row_count() {
             return None;
         }
-        // Fetched values keep their raw bytes (binary data); staged edits are text
-        let bytes = match grid.changeset.resolve_row(focus.row) {
-            RowRef::Fetched(f) if !grid.changeset.is_modified(f, focus.col) => {
-                pager.get_cell(f, focus.col)
-            }
-            _ => grid
-                .cell_value(focus.row, focus.col)
-                .map(String::into_bytes),
-        };
-        Some(CellValue {
-            column: col.name.clone(),
-            type_name: col.display_type(),
-            data_type: col.data_type,
+        let key = PreviewKey {
+            tab: tab.id,
+            pager: Arc::as_ptr(pager) as usize,
             row: focus.row,
-            bytes,
-        })
-    }
-
-    fn formatted_cell(
-        &mut self,
-        cell: &CellValue,
-        format: ValueFormat,
-    ) -> Option<Arc<FormattedValue>> {
-        let bytes = cell.bytes.as_ref()?;
-        let key = CacheKey {
-            bytes: bytes.clone(),
-            data_type: cell.data_type,
-            format,
+            column: focus.col,
+            revision: grid.changeset_revision(),
+            format: self.value_panel.format_override,
             auto_format: self.value_panel.auto_format,
+            utc: self.value_panel.utc_timestamps,
+            default: match grid.changeset.resolve_row(focus.row) {
+                RowRef::New(index) => {
+                    let row = &grid.changeset.inserted_rows[index];
+                    row.values[focus.col].is_none() && !row.explicit_nulls.contains(&focus.col)
+                }
+                _ => false,
+            },
         };
-        if let Some((cached_key, value)) = &self.value_panel.cache
-            && *cached_key == key
-        {
-            return Some(value.clone());
+        if self.value_panel.request.as_ref() == Some(&key) {
+            return self.value_panel.preview.clone();
         }
-        let value = Arc::new(format_value(bytes, cell.data_type, format, key.auto_format));
-        self.value_panel.cache = Some((key, value.clone()));
-        Some(value)
+        self.value_panel.preview = None;
+        if self
+            .value_panel
+            .job
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+        let job = PreviewJob(self.value_panel.job.clone());
+        let row = grid.changeset.resolve_row(focus.row);
+        let staged = match row {
+            RowRef::Fetched(row) => grid.changeset.edited_value(row, focus.col),
+            RowRef::New(index) => {
+                Some(grid.changeset.inserted_rows[index].values[focus.col].as_deref())
+            }
+        };
+        // Check staged bytes before cloning on the UI thread.
+        if staged
+            .flatten()
+            .is_some_and(|text| text.len() > super::value_files::MAX_VALUE_BYTES * 2 + 2)
+        {
+            self.value_panel.request = Some(key.clone());
+            let cell = CellValue {
+                column: column.name.clone(),
+                type_name: column.display_type(),
+                row: focus.row,
+                bytes: None,
+                byte_len: None,
+                format: ValueFormat::Text,
+                formatted: None,
+                copy_text: None,
+                error: Some("Staged value exceeds the 256 KiB viewer limit".into()),
+                default: key.default,
+            };
+            self.value_panel.preview = Some(Arc::new(cell));
+            drop(job);
+            return self.value_panel.preview.clone();
+        }
+        let read = ValueRead {
+            pager: pager.clone(),
+            row,
+            column: focus.col,
+            staged: staged.map(|value| value.map(str::to_owned)),
+            provider: self.tab_provider(index),
+        };
+        let name = column.name.clone();
+        let type_name = column.display_type();
+        self.value_panel.request = Some(key.clone());
+        cx.spawn(async move |this, cx| {
+            let cell = cx
+                .background_executor()
+                .spawn(async move {
+                    let _job = job;
+                    let cell = preview_value(read, &key, name, type_name);
+                    (key, cell)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.value_panel.request.as_ref() == Some(&cell.0) {
+                    this.value_panel.preview = Some(Arc::new(cell.1));
+                }
+                // A newer selection is scheduled on the next render.
+                cx.notify();
+            });
+        })
+        .detach();
+        None
     }
 
     /// DBeaver-style "Value" panel showing the focused grid cell in a chosen format
@@ -143,13 +284,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
-        let cell = self.focused_cell_value(active_tab_idx);
-        let detected = cell
+        let cell = self.focused_cell_value(active_tab_idx, cx);
+        let format = cell
             .as_ref()
-            .and_then(|c| c.bytes.as_deref().map(|b| detect_format(b, c.data_type)))
+            .map(|cell| cell.format)
             .unwrap_or(ValueFormat::Text);
-        let format = self.value_panel.format_override.unwrap_or(detected);
-        let formatted = cell.as_ref().and_then(|c| self.formatted_cell(c, format));
+        let formatted = cell.as_ref().and_then(|cell| cell.formatted.clone());
         let state = &self.value_panel;
 
         let mut panel = div()
@@ -229,7 +369,7 @@ impl Workspace {
         );
 
         // Toolbar: format picker, copy, and the overflow toggle for word wrap
-        let copy_text = formatted.as_ref().map(|f| f.lines.join("\n"));
+        let copy_text = cell.as_ref().and_then(|cell| cell.copy_text.clone());
         panel = panel.child(
             div()
                 .flex()
@@ -278,7 +418,9 @@ impl Workspace {
                             |d, text| {
                                 d.on_click(cx.listener(move |this, _, _, cx| {
                                     this.clipboard_request_id += 1;
-                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        (*text).clone(),
+                                    ))
                                 }))
                             },
                         )),
@@ -295,13 +437,23 @@ impl Workspace {
 
         // Content
         let content = match (&cell, &formatted) {
-            (None, _) => empty_message("Select a cell in the data grid to view its value.", &theme),
-            (Some(_), None) => div()
+            (None, _) => empty_message(
+                "Select a cell; values load in the background (256 KiB limit).",
+                &theme,
+            ),
+            (Some(cell), _) if cell.error.is_some() => {
+                div().p_2().child(cell.error.clone().unwrap())
+            }
+            (Some(cell), None) => div()
                 .p_2()
                 .font_family(MONO_FONT)
                 .text_size(px(12.0))
                 .text_color(theme.text_muted)
-                .child("[NULL]"),
+                .child(if cell.default {
+                    "[DEFAULT · unset]"
+                } else {
+                    "[NULL]"
+                }),
             (Some(_), Some(value)) => render_lines(value, state.word_wrap, &theme),
         };
         panel = panel.child(
@@ -329,11 +481,15 @@ impl Workspace {
 
         // Footer: what is shown
         if let Some(cell) = &cell {
-            let size = cell
-                .bytes
-                .as_ref()
-                .map(|b| human_size(b.len()))
-                .unwrap_or_else(|| "NULL".to_string());
+            let size = if cell.error.is_some() {
+                "unavailable".into()
+            } else if cell.default {
+                "DEFAULT".into()
+            } else {
+                cell.byte_len
+                    .map(human_size)
+                    .unwrap_or_else(|| "NULL".into())
+            };
             panel = panel.child(
                 div()
                     .flex()
@@ -354,7 +510,7 @@ impl Workspace {
                         cell.type_name,
                         cell.row + 1
                     )))
-                    .child(div().flex_none().child(format!("{size} · UTF-8"))),
+                    .child(div().flex_none().child(size)),
             );
         }
 
@@ -440,7 +596,7 @@ impl Workspace {
                     .pl(px(26.0))
                     .text_size(px(12.5))
                     .text_color(theme.text_muted)
-                    .child("Encoding: UTF-8"),
+                    .child("Source: UTF-8; file encoding in Value editor"),
             )
     }
 }
@@ -563,5 +719,95 @@ fn human_size(bytes: usize) -> String {
         b if b < 1024 => format!("{b} B"),
         b if b < 1024 * 1024 => format!("{:.1} KB", b as f64 / 1024.0),
         b => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PreviewKey, preview_value};
+    use crate::workspace::value_editor::ValueRead;
+    use db_wire::{ColumnMeta, DataType, DbDriverKind, QueryResultPager};
+    use std::sync::Arc;
+    use ui_grid::RowRef;
+
+    fn preview(bytes: Option<&[u8]>, kind: DataType, provider: DbDriverKind) -> super::CellValue {
+        let pager = QueryResultPager::new(vec![ColumnMeta::new("value", kind)]).unwrap();
+        pager.append_row([bytes]).unwrap();
+        let key = PreviewKey {
+            tab: 1,
+            pager: 0,
+            row: 0,
+            column: 0,
+            revision: 0,
+            format: None,
+            auto_format: true,
+            utc: false,
+            default: false,
+        };
+        preview_value(
+            ValueRead {
+                pager: Arc::new(pager),
+                row: RowRef::Fetched(0),
+                column: 0,
+                staged: None,
+                provider,
+            },
+            &key,
+            "value".into(),
+            "BLOB".into(),
+        )
+    }
+
+    #[test]
+    fn binary_preview_keeps_literal_prefix_bytes_and_rejects_oversized_values() {
+        for provider in [DbDriverKind::Sqlite, DbDriverKind::MySql] {
+            let value = preview(Some(b"\\xdead"), DataType::Bytea, provider);
+            let rendered = value.formatted.unwrap().lines.join("\n");
+            assert!(rendered.contains("5c 78 64 65 61 64"));
+            assert!(value.error.is_none());
+        }
+        let value = preview(
+            Some(&vec![b'a'; 1024 * 1024]),
+            DataType::Text,
+            DbDriverKind::Sqlite,
+        );
+        assert!(value.error.is_some());
+        assert!(value.bytes.is_none());
+        assert!(value.formatted.is_none());
+        let pager = Arc::new(
+            QueryResultPager::new(vec![ColumnMeta::new("value", DataType::Text)]).unwrap(),
+        );
+        let key = PreviewKey {
+            tab: 1,
+            pager: 0,
+            row: 0,
+            column: 0,
+            revision: 0,
+            format: None,
+            auto_format: false,
+            utc: false,
+            default: true,
+        };
+        let default = preview_value(
+            ValueRead {
+                pager,
+                row: RowRef::New(0),
+                column: 0,
+                staged: Some(None),
+                provider: DbDriverKind::Sqlite,
+            },
+            &key,
+            "value".into(),
+            "TEXT".into(),
+        );
+        assert!(default.default);
+        assert!(default.formatted.is_none());
+        let null = preview(None, DataType::Bytea, DbDriverKind::Sqlite);
+        assert!(null.error.is_none());
+        assert!(!null.default);
+        assert!(null.formatted.is_none());
+        let empty = preview(Some(b""), DataType::Bytea, DbDriverKind::Sqlite);
+        assert!(empty.error.is_none());
+        assert!(empty.formatted.is_some());
     }
 }

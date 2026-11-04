@@ -127,24 +127,51 @@ impl RowChanges {
                 .unwrap_or("col");
             dialect.quote_ident(name)
         };
-        let where_clause = |row: u64| {
+        let cell_literal = |column: usize, value: Option<&str>| -> anyhow::Result<String> {
+            match value {
+                Some(text) if pager.columns[column].data_type == crate::DataType::Bytea => {
+                    let bytes = crate::value::parse_hex(text)?;
+                    anyhow::ensure!(
+                        dialect.0 != DbDriverKind::Oracle || !bytes.is_empty(),
+                        "Empty binary edits are unavailable for Oracle without native RAW/BLOB type information; SQL NULL remains explicit"
+                    );
+                    Ok(crate::value::binary_literal(&bytes, dialect.0))
+                }
+                _ => Ok(value
+                    .map(|text| crate::filter::value_literal(dialect.0, text))
+                    .unwrap_or_else(|| "NULL".into())),
+            }
+        };
+        let where_clause = |row: u64| -> anyhow::Result<String> {
             let all_cols: Vec<usize> = (0..pager.columns.len()).collect();
             let cols = if key_cols.is_empty() {
                 &all_cols[..]
             } else {
                 key_cols
             };
-            cols.iter()
-                .map(|&c| match pager.get_cell(row, c) {
-                    Some(bytes) => format!(
-                        "{} = {}",
-                        col_name(c),
-                        dialect.literal(Some(&String::from_utf8_lossy(&bytes)))
-                    ),
-                    None => format!("{} IS NULL", col_name(c)),
+            Ok(cols
+                .iter()
+                .map(|&c| -> anyhow::Result<String> {
+                    Ok(match pager.get_cell(row, c) {
+                        Some(bytes) => {
+                            let literal = if pager.columns[c].data_type == crate::DataType::Bytea {
+                                crate::value::binary_literal(
+                                    &crate::value::source_binary(&bytes, dialect.0)?,
+                                    dialect.0,
+                                )
+                            } else {
+                                crate::filter::value_literal(
+                                    dialect.0,
+                                    std::str::from_utf8(&bytes)?,
+                                )
+                            };
+                            format!("{} = {}", col_name(c), literal)
+                        }
+                        None => format!("{} IS NULL", col_name(c)),
+                    })
                 })
-                .collect::<Vec<_>>()
-                .join(" AND ")
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join(" AND "))
         };
 
         let mut statements = Vec::new();
@@ -164,12 +191,12 @@ impl RowChanges {
             edits.sort_by_key(|(c, _)| *c);
             let set_clause = edits
                 .iter()
-                .map(|&(c, v)| format!("{} = {}", col_name(c), dialect.literal(v)))
-                .collect::<Vec<_>>()
+                .map(|&(c, v)| Ok(format!("{} = {}", col_name(c), cell_literal(c, v)?)))
+                .collect::<anyhow::Result<Vec<_>>>()?
                 .join(", ");
             statements.push(format!(
                 "UPDATE {target} SET {set_clause} WHERE {};",
-                where_clause(row)
+                where_clause(row)?
             ));
         }
 
@@ -200,15 +227,18 @@ impl RowChanges {
                     .join(", ");
                 let vals = set
                     .iter()
-                    .map(|&(_, v)| dialect.literal(v))
-                    .collect::<Vec<_>>()
+                    .map(|&(c, v)| cell_literal(c, v))
+                    .collect::<anyhow::Result<Vec<_>>>()?
                     .join(", ");
                 statements.push(format!("INSERT INTO {target} ({cols}) VALUES ({vals});"));
             }
         }
 
         for &row in &self.deleted_rows {
-            statements.push(format!("DELETE FROM {target} WHERE {};", where_clause(row)));
+            statements.push(format!(
+                "DELETE FROM {target} WHERE {};",
+                where_clause(row)?
+            ));
         }
 
         Ok(statements)
@@ -238,6 +268,106 @@ mod tests {
         pager.append_row([Some(b"43".as_slice()), None]).unwrap();
         pager
     }
+    #[test]
+    fn sqlite_binary_edits_roundtrip_null_empty_and_non_utf8() {
+        use crate::{DatabaseDriver, SqliteDriver};
+        crate::get_runtime().block_on(async {
+            let driver = SqliteDriver::new_memory();
+            driver
+                .execute_query("CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)")
+                .await
+                .unwrap();
+            driver
+                .execute_query("INSERT INTO blobs VALUES (1, X'00ff'), (2, NULL)")
+                .await
+                .unwrap();
+            let (pager, _, _) = driver
+                .execute_query("SELECT id, data FROM blobs ORDER BY id")
+                .await
+                .unwrap();
+            let mut edits = RowChanges::default();
+            edits
+                .changes
+                .insert((0, 1), Some(crate::value::hex_text(b"\\xdead\0\xff")));
+            edits
+                .changes
+                .insert((1, 1), Some(crate::value::hex_text(b"")));
+            let statements = edits
+                .plan_sql("blobs", &pager, &[0], SqlDialect(DbDriverKind::Sqlite))
+                .unwrap();
+            driver.apply_row_changes(&statements).await.unwrap();
+            let (stored, _, _) = driver
+                .execute_query("SELECT data, typeof(data) FROM blobs ORDER BY id")
+                .await
+                .unwrap();
+            assert_eq!(stored.get_cell(0, 0).unwrap(), b"\\xdead\0\xff");
+            assert_eq!(stored.get_cell(1, 0).unwrap(), b"");
+            assert_eq!(stored.get_cell(1, 1).unwrap(), b"blob");
+            let mut inserted = RowChanges::default();
+            inserted.inserted_rows.push(vec![
+                Some("3".into()),
+                Some(crate::value::hex_text(b"\\xdead")),
+            ]);
+            driver
+                .apply_row_changes(
+                    &inserted
+                        .plan_sql("blobs", &pager, &[0], SqlDialect(DbDriverKind::Sqlite))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (all, _, _) = driver
+                .execute_query("SELECT id, data FROM blobs ORDER BY id")
+                .await
+                .unwrap();
+            assert_eq!(all.get_cell(2, 1).unwrap(), b"\\xdead");
+            let mut deleted = RowChanges::default();
+            deleted.deleted_rows.insert(2);
+            driver
+                .apply_row_changes(
+                    &deleted
+                        .plan_sql("blobs", &all, &[], SqlDialect(DbDriverKind::Sqlite))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (remaining, _, _) = driver
+                .execute_query("SELECT id FROM blobs ORDER BY id")
+                .await
+                .unwrap();
+            assert_eq!(remaining.total_rows(), 2);
+            edits.changes.insert((0, 1), Some("invalid hex".into()));
+            assert!(
+                edits
+                    .plan_sql("blobs", &pager, &[0], SqlDialect(DbDriverKind::Sqlite))
+                    .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn oracle_empty_binary_is_rejected_instead_of_becoming_null() {
+        let pager = QueryResultPager::new(vec![ColumnMeta::new("data", DataType::Bytea)]).unwrap();
+        pager.append_row([Some(b"\\x00".as_slice())]).unwrap();
+        let mut changes = RowChanges::default();
+        changes.changes.insert((0, 0), Some("\\x".into()));
+        let error = changes
+            .plan_sql("items", &pager, &[], SqlDialect(DbDriverKind::Oracle))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Empty binary edits are unavailable for Oracle")
+        );
+        changes.changes.insert((0, 0), None);
+        assert!(
+            changes
+                .plan_sql("items", &pager, &[], SqlDialect(DbDriverKind::Oracle))
+                .unwrap()[0]
+                .contains("SET \"data\" = NULL")
+        );
+    }
+
     #[test]
     fn explicit_insert_null_is_distinct_from_an_omitted_default() {
         use crate::{DatabaseDriver, SqliteDriver};
@@ -283,7 +413,7 @@ mod tests {
                     SqlDialect(DbDriverKind::Postgres)
                 )
                 .unwrap(),
-            ["UPDATE \"public\".\"users\" SET \"username\" = 'it''s new' WHERE \"id\" = '42';"]
+            ["UPDATE \"public\".\"users\" SET \"username\" = E'it''s new' WHERE \"id\" = E'42';"]
         );
         request.changes.insert((0, 1), None);
         assert!(
@@ -301,9 +431,9 @@ mod tests {
                 .plan_sql("`users`", &pager, &[], SqlDialect(DbDriverKind::MySql))
                 .unwrap(),
             [
-                "INSERT INTO `users` (`username`) VALUES ('new\\\\user');",
+                "INSERT INTO `users` (`username`) VALUES (CONVERT(X'6e65775c75736572' USING utf8mb4));",
                 "INSERT INTO `users` () VALUES ();",
-                "DELETE FROM `users` WHERE `id` = '43' AND `username` IS NULL;",
+                "DELETE FROM `users` WHERE `id` = CONVERT(X'3433' USING utf8mb4) AND `username` IS NULL;",
             ]
         );
     }
@@ -350,7 +480,7 @@ mod tests {
             assert!(statement.contains(&format!(
                 "{} = {}",
                 d.quote_ident("username"),
-                d.literal(Some("new"))
+                crate::filter::value_literal(kind, "new")
             )));
         }
         assert_eq!(

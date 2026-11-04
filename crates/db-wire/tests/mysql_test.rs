@@ -144,3 +144,101 @@ fn mysql_foreign_keys_preserve_composite_order() {
         driver.execute_query(&format!("DROP TABLE {parent}")).await.unwrap();
     });
 }
+
+#[test]
+fn value_edits_preserve_binary_and_text_across_backslash_modes() {
+    let Some(config) = test_config() else {
+        return;
+    };
+    async fn execute(
+        session: &dyn db_wire::script::ScriptSession,
+        sql: &str,
+    ) -> Option<Arc<db_wire::QueryResultPager>> {
+        let (tx, rx) = flume::unbounded();
+        tokio::time::timeout(Duration::from_secs(15), session.execute_streaming(sql, tx))
+            .await
+            .unwrap()
+            .unwrap();
+        rx.drain().find_map(|event| match event {
+            StreamEvent::SchemaReady(pager) => Some(pager),
+            _ => None,
+        })
+    }
+    db_wire::get_runtime().block_on(async {
+        let driver = MySqlDriver::new(config);
+        // Pool checkout resets session state; keep mode and temporary table on one pinned session.
+        let session = driver.open_script_session().await.unwrap();
+        execute(session.as_ref(), "CREATE TEMPORARY TABLE value_edit_data (id INTEGER PRIMARY KEY, bytes BLOB, value TEXT)").await;
+        execute(session.as_ref(), "INSERT INTO value_edit_data VALUES (1, NULL, NULL), (2, NULL, NULL)").await;
+        for mode in ["", "NO_BACKSLASH_ESCAPES"] {
+            execute(session.as_ref(), &format!("SET SESSION sql_mode='{mode}'")).await;
+            execute(session.as_ref(), "UPDATE value_edit_data SET bytes=NULL, value=NULL").await;
+            let pager = execute(session.as_ref(), "SELECT id, bytes, value FROM value_edit_data ORDER BY id").await.unwrap();
+            let raw = b"\\xdead\0\xff";
+            let text = "quote\\' and \\ path 名";
+            let mut edits = db_wire::sql::RowChanges::default();
+            edits.changes.insert((0, 1), Some(db_wire::value::hex_text(raw)));
+            edits.changes.insert((0, 2), Some(text.into()));
+            edits.changes.insert((1, 1), Some(db_wire::value::hex_text(b"")));
+            let sql = edits.plan_sql("value_edit_data", &pager, &[0], db_wire::sql::SqlDialect(DbDriverKind::MySql)).unwrap();
+            execute(session.as_ref(), "BEGIN").await;
+            for statement in sql { execute(session.as_ref(), &statement).await; }
+            execute(session.as_ref(), "COMMIT").await;
+            let stored = execute(session.as_ref(), "SELECT id, bytes, value FROM value_edit_data ORDER BY id").await.unwrap();
+            assert_eq!(stored.total_rows(), 2);
+            assert_eq!(stored.get_cell(0, 1).unwrap(), raw);
+            assert_eq!(stored.get_cell(0, 2).unwrap(), text.as_bytes());
+            assert_eq!(stored.get_cell(1, 1).unwrap(), b"");
+            assert_eq!(stored.get_cell(1, 2), None);
+        }
+    });
+}
+
+#[test]
+fn mysql_table_save_roundtrips_exact_binary() {
+    let Some(config) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver = MySqlDriver::new(config);
+        let table = format!("fastdb_value_{}", uuid::Uuid::new_v4().simple());
+        driver
+            .execute_query(&format!(
+                "CREATE TABLE {table} (id INTEGER PRIMARY KEY, bytes BLOB)"
+            ))
+            .await
+            .unwrap();
+        let result: anyhow::Result<()> = async {
+            driver
+                .execute_query(&format!("INSERT INTO {table} VALUES (1, NULL)"))
+                .await?;
+            let (pager, _, _) = driver
+                .execute_query(&format!("SELECT id, bytes FROM {table}"))
+                .await?;
+            let mut edits = db_wire::sql::RowChanges::default();
+            let raw = b"\\xdead\0\xff";
+            edits
+                .changes
+                .insert((0, 1), Some(db_wire::value::hex_text(raw)));
+            let sql = edits.plan_sql(
+                &table,
+                &pager,
+                &[0],
+                db_wire::sql::SqlDialect(DbDriverKind::MySql),
+            )?;
+            assert_eq!(driver.apply_row_changes(&sql).await?, 1);
+            let (stored, rows, _) = driver
+                .execute_query(&format!("SELECT bytes FROM {table}"))
+                .await?;
+            assert_eq!(rows, 1);
+            assert_eq!(stored.get_cell(0, 0).unwrap(), raw);
+            Ok(())
+        }
+        .await;
+        driver
+            .execute_query(&format!("DROP TABLE {table}"))
+            .await
+            .unwrap();
+        result.unwrap();
+    });
+}

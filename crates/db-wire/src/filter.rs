@@ -68,7 +68,7 @@ impl Default for FilterSpec {
         }
     }
 }
-fn value_literal(kind: DbDriverKind, value: &str) -> String {
+pub(crate) fn value_literal(kind: DbDriverKind, value: &str) -> String {
     if matches!(kind, DbDriverKind::MySql | DbDriverKind::MariaDb) {
         // Hex text does not depend on NO_BACKSLASH_ESCAPES or connection encoding.
         const HEX: &[u8; 16] = b"0123456789abcdef";

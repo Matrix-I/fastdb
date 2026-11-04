@@ -560,3 +560,51 @@ fn structured_numeric_filter_uses_index_at_realistic_volume() {
         eprintln!("structured filter plan (100000 rows): {text}");
     });
 }
+
+#[test]
+fn value_edits_roundtrip_binary_json_xml_empty_and_null() {
+    let Some(config) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver = PostgresDriver::new(config);
+        driver.execute_query("SET statement_timeout='15s'").await.unwrap();
+        driver.execute_query("CREATE TEMP TABLE value_edit_data (id integer PRIMARY KEY, bytes bytea, document json, markup xml, value text)").await.unwrap();
+        driver.execute_query("INSERT INTO value_edit_data VALUES (1, NULL, NULL, NULL, NULL), (2, NULL, NULL, NULL, NULL)").await.unwrap();
+        let (pager, _, _) = driver.execute_query("SELECT id, bytes, document, markup, value FROM value_edit_data ORDER BY id").await.unwrap();
+        let raw = b"\\xdead\0\xff";
+        let json = r#"{"n":0.12345678901234567890123456789,"k":1,"k":2}"#;
+        let xml = "<a> hello <b/> world </a>";
+        let mut edits = db_wire::sql::RowChanges::default();
+        for (column, value) in [(1, db_wire::value::hex_text(raw)), (2, json.into()), (3, xml.into()), (4, "".into())] {
+            edits.changes.insert((0, column), Some(value));
+        }
+        edits.changes.insert((1, 1), Some(db_wire::value::hex_text(b"")));
+        let sql = edits.plan_sql("value_edit_data", &pager, &[0], db_wire::sql::SqlDialect(DbDriverKind::Postgres)).unwrap();
+        assert_eq!(driver.apply_row_changes(&sql).await.unwrap(), 2);
+        let (stored, _, _) = driver.execute_query("SELECT id, bytes, document, markup, value FROM value_edit_data ORDER BY id").await.unwrap();
+        assert_eq!(db_wire::value::source_binary(&stored.get_cell(0, 1).unwrap(), DbDriverKind::Postgres).unwrap(), raw);
+        assert_eq!(cell_text(&stored, 0, 2).as_deref(), Some(json));
+        assert_eq!(cell_text(&stored, 0, 3).as_deref(), Some(xml));
+        assert_eq!(cell_text(&stored, 0, 4).as_deref(), Some(""));
+        assert_eq!(cell_text(&stored, 1, 1).as_deref(), Some("\\x"));
+        assert_eq!(stored.get_cell(1, 4), None);
+        for mode in ["on", "off"] {
+            driver.execute_query(&format!("SET standard_conforming_strings={mode}")).await.unwrap();
+            let text = "quote\\' and \\ path 名";
+            let mut update = db_wire::sql::RowChanges::default();
+            update.changes.insert((1, 4), Some(text.into()));
+            let sql = update.plan_sql("value_edit_data", &stored, &[0], db_wire::sql::SqlDialect(DbDriverKind::Postgres)).unwrap();
+            driver.apply_row_changes(&sql).await.unwrap();
+            let (value, _, _) = driver.execute_query("SELECT value FROM value_edit_data WHERE id=2").await.unwrap();
+            assert_eq!(cell_text(&value, 0, 0).as_deref(), Some(text));
+        }
+        let mut deletion = db_wire::sql::RowChanges::default();
+        deletion.deleted_rows.insert(0);
+        // JSON/XML lack equality operators; check binary original predicates separately.
+        let (binary, _, _) = driver.execute_query("SELECT id, bytes FROM value_edit_data ORDER BY id").await.unwrap();
+        let sql = deletion.plan_sql("value_edit_data", &binary, &[], db_wire::sql::SqlDialect(DbDriverKind::Postgres)).unwrap();
+        assert!(sql[0].contains("pg_catalog.decode"));
+        assert_eq!(driver.apply_row_changes(&sql).await.unwrap(), 1);
+    });
+}

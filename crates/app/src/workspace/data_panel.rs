@@ -387,6 +387,10 @@ impl Workspace {
                     .bg(theme.bg_surface)
                     .child(finder)
                     .child(record)
+                    .child(
+                        super::script_tools::tool("Value editor")
+                            .on_click(cx.listener(|this, _, _, cx| this.open_value_editor(cx))),
+                    )
                     .children(
                         (self.tabs[active_tab_idx].is_script()
                             && self.tab_provider(active_tab_idx) == DbDriverKind::Postgres)
