@@ -434,3 +434,68 @@ fn cancelling_tab_analyze_rolls_back_and_allows_a_fresh_session() {
         driver.execute_query(&format!("DROP TABLE {name}")).await.unwrap();
     });
 }
+
+#[test]
+fn pre_cancelled_tab_run_closes_existing_transaction_before_later_commit() {
+    let Some(cfg) = config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver: Arc<dyn DatabaseDriver> = Arc::new(PostgresDriver::new(cfg));
+        let owner = Arc::new(db_wire::script::TabSession::default());
+        let table = format!("fastdb_pre_cancel_{}", std::process::id());
+        driver
+            .execute_query(&format!("CREATE TABLE {table} (id INTEGER)"))
+            .await
+            .unwrap();
+        for (statements, cancel) in [
+            (
+                vec!["BEGIN".into(), format!("INSERT INTO {table} VALUES (1)")],
+                false,
+            ),
+            (vec!["SELECT 1".into()], true),
+            (vec!["COMMIT".into()], false),
+        ] {
+            let control = Arc::new(ScriptControl::default());
+            if cancel {
+                control.request_cancel();
+            }
+            let (tx, rx) = flume::unbounded();
+            db_wire::script::run_tab_script(
+                driver.clone(),
+                statements,
+                control,
+                tx,
+                Arc::downgrade(&owner),
+            )
+            .await;
+            let outcome = rx
+                .drain()
+                .find_map(|e| match e {
+                    ScriptEvent::Finished(o) => Some(o),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(outcome.cancelled, cancel);
+            assert!(
+                outcome.error.is_none() && outcome.cleanup_error.is_none(),
+                "{outcome:?}"
+            );
+        }
+        let (rows, _, _) = driver
+            .execute_query(&format!("SELECT count(*) FROM {table}"))
+            .await
+            .unwrap();
+        let actual = text(&rows, 0, 0);
+        owner.close();
+        driver
+            .execute_query(&format!("DROP TABLE {table}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            actual.as_deref(),
+            Some("0"),
+            "Cancel must close and roll back the previous tab transaction"
+        );
+    });
+}
