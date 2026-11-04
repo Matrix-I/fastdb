@@ -7,6 +7,8 @@ use rusqlite::types::ValueRef;
 use std::sync::Arc;
 use std::time::Instant;
 
+mod script;
+
 use crate::stream::{RowSink, report_error};
 use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary, row_count_error};
 
@@ -14,16 +16,23 @@ pub struct SqliteDriver {
     pub config: ConnectionConfig,
     conn: Arc<Mutex<Connection>>,
     interrupt_handle: Arc<Mutex<rusqlite::InterruptHandle>>,
+    session_database: String,
 }
 
 impl SqliteDriver {
     pub fn new(config: ConnectionConfig) -> Result<Self> {
-        let conn = if config.database == ":memory:" || config.database.is_empty() {
-            Connection::open_in_memory()?
+        // Each driver owns a unique in-memory database; tab connections share its
+        // main schema while keeping transaction state and TEMP objects isolated.
+        let session_database = if config.database == ":memory:" || config.database.is_empty() {
+            format!(
+                "file:fastdb-{}?mode=memory&cache=shared",
+                uuid::Uuid::new_v4()
+            )
         } else {
-            Connection::open(&config.database)
-                .with_context(|| format!("Failed to open SQLite database: {}", config.database))?
+            config.database.clone()
         };
+        let conn = Connection::open(&session_database)
+            .with_context(|| format!("Failed to open SQLite database: {}", config.database))?;
 
         let interrupt_handle = conn.get_interrupt_handle();
 
@@ -31,6 +40,7 @@ impl SqliteDriver {
             config,
             conn: Arc::new(Mutex::new(conn)),
             interrupt_handle: Arc::new(Mutex::new(interrupt_handle)),
+            session_database,
         })
     }
 
@@ -129,6 +139,22 @@ fn sqlite_decl_data_type(decl_type: &str) -> DataType {
 
 #[async_trait]
 impl DatabaseDriver for SqliteDriver {
+    fn supports_script_session(&self) -> bool {
+        true
+    }
+
+    async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
+        let database = self.session_database.clone();
+        crate::get_runtime()
+            .spawn_blocking(move || {
+                let connection = Connection::open(database)?;
+                Ok(Arc::new(script::SqliteScriptSession::new(connection))
+                    as Arc<dyn crate::script::ScriptSession>)
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("SQLite session worker failed: {error}"))?
+    }
+
     fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
         use crate::catalog::CatalogSection as C;
         use crate::metadata::{MetadataCapabilities, MetadataFeature as F};
