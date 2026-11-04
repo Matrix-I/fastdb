@@ -7,8 +7,16 @@
 use super::script_tools::tool;
 use super::*;
 use sql_intel::{
-    ParamBinding, ParamType, distinct_parameter_names, extract_parameters, substitute_parameters,
+    AtSignMode, ParamBinding, ParamType, distinct_parameter_names, extract_parameters_with_at_sign,
+    substitute_parameters_with_at_sign,
 };
+
+pub(super) fn at_sign_mode(provider: DbDriverKind) -> AtSignMode {
+    match provider {
+        DbDriverKind::MySql | DbDriverKind::MariaDb => AtSignMode::ServerVariable,
+        _ => AtSignMode::BindParameter,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ParamInputState {
@@ -21,6 +29,7 @@ pub struct ParamInputState {
 }
 
 pub struct ParameterBindingModal {
+    at_sign_mode: AtSignMode,
     pub tab_id: u64,
     pub original_sql: String,
     pub is_explain: bool,
@@ -38,8 +47,10 @@ impl ParameterBindingModal {
         is_explain: bool,
         explain_analyze: bool,
         saved_params: &std::collections::HashMap<String, (ParamType, String)>,
+        provider: DbDriverKind,
     ) -> Self {
-        let params = extract_parameters(&sql);
+        let at_sign_mode = at_sign_mode(provider);
+        let params = extract_parameters_with_at_sign(&sql, at_sign_mode);
         let names = distinct_parameter_names(&params);
 
         let mut bindings = Vec::new();
@@ -61,6 +72,7 @@ impl ParameterBindingModal {
         }
 
         let mut modal = Self {
+            at_sign_mode,
             tab_id,
             original_sql: sql,
             is_explain,
@@ -86,7 +98,11 @@ impl ParameterBindingModal {
             })
             .collect();
 
-        match substitute_parameters(&self.original_sql, &param_bindings) {
+        match substitute_parameters_with_at_sign(
+            &self.original_sql,
+            &param_bindings,
+            self.at_sign_mode,
+        ) {
             Ok(sql) => {
                 self.preview_sql = sql;
                 self.error_message = None;
@@ -133,6 +149,7 @@ impl Workspace {
             is_explain,
             explain_analyze,
             &self.tabs[tab_idx].saved_params,
+            self.tab_provider(tab_idx),
         );
         self.params_modal = Some(modal);
         cx.notify();
@@ -542,10 +559,109 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn mysql_modal_preview_executes_on_the_same_live_tab_session() {
+        use db_wire::script::{ScriptControl, ScriptEvent, TabSession, run_tab_script};
+        use db_wire::{ConnectionConfig, DbDriverKind, MySqlDriver, StreamEvent};
+        use std::sync::Arc;
+        let Ok(port) = std::env::var("FASTDB_TEST_MYSQL_PORT") else {
+            assert!(
+                std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none(),
+                "FASTDB_TEST_MYSQL_PORT required"
+            );
+            eprintln!("skipped: FASTDB_TEST_MYSQL_PORT not set");
+            return;
+        };
+        let driver = Arc::new(MySqlDriver::new(ConnectionConfig {
+            driver: DbDriverKind::MySql,
+            host: std::env::var("FASTDB_TEST_MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
+            port: port.parse().unwrap(),
+            database: std::env::var("FASTDB_TEST_MYSQL_DATABASE")
+                .unwrap_or_else(|_| "mysql".into()),
+            user: std::env::var("FASTDB_TEST_MYSQL_USER").unwrap_or_else(|_| "root".into()),
+            password: std::env::var("FASTDB_TEST_MYSQL_PASSWORD").ok(),
+            use_unix_socket: false,
+            ..Default::default()
+        }));
+        db_wire::get_runtime().block_on(async {
+            let owner = Arc::new(TabSession::default());
+            for (sql, value, expected) in [
+                ("SET @fastdb_counter$1 = :initial", "40", None),
+                ("SELECT @fastdb_counter$1 + :delta", "2", Some(b"42".to_vec())),
+            ] {
+                let mut modal = ParameterBindingModal::new(1, sql.into(), false, false, &HashMap::new(), DbDriverKind::MySql);
+                assert_eq!(modal.bindings.len(), 1);
+                modal.bindings[0].param_type = ParamType::Integer;
+                modal.bindings[0].value_text = value.into();
+                modal.update_preview();
+                assert!(modal.error_message.is_none());
+                let statements = sql_intel::split_session_script(&modal.preview_sql).unwrap();
+                let (tx, rx) = flume::unbounded();
+                run_tab_script(driver.clone(), statements, Arc::new(ScriptControl::default()), tx, Arc::downgrade(&owner)).await;
+                let events: Vec<_> = rx.drain().collect();
+                assert!(events.iter().any(|event| matches!(event, ScriptEvent::Finished(outcome) if outcome.error.is_none() && outcome.cleanup_error.is_none() && !outcome.cancelled)), "{events:?}");
+                if let Some(expected) = expected {
+                    let actual = events.iter().find_map(|event| match event {
+                        ScriptEvent::Stream(StreamEvent::SchemaReady(pager)) => pager.get_cell(0, 0),
+                        _ => None,
+                    });
+                    assert_eq!(actual, Some(expected));
+                }
+            }
+            owner.close();
+        });
+    }
+
+    #[test]
+    fn mysql_modal_preserves_server_variables_and_binds_only_client_parameters() {
+        for provider in [db_wire::DbDriverKind::MySql, db_wire::DbDriverKind::MariaDb] {
+            let mut modal = ParameterBindingModal::new(
+                1,
+                "SET @counter = :initial; SELECT @counter + ?".into(),
+                false,
+                false,
+                &HashMap::new(),
+                provider,
+            );
+            assert_eq!(
+                modal
+                    .bindings
+                    .iter()
+                    .map(|binding| binding.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec![":initial", "?1"]
+            );
+            for (binding, value) in modal.bindings.iter_mut().zip(["40", "2"]) {
+                binding.param_type = ParamType::Integer;
+                binding.value_text = value.into();
+            }
+            modal.update_preview();
+            assert_eq!(modal.preview_sql, "SET @counter = 40; SELECT @counter + 2");
+            assert!(modal.error_message.is_none());
+            let native = ParameterBindingModal::new(
+                1,
+                "SELECT @counter, @@version".into(),
+                false,
+                false,
+                &HashMap::new(),
+                provider,
+            );
+            assert!(native.bindings.is_empty());
+            assert_eq!(native.preview_sql, "SELECT @counter, @@version");
+        }
+    }
+
+    #[test]
     fn parameter_modal_init_and_preview() {
         let sql = "SELECT * FROM users WHERE id = :id AND active = :status;".to_string();
         let saved = HashMap::new();
-        let mut modal = ParameterBindingModal::new(1, sql, false, false, &saved);
+        let mut modal = ParameterBindingModal::new(
+            1,
+            sql,
+            false,
+            false,
+            &saved,
+            db_wire::DbDriverKind::Postgres,
+        );
 
         assert_eq!(modal.bindings.len(), 2);
         assert_eq!(modal.bindings[0].name, ":id");
@@ -579,7 +695,14 @@ mod tests {
     fn parameter_modal_catches_invalid_types() {
         let sql = "SELECT * FROM items WHERE count > :count;".to_string();
         let saved = HashMap::new();
-        let mut modal = ParameterBindingModal::new(1, sql, false, false, &saved);
+        let mut modal = ParameterBindingModal::new(
+            1,
+            sql,
+            false,
+            false,
+            &saved,
+            db_wire::DbDriverKind::Postgres,
+        );
 
         modal.bindings[0].param_type = ParamType::Integer;
         modal.bindings[0].value_text = "not_a_number".into();
@@ -604,7 +727,14 @@ mod tests {
             (ParamType::Integer, "100".to_string()),
         );
 
-        let modal = ParameterBindingModal::new(1, sql, false, false, &saved);
+        let modal = ParameterBindingModal::new(
+            1,
+            sql,
+            false,
+            false,
+            &saved,
+            db_wire::DbDriverKind::Postgres,
+        );
         assert_eq!(modal.bindings.len(), 1);
         assert_eq!(modal.bindings[0].param_type, ParamType::Integer);
         assert_eq!(modal.bindings[0].value_text, "100");

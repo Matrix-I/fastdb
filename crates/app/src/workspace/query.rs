@@ -98,7 +98,10 @@ impl Workspace {
         }
         if self.tabs[index].is_script() {
             let sql = self.tabs[index].editor.active_statement();
-            let params = sql_intel::extract_parameters(&sql);
+            let params = sql_intel::extract_parameters_with_at_sign(
+                &sql,
+                super::params_modal::at_sign_mode(self.tab_provider(index)),
+            );
             if !params.is_empty() {
                 self.open_parameter_binding_modal(id, sql, false, false, cx);
                 return;

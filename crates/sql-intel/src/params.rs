@@ -8,6 +8,17 @@
 
 use std::collections::HashSet;
 
+/// MySQL/MariaDB reserve @names for server session variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtSignMode {
+    BindParameter,
+    ServerVariable,
+}
+
+pub fn extract_parameters_with_at_sign(sql: &str, mode: AtSignMode) -> Vec<SqlParameter> {
+    scan_parameters(sql, mode)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParamKind {
     Named,
@@ -71,6 +82,10 @@ pub struct ParamBinding {
 /// String literals (`'...'`, `$$...$$`) and comments (`--...`, `/*...*/`) are ignored.
 /// PostgreSQL type casts (`::type`) are not treated as parameters.
 pub fn extract_parameters(sql: &str) -> Vec<SqlParameter> {
+    scan_parameters(sql, AtSignMode::BindParameter)
+}
+
+fn scan_parameters(sql: &str, mode: AtSignMode) -> Vec<SqlParameter> {
     let mut params = Vec::new();
     let b = sql.as_bytes();
     let len = b.len();
@@ -146,6 +161,25 @@ pub fn extract_parameters(sql: &str) -> Vec<SqlParameter> {
                     i += 1;
                 }
             }
+            continue;
+        }
+
+        // Consume the whole native name: $ and . are legal in MySQL variables,
+        // so filtering extracted @names later would leave false $1 parameters.
+        if mode == AtSignMode::ServerVariable && b[i] == b'@' {
+            i += 1;
+            if i < len && b[i] == b'@' {
+                i += 1;
+            }
+            while i < len
+                && (b[i].is_ascii_alphanumeric()
+                    || matches!(b[i], b'_' | b'.' | b'$')
+                    || b[i] >= 0x80)
+            {
+                i += 1;
+            }
+            // Quoted variable names are consumed by the quote branches above
+            // on the next iteration, preserving their embedded parameter sigils.
             continue;
         }
 
@@ -324,7 +358,16 @@ pub fn format_param_value(pt: ParamType, raw_val: &str) -> Result<String, String
 
 /// Safely substitutes parameters in SQL with typed and formatted values.
 pub fn substitute_parameters(sql: &str, bindings: &[ParamBinding]) -> Result<String, String> {
-    let params = extract_parameters(sql);
+    substitute_parameters_with_at_sign(sql, bindings, AtSignMode::BindParameter)
+}
+
+/// Detection and replacement must share the same interpretation of @names.
+pub fn substitute_parameters_with_at_sign(
+    sql: &str,
+    bindings: &[ParamBinding],
+    mode: AtSignMode,
+) -> Result<String, String> {
+    let params = extract_parameters_with_at_sign(sql, mode);
     if params.is_empty() {
         return Ok(sql.to_string());
     }
@@ -360,6 +403,57 @@ pub fn substitute_parameters(sql: &str, bindings: &[ParamBinding]) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mysql_variable_names_do_not_leak_embedded_parameter_sigils() {
+        let sql = "SET @counter$1 = :initial; SELECT @counter$1, @1, @a.b, @'quoted$1:foo?', @\"quoted?\", @`var:$1?`, @@session.sql_mode, ?";
+        assert_eq!(
+            distinct_parameter_names(&extract_parameters_with_at_sign(
+                sql,
+                AtSignMode::ServerVariable
+            )),
+            vec![":initial", "?1"]
+        );
+    }
+
+    #[test]
+    fn mysql_server_variables_are_preserved_while_explicit_parameters_are_bound() {
+        let sql = "SET @counter = :initial; SELECT @counter, @@version, ?, ':ignored', `@column`";
+        let parameters = extract_parameters_with_at_sign(sql, AtSignMode::ServerVariable);
+        assert_eq!(
+            distinct_parameter_names(&parameters),
+            vec![":initial", "?1"]
+        );
+        let bindings = [
+            ParamBinding {
+                name: ":initial".into(),
+                param_type: ParamType::Integer,
+                value: "42".into(),
+            },
+            ParamBinding {
+                name: "?1".into(),
+                param_type: ParamType::Null,
+                value: String::new(),
+            },
+        ];
+        assert_eq!(
+            substitute_parameters_with_at_sign(sql, &bindings, AtSignMode::ServerVariable).unwrap(),
+            "SET @counter = 42; SELECT @counter, @@version, NULL, ':ignored', `@column`"
+        );
+        assert!(
+            extract_parameters_with_at_sign("SET @counter = 42", AtSignMode::ServerVariable)
+                .is_empty()
+        );
+        assert_eq!(extract_parameters("SELECT @counter")[0].name, "@counter");
+        assert!(
+            substitute_parameters_with_at_sign(
+                "SELECT :missing, @counter",
+                &[],
+                AtSignMode::ServerVariable
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn extracts_named_and_positional_parameters() {

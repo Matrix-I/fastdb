@@ -36,7 +36,10 @@ impl Workspace {
             return;
         };
         let statement = tab.editor.active_statement();
-        let params = sql_intel::extract_parameters(&statement);
+        let params = sql_intel::extract_parameters_with_at_sign(
+            &statement,
+            super::params_modal::at_sign_mode(kind),
+        );
         if !params.is_empty() {
             self.open_parameter_binding_modal(id, statement, true, analyze, cx);
             return;
