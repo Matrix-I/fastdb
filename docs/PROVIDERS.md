@@ -382,6 +382,61 @@ Desktop acceptance remains pending.
 
 ## Execution feedback (P1-04)
 
+SQLite SQL tabs now use dedicated connections sharing the owning driver's main
+database, including an isolated named in-memory database when applicable. TEMP
+objects and transactions remain tab-local. Cancellation uses both SQLite's
+interrupt handle and a progress callback to cover cancellation before execution
+starts; cleanup waits for the blocking worker and closes the connection to roll
+back uncommitted work. `cargo test -p db-wire --test sqlite_session_test --locked`
+exercises real SQLite sessions without external provider configuration. Full
+P1-05 provider parity and desktop acceptance remain pending.
+
+MySQL/MariaDB SQL tabs use dedicated nonpooled connections. A bounded worker
+queue keeps each tab's TEMP objects, user variables and transactions together.
+Native OK-packet flags report transaction state; after SQL errors a bounded
+`DO 0` refresh obtains current state without replaying the failed statement.
+Connection loss discards the session. Cancel terminates an active server query
+through a separate same-user connection, with bounded connection/command/
+disconnect deadlines; idle closure rolls back and disconnects. Cleanup errors
+remain visible. DDL may implicitly commit earlier work.
+
+`FASTDB_TEST_MYSQL_PORT=55440 cargo test -p db-wire --test mysql_session_test --locked`
+was exercised against the local MySQL fixture. Tests cover TEMP/settings/session
+identity, savepoints, runtime lifetime, actual server cancellation and rollback,
+error recovery, implicit DDL commit, connection loss without replay, and tab-owner
+closure. This is MySQL evidence; separate MariaDB acceptance remains pending.
+
+MySQL/MariaDB parameter detection and modal substitution preserve native `@name`
+variables and `@@` system variables; `:name` and `?` remain client parameters.
+The scanner consumes full native variable names so a name such as `@counter$1`
+does not accidentally prompt for `$1`. Other providers keep their existing
+`@name` parameter behavior. See [MySQL user-variable syntax](https://dev.mysql.com/doc/refman/8.4/en/user-variables.html).
+
+The SQL toolbar isolation selector uses PostgreSQL session transaction
+characteristics, MySQL/MariaDB session transaction isolation and SQLite's
+`read_uncommitted = 0` for Serializable. SQLite does not advertise weaker levels
+that depend on shared-cache behavior. Selection is blocked for active/unknown
+transactions; settings and native read-back use the pinned tab session with a
+15-second per-statement deadline. Live PostgreSQL/MySQL and real SQLite tests
+check exact read-back values and unchanged browsing-session settings. Separate
+MariaDB runtime and desktop-dialog acceptance remain pending.
+
+The MySQL/MariaDB Autocommit control applies native `SET SESSION autocommit`
+and reads `@@SESSION.autocommit` back on the pinned session. Enabling is blocked
+while a transaction is active/unknown; the user must Commit or Rollback first.
+Disabling does not end existing work. Live MySQL tests verify Off/On, explicit
+and implicit manual transactions, blocked enabling, rollback/read-back and an
+unchanged browsing session. Separate MariaDB and desktop acceptance remain open.
+
+PostgreSQL/SQLite client-managed autocommit lazily opens a transaction before
+ordinary SQL and preserves Off across explicit Commit/Rollback and session
+closure. SQLite checks native state before each ordinary statement, including
+after an outer SAVEPOINT is released. Enabling is blocked until pending work is
+explicitly resolved. Real SQLite/PostgreSQL tests cover cross-run writes,
+savepoint error recovery, explicit boundaries and independent browsing
+visibility; PostgreSQL Analyze is verified in the same transaction. Desktop
+acceptance is deferred by the user.
+
 PostgreSQL forwards bounded per-statement NOTICE/WARNING messages, native command
 counts and one-based character error positions in SQL tab execution logs.
 MySQL/MariaDB show native counts and up to 20 warning details from the same connection;
