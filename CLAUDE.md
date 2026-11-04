@@ -41,6 +41,11 @@ CI configuration lives in `ci/` and `.github/workflows/`. Live provider tests (`
 - Match the surrounding code's style and comment density; run `cargo fmt` and `cargo clippy` before committing.
 - Saved connection passwords are currently stored in plain text (`docs/guide/connections.md`); do not log connection details.
 
+## User preferences
+
+- Do not use Computer Use or request Computer Use permissions. The user verifies the GUI manually. Complete automated checks and report manual GUI acceptance as pending.
+- Clean up temporary debug/build artifacts after verification to avoid SSD growth. Keep the current runnable binary and reusable build dependencies.
+
 ## Implementing
 
 - For a feature that spans several crates or more than a few files, write a plan first in `docs/plans/YYYY-MM-DD-<topic>.md` and commit it on its own (`docs: add <topic> implementation plan`).
