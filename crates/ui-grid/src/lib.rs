@@ -2,6 +2,7 @@
 
 pub mod changeset;
 pub mod grid_element;
+pub mod search;
 pub mod selection;
 
 pub use changeset::*;

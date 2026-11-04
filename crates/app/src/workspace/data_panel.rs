@@ -114,14 +114,24 @@ impl Workspace {
                             let available_viewport_w = (f32::from(window.viewport_size().width) - sidebar_w - CENTER_CHROME_WIDTH - panels_w).max(200.0);
                             let available_viewport_h = (f32::from(window.viewport_size().height) - 180.0).max(200.0);
                             let is_running_query = self.operations.is_running();
+                            let search_open = self.result_search.is_some();
                             let tab = &mut self.tabs[active_tab_idx];
                             tab.grid.update_viewport_width(available_viewport_w);
                             tab.grid.update_viewport_height(available_viewport_h);
                             tab.grid.measure_widths(window);
 
                             // Scrolling onto the last row reads the next chunk, as DBeaver does
-                            if tab.fetch.has_more && !is_running_query && is_scrolled_to_bottom(&tab.grid) {
-                                cx.defer_in(window, |this, _, cx| this.fetch_next_rows(cx));
+                            if auto_fetch_allowed(tab.fetch.has_more, is_running_query, is_scrolled_to_bottom(&tab.grid), tab.grid.auto_fetch_paused.get(), search_open) {
+                                let fetch_tab = tab.id;
+                                let fetch_pager = tab.grid.pager.clone();
+                                cx.defer_in(window, move |this, _, cx| {
+                                    let allowed = this.tabs.get(this.active_tab).is_some_and(|current| {
+                                        current.id == fetch_tab
+                                            && current.grid.pager.as_ref().zip(fetch_pager.as_ref()).is_some_and(|(current, original)| Arc::ptr_eq(current, original))
+                                            && auto_fetch_allowed(current.fetch.has_more, this.operations.is_running(), is_scrolled_to_bottom(&current.grid), current.grid.auto_fetch_paused.get(), this.result_search.is_some())
+                                    });
+                                    if allowed { this.fetch_next_rows(cx); }
+                                });
                             }
 
                             let active_resizing_col = self.layout.resizing_column.and_then(|(t, c, _, _)| {
@@ -345,8 +355,39 @@ impl Workspace {
             data_row = data_row.child(self.render_value_panel(active_tab_idx, cx));
         }
 
-        data_row
+        let tab_id = self.tabs[active_tab_idx].id;
+        let finder = super::script_tools::tool("Find in result…");
+        let finder = if self.tabs[active_tab_idx].grid.pager.is_some() {
+            finder.on_click(cx.listener(move |this, _, _, cx| this.open_result_search(tab_id, cx)))
+        } else {
+            finder.opacity(0.4)
+        };
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .px_2()
+                    .py_1()
+                    .bg(theme.bg_surface)
+                    .child(finder),
+            )
+            .child(data_row)
     }
+}
+
+pub(super) fn auto_fetch_allowed(
+    has_more: bool,
+    running: bool,
+    bottom: bool,
+    paused: bool,
+    search_open: bool,
+) -> bool {
+    has_more && !running && bottom && !paused && !search_open
 }
 
 /// Whether the grid body is scrolled within one row of its end. A result that fits the
