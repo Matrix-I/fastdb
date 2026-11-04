@@ -5,6 +5,7 @@ mod metadata;
 mod objects;
 mod query_edit;
 mod script;
+mod transfer;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -252,6 +253,10 @@ impl PostgresDriver {
 
 #[async_trait]
 impl DatabaseDriver for PostgresDriver {
+    fn supports_transfer(&self) -> bool {
+        true
+    }
+
     async fn load_editable_query(&self, sql: &str) -> Result<Arc<crate::QueryResultPager>> {
         query_edit::load(self.config.clone(), sql.to_owned()).await
     }

@@ -139,6 +139,10 @@ fn sqlite_decl_data_type(decl_type: &str) -> DataType {
 
 #[async_trait]
 impl DatabaseDriver for SqliteDriver {
+    fn supports_transfer(&self) -> bool {
+        true
+    }
+
     fn supports_script_session(&self) -> bool {
         true
     }

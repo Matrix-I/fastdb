@@ -127,7 +127,7 @@ fn editor_value(editor: &ValueEditor) -> Result<Option<String>, String> {
             );
         }
         if editor.format == ValueFormat::Json {
-            serde_json::from_str::<serde_json::Value>(&text)
+            db_wire::value::validate_json_source(&text)
                 .map_err(|error| format!("Invalid JSON: {error}"))?;
         }
     }
@@ -817,6 +817,23 @@ mod tests {
             writable: true,
             error: None,
         }
+    }
+
+    #[test]
+    fn native_json_editor_keeps_numbers_larger_than_binary_float_range() {
+        let json = r#"{"huge":1e999,"precise":0.12345678901234567890123456789}"#;
+        let mut edit = editor(
+            read(
+                Some(json.as_bytes()),
+                DataType::Json,
+                DbDriverKind::Postgres,
+            )
+            .pager,
+        );
+        edit.format = super::ValueFormat::Json;
+        edit.editor.buffer.select_all();
+        edit.editor.buffer.insert_str(json);
+        assert_eq!(super::editor_value(&edit).unwrap(), Some(json.into()));
     }
 
     #[test]

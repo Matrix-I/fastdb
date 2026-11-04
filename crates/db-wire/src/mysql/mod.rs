@@ -285,6 +285,10 @@ fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
 
 #[async_trait]
 impl DatabaseDriver for MySqlDriver {
+    fn supports_transfer(&self) -> bool {
+        true
+    }
+
     fn with_database(&self, database: &str) -> Result<Arc<dyn DatabaseDriver>> {
         crate::session_context::validate_name(database).map_err(anyhow::Error::msg)?;
         let mut config = self.config.clone();

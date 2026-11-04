@@ -95,3 +95,38 @@ mod dialect_tests {
         }
     }
 }
+
+/// Parse explicit offsets or the UTC suffix emitted by the native PostgreSQL decoder.
+/// A naive timestamp is never assigned the host timezone.
+pub fn parse_timestamp_with_offset(
+    text: &str,
+) -> anyhow::Result<chrono::DateTime<chrono::FixedOffset>> {
+    if let Some(native) = text.strip_suffix(" UTC") {
+        Ok(
+            chrono::NaiveDateTime::parse_from_str(native, "%Y-%m-%d %H:%M:%S%.f")?
+                .and_utc()
+                .fixed_offset(),
+        )
+    } else {
+        Ok(chrono::DateTime::parse_from_rfc3339(text)?)
+    }
+}
+
+#[cfg(test)]
+mod temporal_tests {
+    #[test]
+    fn explicit_native_utc_and_offset_forms_identify_the_same_instant() {
+        let native = super::parse_timestamp_with_offset("2026-11-04 00:08:09.123456 UTC").unwrap();
+        let offset =
+            super::parse_timestamp_with_offset("2026-11-04T07:08:09.123456+07:00").unwrap();
+        assert_eq!(native, offset);
+        assert!(super::parse_timestamp_with_offset("2026-11-04 00:08:09").is_err());
+        assert!(super::parse_timestamp_with_offset("2026-11-04 00:08:09 CST").is_err());
+    }
+}
+
+/// Validate JSON syntax without converting numeric tokens through binary floating point.
+pub fn validate_json_source(text: &str) -> anyhow::Result<()> {
+    serde_json::from_str::<&serde_json::value::RawValue>(text)?;
+    Ok(())
+}

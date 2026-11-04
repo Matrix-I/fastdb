@@ -28,6 +28,41 @@ impl SqliteScriptSession {
 
 #[async_trait]
 impl ScriptSession for SqliteScriptSession {
+    async fn insert_batch(&self, batch: crate::transfer::batch::Batch) -> Result<u64> {
+        let slot = self.connection.clone();
+        let closed = self.closed.clone();
+        crate::get_runtime()
+            .spawn_blocking(move || {
+                let mut slot = slot.lock();
+                anyhow::ensure!(!closed.load(Ordering::SeqCst), "Script session is closed");
+                let result = (|| {
+                    let connection = slot.as_ref().context("Script session is closed")?;
+                    let connection = connection.lock();
+                    let sql = batch.sql(crate::DbDriverKind::Sqlite)?;
+                    let values = batch.into_values().map(|value| match value {
+                        crate::transfer::mapping::Value::Null => rusqlite::types::Value::Null,
+                        crate::transfer::mapping::Value::Boolean(value) => {
+                            rusqlite::types::Value::Integer(i64::from(value))
+                        }
+                        crate::transfer::mapping::Value::Text(text) => {
+                            rusqlite::types::Value::Text(text)
+                        }
+                        crate::transfer::mapping::Value::Binary(bytes) => {
+                            rusqlite::types::Value::Blob(bytes)
+                        }
+                    });
+                    let mut statement = connection.prepare(&sql)?;
+                    Ok(statement.execute(rusqlite::params_from_iter(values))? as u64)
+                })();
+                if closed.load(Ordering::SeqCst) {
+                    slot.take();
+                }
+                result
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("SQLite transfer worker failed: {error}"))?
+    }
+
     fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
     }

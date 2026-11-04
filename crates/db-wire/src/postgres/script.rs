@@ -28,6 +28,14 @@ impl PostgresScriptSession {
 
 #[async_trait]
 impl ScriptSession for PostgresScriptSession {
+    async fn insert_batch(&self, batch: crate::transfer::batch::Batch) -> Result<u64> {
+        let guard = self.client.lock().await;
+        let client = guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Script session is closed"))?;
+        super::transfer::insert(client, batch).await
+    }
+
     async fn execute_streaming(&self, sql: &str, tx: flume::Sender<StreamEvent>) -> Result<()> {
         let guard = self.client.lock().await;
         let client = guard
