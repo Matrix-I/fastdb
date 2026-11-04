@@ -31,6 +31,8 @@ mod filter_builder;
 mod filter_suggest;
 mod filter_timeline;
 mod grid_clipboard;
+mod grid_paste;
+mod grid_references;
 mod grid_selection;
 mod keyboard;
 mod nav_context_menu;
@@ -49,6 +51,8 @@ mod properties_panel;
 mod query;
 mod query_history;
 mod query_plan;
+mod query_result_edit;
+mod record_view;
 mod result_search;
 mod schema_action_modal;
 mod script_files;
@@ -130,6 +134,7 @@ pub enum PropertySection {
 pub enum DataViewMode {
     Grid,
     Text,
+    Record,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

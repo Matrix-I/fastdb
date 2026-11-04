@@ -3,6 +3,7 @@ mod catalog;
 mod column;
 mod metadata;
 mod objects;
+mod query_edit;
 mod script;
 
 use anyhow::{Context, Result};
@@ -251,6 +252,17 @@ impl PostgresDriver {
 
 #[async_trait]
 impl DatabaseDriver for PostgresDriver {
+    async fn load_editable_query(&self, sql: &str) -> Result<Arc<crate::QueryResultPager>> {
+        query_edit::load(self.config.clone(), sql.to_owned()).await
+    }
+    async fn save_query_edits(
+        &self,
+        pager: Arc<crate::QueryResultPager>,
+        edits: Vec<crate::QueryCellUpdate>,
+    ) -> Result<()> {
+        query_edit::save(self.config.clone(), pager, edits).await
+    }
+
     fn with_database(&self, database: &str) -> Result<Arc<dyn DatabaseDriver>> {
         crate::session_context::validate_name(database).map_err(anyhow::Error::msg)?;
         let mut config = self.config.clone();
@@ -382,7 +394,16 @@ impl DatabaseDriver for PostgresDriver {
         // Update cancel token for this connection
         *self.cancel_token.lock() = Some(client.cancel_token());
 
-        stream_client(&client, sql, event_tx, start_time, &self.notices, None).await
+        stream_client(
+            &client,
+            sql,
+            event_tx,
+            start_time,
+            &self.notices,
+            None,
+            false,
+        )
+        .await
     }
 
     async fn execute_streaming_controlled(
@@ -396,7 +417,16 @@ impl DatabaseDriver for PostgresDriver {
         let client = self.get_or_connect().await?;
         control.check()?;
         *self.cancel_token.lock() = Some(client.cancel_token());
-        stream_client(&client, sql, tx, started, &self.notices, Some(&control)).await
+        stream_client(
+            &client,
+            sql,
+            tx,
+            started,
+            &self.notices,
+            Some(&control),
+            false,
+        )
+        .await
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
@@ -560,6 +590,7 @@ async fn stream_client(
     start_time: Instant,
     notices: &NoticeTarget,
     control: Option<&crate::execution::ExecutionControl>,
+    editable: bool,
 ) -> Result<()> {
     struct NoticeGuard(NoticeTarget);
     impl Drop for NoticeGuard {
@@ -583,7 +614,12 @@ async fn stream_client(
         .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
         .collect();
     let has_columns = !columns.is_empty();
-    let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
+    let origin = if editable {
+        query_edit::origin(client, sql, &statement).await
+    } else {
+        None
+    };
+    let mut sink = RowSink::start_with_origin(columns, event_tx.clone(), start_time, origin)?;
 
     if let Some(control) = control {
         control.check()?;

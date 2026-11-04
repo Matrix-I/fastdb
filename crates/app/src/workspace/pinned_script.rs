@@ -110,6 +110,14 @@ impl Workspace {
         timeout: Option<std::time::Duration>,
         cx: &mut Context<Self>,
     ) {
+        if self.tabs[index].grid.changeset.is_dirty()
+            || self.tabs[index].grid.editing_cell.is_some()
+        {
+            self.tabs[index].last_error =
+                Some("Save or Cancel result edits before running SQL".into());
+            cx.notify();
+            return;
+        }
         let control = Arc::new(super::transaction_mode::script_control(
             self.tab_provider(index),
             !matches!(kind, ExecutionKind::Settings | ExecutionKind::Schema(_))

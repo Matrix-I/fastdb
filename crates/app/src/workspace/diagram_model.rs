@@ -22,6 +22,7 @@ pub(super) struct DiagramNode {
     pub height: f32,
     pub width: f32,
     pub outgoing: Vec<usize>,
+    pub incoming: Vec<usize>,
 }
 pub(super) struct DiagramEdge {
     pub fk: ForeignKey,
@@ -64,6 +65,7 @@ impl DiagramModel {
                 height: 0.0,
                 width: WIDTH,
                 outgoing: Vec::new(),
+                incoming: Vec::new(),
             });
         }
         for fk in keys {
@@ -78,6 +80,7 @@ impl DiagramModel {
                 .iter()
                 .position(|c| c.name == fk.target_column);
             model.nodes[source].outgoing.push(model.edges.len());
+            model.nodes[target].incoming.push(model.edges.len());
             model.edges.push(DiagramEdge {
                 fk,
                 source,

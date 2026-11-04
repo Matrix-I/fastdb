@@ -403,3 +403,51 @@ mod scrollbar_tests {
         assert!((top + height - 100.0).abs() < 0.001);
     }
 }
+
+#[test]
+fn column_layout_copies_in_display_order_and_keeps_source_edits() {
+    use super::*;
+    use mem_engine::{ColumnMeta, DataType};
+    let pager = Arc::new(
+        QueryResultPager::new(
+            ["a", "b", "c"]
+                .map(|name| ColumnMeta::new(name, DataType::Text))
+                .into(),
+        )
+        .unwrap(),
+    );
+    pager
+        .append_row([Some(b"a"), Some(b"b"), Some(b"c")])
+        .unwrap();
+    let mut grid = VirtualDataGrid::new(Some(pager.clone()), Theme::dark());
+    grid.stage(|edits| edits.set_cell(0, 2, Some(b"c".to_vec()), Some("edited".into())));
+    grid.move_column(2, false);
+    grid.move_column(2, false);
+    grid.hide_column(1);
+    assert_eq!(grid.display_columns(), [2, 0]);
+    grid.selection.set_range(
+        crate::GridCoord { row: 0, col: 2 },
+        crate::GridCoord { row: 0, col: 0 },
+    );
+    assert_eq!(grid.selection_text().as_deref(), Some("edited\ta"));
+    assert_eq!(grid.adjacent_column(2, true), Some(0));
+    grid.refill_pager(pager);
+    assert_eq!(grid.display_columns(), [2, 0]);
+    grid.hide_column(2);
+    grid.hide_column(0);
+    assert_eq!(grid.display_columns(), [0]);
+    grid.reset_column_layout();
+    assert_eq!(grid.display_columns(), [0, 1, 2]);
+}
+
+#[test]
+fn clearing_saved_edits_invalidates_captured_row_positions() {
+    use super::*;
+    let mut grid = VirtualDataGrid::new(None, Theme::dark());
+    grid.stage(|edits| edits.insert_row_at(0, vec![Some("new".into())]));
+    let old_revision = grid.changeset_revision();
+    grid.clear_saved_edits();
+    assert_ne!(grid.changeset_revision(), old_revision);
+    assert_eq!(grid.row_count(), 0);
+    assert!(!grid.step_staged_edits(false));
+}

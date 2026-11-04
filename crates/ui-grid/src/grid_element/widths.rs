@@ -45,7 +45,7 @@ impl VirtualDataGrid {
                     let badge_w =
                         Self::estimate_text_width(dbeaver_type_badge(col.data_type), 10.0) * 1.1;
                     let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
-                    let is_sorted = self.ordering.as_ref().is_some_and(|o| o.column == col.name);
+                    let is_sorted = self.ordering.iter().any(|o| o.column == col.name);
                     header_cell_width(badge_w, name_w, is_pk, is_sorted.then_some(9.0))
                 });
 
@@ -166,8 +166,8 @@ impl VirtualDataGrid {
                 let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
                 let sort_glyph = self
                     .ordering
-                    .as_ref()
-                    .filter(|o| o.column == col.name)
+                    .iter()
+                    .find(|o| o.column == col.name)
                     .map(|o| if o.descending { "↓" } else { "↑" });
                 let sort_w = sort_glyph.map(|g| text_width(g, 12.0, FontWeight::BOLD));
                 header_cell_width(badge_w, name_w, is_pk, sort_w)

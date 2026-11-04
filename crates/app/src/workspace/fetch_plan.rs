@@ -48,15 +48,26 @@ impl Workspace {
 
         // A filter that orders or limits its rows itself already ends the statement,
         // so the header ordering cannot be appended after it
-        let order_suffix = match &tab.grid.ordering {
-            Some(o) if !has_order && !has_limit => {
-                format!(
-                    " ORDER BY {} {}",
-                    quote_ident(self.tab_provider(tab_idx), &o.column),
-                    if o.descending { "DESC" } else { "ASC" }
-                )
+        let order_suffix = if has_order || has_limit {
+            String::new()
+        } else {
+            let mut keys = tab.grid.ordering.clone();
+            if !keys.is_empty()
+                && let Some(columns) = self
+                    .tab_session(tab_idx)
+                    .table_columns
+                    .get(&(schema.to_owned(), table.to_owned()))
+            {
+                for column in columns.iter().filter(|column| column.is_primary_key) {
+                    if !keys.iter().any(|key| key.column == column.name) {
+                        keys.push(ui_grid::ColumnOrder {
+                            column: column.name.clone(),
+                            descending: false,
+                        });
+                    }
+                }
             }
-            _ => String::new(),
+            order_suffix(self.tab_provider(tab_idx), &keys)
         };
 
         let limit_suffix = table_page_suffix(
@@ -99,10 +110,54 @@ impl Workspace {
     }
 }
 
+fn order_suffix(provider: DbDriverKind, keys: &[ui_grid::ColumnOrder]) -> String {
+    if keys.is_empty() {
+        return String::new();
+    }
+    let fields = keys
+        .iter()
+        .map(|key| {
+            format!(
+                "{} {}",
+                quote_ident(provider, &key.column),
+                if key.descending { "DESC" } else { "ASC" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" ORDER BY {fields}")
+}
+
 #[cfg(test)]
 mod provider_tests {
     use super::{quote_ident, table_page_suffix};
     use db_wire::DbDriverKind;
+
+    #[test]
+    fn sqlite_composite_sort_and_filter_use_the_requested_priority() {
+        use db_wire::{DatabaseDriver, SqliteDriver};
+        let keys = [
+            ui_grid::ColumnOrder {
+                column: "group".into(),
+                descending: false,
+            },
+            ui_grid::ColumnOrder {
+                column: "rank".into(),
+                descending: true,
+            },
+        ];
+        let suffix = super::order_suffix(DbDriverKind::Sqlite, &keys);
+        assert_eq!(suffix, " ORDER BY \"group\" ASC, \"rank\" DESC");
+        db_wire::get_runtime().block_on(async {
+            let driver = SqliteDriver::new_memory();
+            driver.execute_query("CREATE TABLE entries (id INTEGER PRIMARY KEY, \"group\" INTEGER, rank INTEGER)").await.unwrap();
+            driver.execute_query("INSERT INTO entries VALUES (1, 2, 8), (2, 1, 1), (3, 1, 7), (4, 1, 0)").await.unwrap();
+            let (pager, _, _) = driver.execute_query(&format!("SELECT id FROM entries WHERE rank > 0{suffix} LIMIT 2")).await.unwrap();
+            assert_eq!(pager.total_rows(), 2);
+            assert_eq!(pager.get_cell(0, 0).unwrap(), b"3");
+            assert_eq!(pager.get_cell(1, 0).unwrap(), b"2");
+        });
+    }
 
     #[test]
     fn enterprise_table_paging_uses_vendor_syntax() {

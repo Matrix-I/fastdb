@@ -455,3 +455,24 @@ in-memory SQLite and optionally PostgreSQL/MySQL using `FASTDB_TEST_PG_*` and
 `FASTDB_TEST_MYSQL_*` (PORT, HOST, USER, PASSWORD, DATABASE). Missing ports print a skip;
 `FASTDB_REQUIRE_DB_TESTS=1` makes missing live providers fail. The PostgreSQL fixture
 uses temporary tables and leaves no persistent objects.
+
+
+## Editable query results
+
+PostgreSQL supports the explicit Load editable result workflow for a direct
+schema-qualified SELECT * against a verified permanent ordinary table with its
+complete primary key. Non-key Boolean, integer, text, varchar and UUID fields
+can be updated. Unsupported relation forms and query projections remain
+read-only. Save uses an isolated connection, bound values, original-value
+checks and transaction-level source verification. Stored values are reloaded
+after commit. Tests cover composite keys, concurrent writers, conflict rollback,
+views, row security, user triggers, missing keys and schema drift.
+
+Run the native integration test with FASTDB_TEST_PG_PORT and the optional
+FASTDB_TEST_PG_HOST, DATABASE, USER and PASSWORD settings.
+
+```bash
+cargo test -p db-wire --test query_edit_test --locked -- --nocapture
+```
+
+MySQL/MariaDB, SQLite and ODBC query results remain read-only.

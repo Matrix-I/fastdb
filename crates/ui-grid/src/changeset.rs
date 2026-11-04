@@ -19,6 +19,7 @@ pub struct InsertedRow {
     pub position: u64,
     /// A `None` cell was never set and is left out of the INSERT so the column default applies
     pub values: Vec<Option<String>>,
+    pub explicit_nulls: BTreeSet<usize>,
 }
 
 /// What a row shown in the grid is: a fetched row, by its index in the result, or a
@@ -126,8 +127,14 @@ impl Changeset {
         let at = self
             .inserted_rows
             .partition_point(|r| r.position < position);
-        self.inserted_rows
-            .insert(at, InsertedRow { position, values });
+        self.inserted_rows.insert(
+            at,
+            InsertedRow {
+                position,
+                values,
+                explicit_nulls: BTreeSet::new(),
+            },
+        );
     }
 
     /// Drops the new row `index`, moving the rows below it up by one

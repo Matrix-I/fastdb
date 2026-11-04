@@ -27,27 +27,23 @@ pub(super) struct GridContextMenu {
     tab_id: u64,
     pager: Arc<db_wire::QueryResultPager>,
     position: Point<Pixels>,
-}
-
-fn selection_bounds(grid: &VirtualDataGrid) -> Option<(u64, u64, usize, usize)> {
-    let pager = grid.pager.as_ref()?;
-    let (first_row, last_row, first_col, last_col) = grid.selection.bounding_box()?;
-    let last_row = last_row.min(grid.row_count().checked_sub(1)?);
-    let last_col = last_col.min(pager.columns.len().checked_sub(1)?);
-    (first_row <= last_row && first_col <= last_col)
-        .then_some((first_row, last_row, first_col, last_col))
+    cell: ui_grid::GridCoord,
+    revision: u64,
 }
 
 struct SelectionSnapshot {
     pager: Arc<db_wire::QueryResultPager>,
     changeset: Changeset,
-    bounds: (u64, u64, usize, usize),
+    rows: std::ops::RangeInclusive<u64>,
+    columns: Vec<usize>,
 }
 
 impl SelectionSnapshot {
     fn capture(grid: &VirtualDataGrid) -> Option<Self> {
+        let (first, last, columns) = grid.selection_display_range()?;
         Some(Self {
-            bounds: selection_bounds(grid)?,
+            rows: first..=last,
+            columns: grid.display_columns()[columns].to_vec(),
             pager: grid.pager.clone()?,
             changeset: grid.changeset.clone(),
         })
@@ -64,12 +60,32 @@ impl SelectionSnapshot {
             bytes: Vec::new(),
             limit,
         };
-        let (first_row, last_row, first_col, last_col) = self.bounds;
-        for row in first_row..=last_row {
+        for row in self.rows.clone() {
+            let columns = if matches!(format, CopyFormat::Sql)
+                && let ui_grid::RowRef::New(index) = self.changeset.resolve_row(row)
+            {
+                let inserted = &self.changeset.inserted_rows[index];
+                std::borrow::Cow::Owned(
+                    self.columns
+                        .iter()
+                        .copied()
+                        .filter(|&column| {
+                            inserted.values.get(column).is_some_and(Option::is_some)
+                                || inserted.explicit_nulls.contains(&column)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                std::borrow::Cow::Borrowed(self.columns.as_slice())
+            };
+            if columns.is_empty() {
+                writeln!(output, "{}", dialect.default_insert(target)?)?;
+                continue;
+            }
             if matches!(format, CopyFormat::Sql) {
                 write!(output, "INSERT INTO {target} (")?;
-                for col in first_col..=last_col {
-                    if col > first_col {
+                for (index, &col) in columns.iter().enumerate() {
+                    if index > 0 {
                         output.write_all(b", ")?;
                     }
                     write!(
@@ -80,8 +96,8 @@ impl SelectionSnapshot {
                 }
                 output.write_all(b") VALUES (")?;
             }
-            for col in first_col..=last_col {
-                if col > first_col {
+            for (index, &col) in columns.iter().enumerate() {
+                if index > 0 {
                     output.write_all(match format {
                         CopyFormat::Tsv => b"\t",
                         CopyFormat::Csv => b",",
@@ -103,7 +119,7 @@ impl SelectionSnapshot {
             match format {
                 CopyFormat::Sql => output.write_all(b");\n")?,
                 CopyFormat::Csv => output.write_all(b"\n")?,
-                CopyFormat::Tsv if row < last_row => output.write_all(b"\n")?,
+                CopyFormat::Tsv if row < *self.rows.end() => output.write_all(b"\n")?,
                 CopyFormat::Tsv => {}
             }
         }
@@ -151,7 +167,13 @@ impl Workspace {
         if row >= tab.grid.row_count() || col >= pager.columns.len() {
             return;
         }
-        if !tab.grid.selection.is_selected(row, col) {
+        let selected = tab
+            .grid
+            .selection_display_range()
+            .is_some_and(|(first, last, columns)| {
+                (first..=last).contains(&row) && tab.grid.display_columns()[columns].contains(&col)
+            });
+        if !selected {
             tab.grid.selection = GridSelection::single(row, col);
         }
         tab.editor_focused = false;
@@ -164,6 +186,8 @@ impl Workspace {
             tab_id: tab.id,
             pager,
             position,
+            cell: ui_grid::GridCoord { row, col },
+            revision: tab.grid.changeset_revision(),
         });
         cx.notify();
     }
@@ -191,7 +215,7 @@ impl Workspace {
         );
         let tab_id = tab.id;
         let pager = snapshot.pager.clone();
-        let rows = snapshot.bounds.1 - snapshot.bounds.0 + 1;
+        let rows = snapshot.rows.end() - snapshot.rows.start() + 1;
         self.clipboard_request_id += 1;
         let request = self.clipboard_request_id;
         self.tabs[index].clipboard_request_id = request;
@@ -243,7 +267,7 @@ impl Workspace {
         let enabled = index.is_some_and(|i| {
             let grid = &self.tabs[i].grid;
             grid.editing_cell.is_none()
-                && selection_bounds(grid).is_some()
+                && grid.selection_display_range().is_some()
                 && grid
                     .pager
                     .as_ref()
@@ -304,6 +328,104 @@ impl Workspace {
                     }));
             }
             panel = panel.child(item);
+        }
+        if enabled && index == Some(self.active_tab) && self.can_edit_active_rows() {
+            let new_row = matches!(
+                self.tabs[self.active_tab]
+                    .grid
+                    .changeset
+                    .resolve_row(menu.cell.row),
+                ui_grid::RowRef::New(_)
+            );
+            for (label, default) in [("Set SQL NULL", false), ("Use database default", true)] {
+                if default && !new_row {
+                    continue;
+                }
+                let menu = menu.clone();
+                panel = panel.child(super::script_tools::tool(label).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.menus.grid_context_menu = None;
+                        if this.tabs.get(this.active_tab).is_some_and(|tab| {
+                            tab.id == menu.tab_id
+                                && tab.grid.changeset_revision() == menu.revision
+                                && tab
+                                    .grid
+                                    .pager
+                                    .as_ref()
+                                    .is_some_and(|pager| Arc::ptr_eq(pager, &menu.pager))
+                        }) {
+                            this.set_grid_empty_value(menu.cell, default, cx);
+                        }
+                        cx.notify();
+                    },
+                )));
+            }
+        }
+        if enabled && let Some(index) = index.filter(|&index| index == self.active_tab) {
+            for (index, reference) in self
+                .grid_references(index, menu.cell)
+                .into_iter()
+                .take(8)
+                .enumerate()
+            {
+                if reference.can_choose() && self.can_edit_active_rows() {
+                    let picker_menu = menu.clone();
+                    let picker_reference = reference.clone();
+                    panel = panel.child(
+                        div()
+                            .id(("grid-key-lookup", index))
+                            .px_2()
+                            .py_1()
+                            .text_size(px(12.0))
+                            .text_color(theme.text_primary)
+                            .cursor_pointer()
+                            .child(format!("Choose key ({})", reference.name))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.menus.grid_context_menu = None;
+                                if this.tabs.get(this.active_tab).is_some_and(|tab| {
+                                    tab.id == picker_menu.tab_id
+                                        && tab.grid.changeset_revision() == picker_menu.revision
+                                        && tab.grid.pager.as_ref().is_some_and(|pager| {
+                                            Arc::ptr_eq(pager, &picker_menu.pager)
+                                        })
+                                }) {
+                                    this.choose_grid_reference(
+                                        picker_menu.cell,
+                                        picker_reference.clone(),
+                                        cx,
+                                    );
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+                let menu = menu.clone();
+                panel = panel.child(
+                    div()
+                        .id(("grid-reference", index))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(12.0))
+                        .text_color(theme.text_primary)
+                        .cursor_pointer()
+                        .child(reference.label())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.menus.grid_context_menu = None;
+                            if this.tabs.get(this.active_tab).is_some_and(|tab| {
+                                tab.id == menu.tab_id
+                                    && tab.grid.changeset_revision() == menu.revision
+                                    && tab
+                                        .grid
+                                        .pager
+                                        .as_ref()
+                                        .is_some_and(|pager| Arc::ptr_eq(pager, &menu.pager))
+                            }) {
+                                this.open_grid_reference(menu.cell, reference.clone(), cx);
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
         }
         deferred(
             anchored()
@@ -457,10 +579,11 @@ mod tests {
                 col: usize::MAX,
             },
         );
-        assert_eq!(
-            SelectionSnapshot::capture(&grid).unwrap().bounds,
-            (0, 1, 1, 2)
-        );
+        assert!(SelectionSnapshot::capture(&grid).is_none());
+        grid.selection.focus.as_mut().unwrap().col = 2;
+        let snapshot = SelectionSnapshot::capture(&grid).unwrap();
+        assert_eq!(snapshot.rows, 0..=1);
+        assert_eq!(snapshot.columns, [1, 2]);
         grid.set_pager(Arc::new(QueryResultPager::new(vec![]).unwrap()));
         grid.selection = GridSelection::single(0, 0);
         assert!(SelectionSnapshot::capture(&grid).is_none());

@@ -317,7 +317,7 @@ impl Workspace {
         let tab = &mut self.tabs[index];
         tab.filter_sql = sql;
         tab.filter_spec = Some(b.spec);
-        tab.grid.ordering = None;
+        tab.grid.ordering.clear();
         self.active_tab = index;
         self.input.is_filter_focused = false;
         self.run_active_query(cx);
@@ -343,9 +343,7 @@ impl Workspace {
         if let Some(snapshot) = tab.filter_timeline.navigate(forward) {
             tab.filter_sql = snapshot.sql;
             tab.filter_spec = snapshot.criteria;
-            tab.grid.ordering = snapshot
-                .order
-                .map(|(column, descending)| ui_grid::ColumnOrder { column, descending });
+            tab.grid.ordering = snapshot.order;
             tab.fetch.size = snapshot.fetch_size;
             tab.fetch.size_text = snapshot.fetch_size.to_string();
             self.run_active_query(cx);

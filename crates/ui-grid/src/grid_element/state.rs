@@ -9,20 +9,22 @@ pub struct VirtualDataGrid {
     pub viewport_width: f32,
     pub content_widths: Vec<f32>,
     pub column_widths: Vec<f32>,
+    display_columns: Vec<usize>,
     pub manual_column_widths: HashSet<usize>,
     /// Rows already measured for column widths; grows while results stream in
     pub width_sampled_rows: u64,
     pub selection: GridSelection,
     pub changeset: Changeset,
+    changeset_revision: u64,
     /// Undo history of the staged edits; each change made through `stage` is one step
     pub changeset_history: History<Changeset>,
     pub editing_cell: Option<CellEdit>,
     /// Ordering applied to the query; kept when a new result replaces the pager
-    pub ordering: Option<ColumnOrder>,
+    pub ordering: Vec<ColumnOrder>,
     /// Header widths measured with the window's fonts; the character estimate stands in until then
     pub header_widths: Vec<f32>,
     /// Pager and ordering `header_widths` were measured for
-    pub(super) header_widths_key: Option<(usize, Option<ColumnOrder>)>,
+    pub(super) header_widths_key: Option<(usize, Vec<ColumnOrder>)>,
     /// Widest data cell per column, measured with the window's fonts over the first
     /// `cell_widths_rows` rows; the character estimate covers the rows after them
     pub cell_widths: Vec<f32>,
@@ -38,6 +40,7 @@ pub struct VirtualDataGrid {
 
 impl VirtualDataGrid {
     pub fn new(pager: Option<Arc<QueryResultPager>>, theme: Theme) -> Self {
+        let display_columns = pager_column_indexes(&pager);
         let mut grid = Self {
             pager,
             theme,
@@ -48,13 +51,15 @@ impl VirtualDataGrid {
             viewport_width: 1000.0,
             content_widths: Vec::new(),
             column_widths: Vec::new(),
+            display_columns,
             manual_column_widths: HashSet::new(),
             width_sampled_rows: 0,
             selection: GridSelection::new(),
             changeset: Changeset::new(),
+            changeset_revision: 0,
             changeset_history: History::new(),
             editing_cell: None,
-            ordering: None,
+            ordering: Vec::new(),
             header_widths: Vec::new(),
             header_widths_key: None,
             cell_widths: Vec::new(),
@@ -70,6 +75,7 @@ impl VirtualDataGrid {
 
     pub fn set_pager(&mut self, pager: Arc<QueryResultPager>) {
         self.auto_fetch_paused.set(false);
+        self.display_columns = (0..pager.columns.len()).collect();
         self.pager = Some(pager);
         self.manual_column_widths.clear();
         self.header_widths.clear();
@@ -79,6 +85,7 @@ impl VirtualDataGrid {
         self.recalculate_all_widths();
         self.selection.clear();
         self.changeset.clear();
+        self.changeset_revision = self.changeset_revision.wrapping_add(1);
         self.changeset_history.clear();
         self.editing_cell = None;
         self.scroll_top = 0.0;
@@ -112,10 +119,22 @@ impl VirtualDataGrid {
         self.cell_widths_stale = false;
         self.selection.clear();
         self.changeset.clear();
+        self.changeset_revision = self.changeset_revision.wrapping_add(1);
         self.changeset_history.clear();
         self.editing_cell = None;
         self.scroll_top = 0.0;
         self.vertical_scroll_handle = UniformListScrollHandle::new();
+    }
+
+    pub fn clear_saved_edits(&mut self) {
+        self.changeset.clear();
+        self.changeset_history.clear();
+        self.selection.clear();
+        self.changeset_revision = self.changeset_revision.wrapping_add(1);
+    }
+
+    pub fn changeset_revision(&self) -> u64 {
+        self.changeset_revision
     }
 
     /// Applies `change` to the staged edits as one undo step; a change that leaves them
@@ -125,6 +144,7 @@ impl VirtualDataGrid {
         let result = change(&mut self.changeset);
         if self.changeset != before {
             self.changeset_history.record(before, EditKind::Other);
+            self.changeset_revision = self.changeset_revision.wrapping_add(1);
         }
         result
     }
@@ -143,6 +163,7 @@ impl VirtualDataGrid {
         };
         let rows_moved = restored.inserted_rows.len() != self.changeset.inserted_rows.len();
         self.changeset = restored;
+        self.changeset_revision = self.changeset_revision.wrapping_add(1);
         self.editing_cell = None;
         // Added or dropped rows shift the rows below them, so the selection no longer fits
         if rows_moved {
@@ -162,22 +183,115 @@ impl VirtualDataGrid {
         resolve_cell(self.pager.as_ref()?, &self.changeset, row, col)
     }
 
+    pub fn display_columns(&self) -> &[usize] {
+        &self.display_columns
+    }
+
+    pub fn adjacent_column(&self, column: usize, forward: bool) -> Option<usize> {
+        let index = self
+            .display_columns
+            .iter()
+            .position(|&candidate| candidate == column)?;
+        let adjacent = if forward {
+            index.checked_add(1)?
+        } else {
+            index.checked_sub(1)?
+        };
+        self.display_columns.get(adjacent).copied()
+    }
+
+    pub fn hide_column(&mut self, column: usize) {
+        if self.editing_cell.is_none()
+            && self.display_columns.len() > 1
+            && let Some(index) = self
+                .display_columns
+                .iter()
+                .position(|&candidate| candidate == column)
+        {
+            self.display_columns.remove(index);
+            self.reset_column_interaction();
+        }
+    }
+
+    pub fn move_column(&mut self, column: usize, forward: bool) {
+        if self.editing_cell.is_none()
+            && let Some(neighbor) = self.adjacent_column(column, forward)
+        {
+            let index = self
+                .display_columns
+                .iter()
+                .position(|&candidate| candidate == column)
+                .unwrap();
+            let other = if forward { index + 1 } else { index - 1 };
+            debug_assert_eq!(self.display_columns[other], neighbor);
+            self.display_columns.swap(index, other);
+            self.reset_column_interaction();
+        }
+    }
+
+    pub fn reset_column_layout(&mut self) {
+        if self.editing_cell.is_none() {
+            self.display_columns = pager_column_indexes(&self.pager);
+            self.reset_column_interaction();
+        }
+    }
+
+    fn reset_column_interaction(&mut self) {
+        self.selection.clear();
+        self.scroll_left = 0.0;
+        self.horizontal_scroll_handle
+            .set_offset(point(px(0.0), px(0.0)));
+    }
+
+    pub fn selection_display_range(&self) -> Option<(u64, u64, std::ops::RangeInclusive<usize>)> {
+        let (anchor, focus) = (self.selection.anchor?, self.selection.focus?);
+        let anchor_col = self
+            .display_columns
+            .iter()
+            .position(|&col| col == anchor.col)?;
+        let focus_col = self
+            .display_columns
+            .iter()
+            .position(|&col| col == focus.col)?;
+        let first_row = anchor.row.min(focus.row);
+        let last_row = anchor
+            .row
+            .max(focus.row)
+            .min(self.row_count().checked_sub(1)?);
+        (first_row <= last_row).then_some((
+            first_row,
+            last_row,
+            anchor_col.min(focus_col)..=anchor_col.max(focus_col),
+        ))
+    }
+
+    pub fn displayed_column_width(&self, column: usize) -> f32 {
+        self.column_widths
+            .get(column)
+            .copied()
+            .unwrap_or(MIN_COL_WIDTH)
+    }
+
+    pub(super) fn displayed_width(&self) -> f32 {
+        self.display_columns
+            .iter()
+            .map(|&col| self.displayed_column_width(col))
+            .sum()
+    }
+
     /// Text of the selected cells for the clipboard: one cell as its bare value,
     /// a range as tab-separated columns and newline-separated rows. Edited cells
     /// copy their new value, NULL copies as empty. `None` without a selection.
     pub fn selection_text(&self) -> Option<String> {
         let pager = self.pager.as_ref()?;
-        let (min_r, max_r, min_c, max_c) = self.selection.bounding_box()?;
-        let max_r = max_r.min(self.row_count().checked_sub(1)?);
-        let max_c = max_c.min(pager.columns.len().checked_sub(1)?);
-        if min_r > max_r || min_c > max_c {
-            return None;
-        }
+        let (min_r, max_r, columns) = self.selection_display_range()?;
+        let columns = &self.display_columns[columns];
 
         let mut rows = Vec::new();
         for r in min_r..=max_r {
-            let cells: Vec<String> = (min_c..=max_c)
-                .map(|c| resolve_cell(pager, &self.changeset, r, c).unwrap_or_default())
+            let cells: Vec<String> = columns
+                .iter()
+                .map(|&c| resolve_cell(pager, &self.changeset, r, c).unwrap_or_default())
                 .collect();
             rows.push(cells.join("\t"));
         }
@@ -187,4 +301,8 @@ impl VirtualDataGrid {
     pub fn set_table_name(&mut self, name: impl Into<String>) {
         self.table_name = name.into();
     }
+}
+
+fn pager_column_indexes(pager: &Option<Arc<QueryResultPager>>) -> Vec<usize> {
+    (0..pager.as_ref().map_or(0, |pager| pager.columns.len())).collect()
 }

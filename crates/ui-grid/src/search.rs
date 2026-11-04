@@ -23,13 +23,37 @@ pub fn find_cell(
     needle: &str,
     from: Option<GridCoord>,
     direction: FindDirection,
+    cancelled: impl FnMut() -> bool,
+) -> FindOutcome {
+    find_displayed_cell(
+        pager,
+        changes,
+        &(0..pager.columns.len()).collect::<Vec<_>>(),
+        needle,
+        from,
+        direction,
+        cancelled,
+    )
+}
+
+/// Searches the visible source columns in display order.
+pub fn find_displayed_cell(
+    pager: &QueryResultPager,
+    changes: &Changeset,
+    columns: &[usize],
+    needle: &str,
+    from: Option<GridCoord>,
+    direction: FindDirection,
     mut cancelled: impl FnMut() -> bool,
 ) -> FindOutcome {
     let fetched_rows = pager.total_rows();
     let Some(rows) = fetched_rows.checked_add(changes.inserted_rows.len() as u64) else {
         return FindOutcome::Failed("Result row count exceeds supported range".into());
     };
-    let cols = pager.columns.len();
+    let cols = columns.len();
+    if columns.iter().any(|&index| index >= pager.columns.len()) {
+        return FindOutcome::Failed("Column layout no longer matches this result".into());
+    }
     let mut previous_position = None;
     for (index, row) in changes.inserted_rows.iter().enumerate() {
         if cancelled() {
@@ -65,8 +89,13 @@ pub fn find_cell(
         }
     };
     let mut index = from
-        .filter(|cell| cell.row < rows && cell.col < cols)
-        .map(|cell| step(u128::from(cell.row) * cols as u128 + cell.col as u128))
+        .filter(|cell| cell.row < rows)
+        .and_then(|cell| {
+            columns
+                .iter()
+                .position(|&column| column == cell.col)
+                .map(|position| step(u128::from(cell.row) * cols as u128 + position as u128))
+        })
         .unwrap_or(match direction {
             FindDirection::Next => 0,
             FindDirection::Previous => total - 1,
@@ -77,7 +106,7 @@ pub fn find_cell(
         }
         let cell = GridCoord {
             row: (index / cols as u128) as u64,
-            col: (index % cols as u128) as usize,
+            col: columns[(index % cols as u128) as usize],
         };
         match cell_matches(pager, changes, cell, needle) {
             Ok(true) => return FindOutcome::Found(cell),

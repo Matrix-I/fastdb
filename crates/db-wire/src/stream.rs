@@ -38,9 +38,21 @@ impl RowSink {
         event_tx: flume::Sender<StreamEvent>,
         started_at: Instant,
     ) -> Result<Self> {
+        Self::start_with_origin(columns, event_tx, started_at, None)
+    }
+
+    pub fn start_with_origin(
+        columns: Vec<ColumnMeta>,
+        event_tx: flume::Sender<StreamEvent>,
+        started_at: Instant,
+        origin: Option<mem_engine::QueryEditOrigin>,
+    ) -> Result<Self> {
         let num_cols = columns.len();
         let pager = match QueryResultPager::new(columns) {
-            Ok(p) => Arc::new(p),
+            Ok(mut pager) => {
+                pager.query_edit_origin = origin;
+                Arc::new(pager)
+            }
             Err(e) => return Err(report_error(&event_tx, format!("{e:#}"))),
         };
         let _ = event_tx.send(StreamEvent::SchemaReady(Arc::clone(&pager)));

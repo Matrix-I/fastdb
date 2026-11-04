@@ -16,7 +16,7 @@ impl VirtualDataGrid {
         let vertical_scroll_handle = self.vertical_scroll_handle.clone();
         let pager_clone = self.pager.clone();
         let column_widths_clone = self.column_widths.clone();
-        let selection_clone = self.selection.clone();
+        let selection = self.selection_display_range();
         let changeset_clone = self.changeset.clone();
         let theme_bg_grid_alt = theme.bg_grid_alt;
         let theme_bg_grid = theme.bg_grid;
@@ -30,8 +30,13 @@ impl VirtualDataGrid {
         let theme_text_success = theme.text_success;
         let theme_text_error = theme.text_error;
         let scroll_x = -f32::from(self.horizontal_scroll_handle.offset().x);
+        let display_columns = self.display_columns().to_vec();
+        let display_widths: Vec<_> = display_columns
+            .iter()
+            .map(|&col| self.displayed_column_width(col))
+            .collect();
         let (visible_cols, cols_offset) =
-            visible_columns(&self.column_widths, scroll_x, self.viewport_width);
+            visible_columns(&display_widths, scroll_x, self.viewport_width);
 
         let body = div()
             .id("grid-data-body-container")
@@ -92,9 +97,10 @@ impl VirtualDataGrid {
                                 )
                                 .child(div().flex_none().w(px(cols_offset)).h_full());
 
-                            for c in visible_cols.clone() {
+                            for position in visible_cols.clone() {
+                                let c = display_columns[position];
                                 let width = column_widths_clone.get(c).copied().unwrap_or(MIN_COL_WIDTH);
-                                let is_selected = selection_clone.is_selected(r_u64, c);
+                                let is_selected = selection.as_ref().is_some_and(|(first, last, columns)| (*first..=*last).contains(&r_u64) && columns.contains(&position));
                                 let is_modified = matches!(row_ref, RowRef::Fetched(f) if changeset_clone.is_modified(f, c));
 
                                 let mut cell_div = div()
@@ -149,6 +155,8 @@ impl VirtualDataGrid {
                                 let value = pager_clone.as_ref().and_then(|p| resolve_cell(p, &changeset_clone, r_u64, c));
                                 let (display_text, is_null) = match value {
                                     Some(s) => (clip_cell_text(s, width), false),
+                                    None if matches!(row_ref, RowRef::New(index)
+                                        if !changeset_clone.inserted_rows[index].explicit_nulls.contains(&c)) => ("DEFAULT".to_string(), true),
                                     None => ("NULL".to_string(), true),
                                 };
 

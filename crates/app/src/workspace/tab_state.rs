@@ -30,7 +30,10 @@ pub struct TabState {
     pub ddl_selected_all: bool,
     pub(super) diagram: super::diagram_model::DiagramState,
     pub(super) clipboard_request_id: u64,
+    pub(super) paste_pending: bool,
+    pub(super) reference_picker: Option<super::grid_references::ReferencePicker>,
     pub view_mode: DataViewMode,
+    pub(super) record_view: Option<super::record_view::RecordView>,
     pub show_sql_dialog: bool,
     pub editor: SqlEditorView,
     pub grid: VirtualDataGrid,
@@ -60,6 +63,7 @@ pub struct TabState {
     pub(super) results: Vec<ScriptResult>,
     pub(super) active_result: usize,
     pub(super) tab_session: Arc<db_wire::script::TabSession>,
+    pub(super) query_edit_driver: Option<std::sync::Weak<dyn DatabaseDriver>>,
     pub(super) context_session: Option<ConnectionSession>,
     pub(super) transaction_state: String,
     pub(super) manual_transactions: bool,
@@ -85,6 +89,7 @@ pub(super) struct ScriptResult {
     affected_rows: Option<Option<u64>>,
     query_plan: Option<db_wire::query_plan::QueryPlan>,
     show_plan: bool,
+    query_edit_driver: Option<std::sync::Weak<dyn DatabaseDriver>>,
 }
 
 /// DBeaver-style incremental fetching: the first run reads `size` rows, and reaching the
@@ -301,7 +306,10 @@ impl TabState {
             ddl_selected_all: false,
             diagram: Default::default(),
             clipboard_request_id: 0,
+            paste_pending: false,
+            reference_picker: None,
             view_mode: DataViewMode::Grid,
+            record_view: None,
             show_sql_dialog: false,
             editor: SqlEditorView::new("", Theme::dark(), None),
             grid: VirtualDataGrid::new(None, Theme::dark()),
@@ -326,6 +334,7 @@ impl TabState {
             active_result: 0,
             pending_statements: Default::default(),
             tab_session: Arc::default(),
+            query_edit_driver: None,
             context_session: None,
             transaction_state: "Idle".into(),
             manual_transactions: false,
@@ -344,10 +353,22 @@ impl TabState {
         self.results.len() + usize::from(self.script_sql.is_some())
     }
 
+    pub(super) fn close_record_view(&mut self) {
+        if self.view_mode == DataViewMode::Record {
+            self.view_mode = DataViewMode::Grid;
+        }
+        self.record_view = None;
+    }
+
     pub(super) fn select_result(&mut self, index: usize) {
         if index >= self.result_count() || index == self.active_result {
             return;
         }
+        if self.grid.changeset.is_dirty() || self.grid.editing_cell.is_some() {
+            self.last_error = Some("Save or Cancel result edits before switching results".into());
+            return;
+        }
+        self.close_record_view();
         let slot = if index < self.active_result {
             index
         } else {
@@ -362,6 +383,7 @@ impl TabState {
         std::mem::swap(&mut self.affected_rows, &mut result.affected_rows);
         std::mem::swap(&mut self.query_plan, &mut result.query_plan);
         std::mem::swap(&mut self.show_plan, &mut result.show_plan);
+        std::mem::swap(&mut self.query_edit_driver, &mut result.query_edit_driver);
         // Keep inactive results in display order after removing the selected slot.
         let result = self.results.remove(slot);
         let old_slot = if index < self.active_result {
@@ -374,6 +396,7 @@ impl TabState {
     }
 
     pub(super) fn new_script_result(&mut self, sql: String) {
+        self.close_record_view();
         let fetch_size = self.fetch.size;
         if self.script_sql.is_some() {
             let result = ScriptResult {
@@ -388,6 +411,7 @@ impl TabState {
                 affected_rows: self.affected_rows.take(),
                 query_plan: self.query_plan.take(),
                 show_plan: std::mem::take(&mut self.show_plan),
+                query_edit_driver: self.query_edit_driver.take(),
             };
             self.results
                 .insert(self.active_result.min(self.results.len()), result);
@@ -399,6 +423,7 @@ impl TabState {
         self.fetch.size = fetch_size;
         self.fetch.size_text = fetch_size.to_string();
         self.active_result = self.results.len();
+        self.query_edit_driver = None;
         self.script_sql = Some(sql);
     }
 
@@ -460,6 +485,7 @@ impl TabState {
                 if let Some(ref mut append) = self.fetch.append {
                     append.pager = Some(pager);
                 } else {
+                    self.close_record_view();
                     self.grid.refill_pager(pager);
                     if let Some(ref t_name) = self.table_name {
                         self.grid.set_table_name(t_name.clone());
@@ -580,9 +606,8 @@ impl TabState {
             return false;
         }
         self.last_error = None;
-        self.grid.changeset.clear();
-        self.grid.changeset_history.clear();
-        self.grid.selection.clear();
+        self.grid.clear_saved_edits();
+        self.close_record_view();
         true
     }
 }
@@ -962,6 +987,31 @@ mod script_result_tests {
             Arc::new(SchemaCache::new().unwrap()),
         )
     }
+    #[test]
+    fn staged_query_edits_block_result_switching_and_save_invalidates_rows() {
+        let mut tab = tab();
+        tab.new_script_result("SELECT 1".into());
+        tab.new_script_result("SELECT 2".into());
+        let selected = tab.active_result;
+        tab.grid
+            .stage(|changes| changes.set_cell(0, 0, None, Some("pending".into())));
+        tab.select_result(0);
+        assert_eq!(tab.active_result, selected);
+        assert_eq!(tab.script_sql.as_deref(), Some("SELECT 2"));
+        assert!(
+            tab.last_error
+                .as_deref()
+                .unwrap()
+                .contains("Save or Cancel")
+        );
+        let revision = tab.grid.changeset_revision();
+        let saved = tab.grid.changeset.clone();
+        assert!(tab.finish_row_save(&saved, Ok(1)));
+        assert_ne!(tab.grid.changeset_revision(), revision);
+        tab.select_result(0);
+        assert_eq!(tab.active_result, 0);
+    }
+
     #[test]
     fn sqlite_script_streams_individual_results_and_stops_after_an_error() {
         let driver = db_wire::create_driver(db_wire::ConnectionConfig {

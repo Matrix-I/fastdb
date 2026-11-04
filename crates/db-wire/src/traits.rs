@@ -212,8 +212,26 @@ pub struct ForeignKey {
     pub target_column: String,
 }
 
+pub struct QueryCellUpdate {
+    pub row: u64,
+    pub column: usize,
+    pub value: Option<String>,
+}
+
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    async fn load_editable_query(&self, _sql: &str) -> Result<Arc<QueryResultPager>> {
+        anyhow::bail!("Editable query results are unavailable for this provider")
+    }
+
+    async fn save_query_edits(
+        &self,
+        _pager: Arc<QueryResultPager>,
+        _edits: Vec<QueryCellUpdate>,
+    ) -> Result<()> {
+        anyhow::bail!("Editable query results are unavailable for this provider")
+    }
+
     /// Creates an independent driver with the same endpoint/authentication and a new database.
     /// Does not open a session, execute SQL or modify this driver.
     fn with_database(&self, _database: &str) -> Result<Arc<dyn DatabaseDriver>> {
