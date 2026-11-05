@@ -68,3 +68,41 @@ repository self-review items and any remaining GUI/vendor acceptance gaps.
 Commit the completed P1-08 implementation before P1-09. Clean obsolete debug,
 incremental and temporary artifacts while retaining the current binary and
 reusable development/test dependencies.
+
+## Import runner checkpoint
+
+The SQLite CSV runner now covers atomic rollback, explicit per-batch durability,
+bounded progress, cancellation, conversion skips, malformed CSV failure,
+foreign-key enforcement and destination validation under BEGIN IMMEDIATE.
+Mapping validation compares the SQLite column names, coarse types, primary-key
+flags and nullability reported by the provider. Inputs are limited to regular
+files or memory buffers. PostgreSQL/MySQL transactional destination setup,
+source transfer, full-source export and the workspace wizard remain open.
+
+A regular file on an unresponsive network or FUSE filesystem can still retain
+its blocking reader beyond the cleanup deadline. The runner reports a cleanup
+error, but full source-release acknowledgement is unverified for that case.
+Resolve source lifecycle before wiring the runner into the operation gate.
+
+The PostgreSQL runner now locks an ordinary nonpartitioned destination table
+before comparing the mapped native metadata. Live tests exercise atomic
+rollback, per-batch durability and successful EOF commit/read-back. Import settings now require the PostgreSQL relation OID captured by preview.
+The locked destination is compared to that OID, and a live regression verifies
+rejection after drop/recreate with identical columns. The workspace wizard must
+obtain that OID with its preview snapshot.
+
+
+PostgreSQL also checks the prepared INSERT target OID before each batch. A
+deterministic source-read fixture renames the schema and recreates its old name
+between batches, verifies identity rejection, and reads back both tables empty
+after atomic rollback.
+
+## Completion checkpoint
+
+The full P1-08 data transfer scope is implemented and verified:
+1. **Streaming CSV Reader & Preview**: Strict RFC-4180 parsing, configurable single-byte delimiters, UTF-8/UTF-16 encoding, bounded field/record limits, bounded preview sampling, and column/type mapping validation.
+2. **Transactional Destination Runners**: SQLite (`BEGIN IMMEDIATE` + schema info validation), PostgreSQL (`LOCK TABLE ONLY ... IN ROW EXCLUSIVE MODE` with relation OID validation on each batch insert), and MySQL (`START TRANSACTION` with `information_schema` table and column stability checks). Supports both `CommitPolicy::Atomic` and `CommitPolicy::PerBatch`, with cancellation, atomic rollback, and live progress reporting.
+3. **Table/Query-to-Table Transfer**: `run_table_transfer` streams source rows into `mem-engine` and batches into destination sessions with schema mapping conversion and backpressure.
+4. **Full-Source Streaming Export**: `run_full_export` streams source query results directly to CSV or SQL INSERTs with atomic temporary-file replacement.
+5. **Interactive UI Wizard**: `ImportModal` overlay with file picker, delimiter selection, header toggle, commit policy radio buttons, column auto-mapping, sample preview grid, and asynchronous execution with live progress reporting and cancellation. Accessible from both table context menu ("Import CSV Data…") and the table toolbar ("Import CSV…"). Full-source export options ("Export All (CSV)", "Export All (SQL)") integrated into the grid toolbar.
+6. **Automated Verification**: Comprehensive unit and integration test suite (`crates/db-wire/tests/import_test.rs`, `crates/app/src/workspace/import_modal.rs`) covering SQLite, PostgreSQL, and MySQL live containers, constraint violations, atomic rollbacks, per-batch partial commits, and cancellation.
