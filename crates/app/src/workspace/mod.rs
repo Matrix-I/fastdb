@@ -16,6 +16,7 @@ mod connection_config;
 mod connection_dialog;
 mod connection_state;
 mod connections;
+mod local_credentials;
 mod metadata_state;
 use connection_state::{ConnectionFormState, ConnectionManager, ConnectionSession};
 mod data_edit;
@@ -185,7 +186,6 @@ pub struct Workspace {
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
     save_queue: SaveQueue,
-    credential_warning: Option<String>,
     query_history: query_history::QueryHistory,
     script_action: Option<script_tools::ScriptAction>,
     script_search: Option<script_search::Search>,
@@ -225,6 +225,9 @@ impl Workspace {
                 platform_hal::paths::config_dir().join("connections.json"),
             )
             .load_saved_connections();
+        if let Some(warning) = credential_warning {
+            tracing::warn!("{warning}");
+        }
         let initial_active_conn = if let Some(ref id) = active_connection_id {
             saved_connections.iter().find(|c| &c.id == id).cloned()
         } else {
@@ -271,7 +274,6 @@ impl Workspace {
                 platform_hal::paths::config_dir().join("query-history"),
             ),
             save_queue,
-            credential_warning,
             updates,
             _diagram_gestures: diagram_gestures::install(cx),
             _update_changed: update_changed,
@@ -497,13 +499,7 @@ impl Render for Workspace {
 
         // 1. Top Bar / Tabs & Toolbar
         root = root.child(panes.top_bar());
-        let credential_error = self
-            .save_queue
-            .connection_error
-            .lock()
-            .unwrap()
-            .clone()
-            .or_else(|| self.credential_warning.clone());
+        let credential_error = self.save_queue.connection_error.lock().unwrap().clone();
         if let Some(error) = credential_error {
             root = root.child(
                 div()
@@ -517,7 +513,6 @@ impl Render for Workspace {
                             .cursor_pointer()
                             .child("Retry saving connections")
                             .on_click(cx.listener(|this, _, _, _| {
-                                this.credential_warning = None;
                                 this.save_config();
                             })),
                     ),

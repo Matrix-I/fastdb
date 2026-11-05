@@ -236,16 +236,32 @@ pub(super) struct ConnectionRepository {
 }
 impl ConnectionRepository {
     pub fn new(path: std::path::PathBuf) -> Self {
+        Self::with_local_credentials(
+            path,
+            std::env::var("FASTDB_LOCAL_CREDENTIALS").as_deref() == Ok("1"),
+        )
+    }
+
+    fn with_local_credentials(path: std::path::PathBuf, local: bool) -> Self {
+        let store = |service: &str| -> std::sync::Arc<dyn platform_hal::keychain::CredentialStore> {
+            if local {
+                std::sync::Arc::new(super::local_credentials::LocalCredentialStore::new(
+                    path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+                    service,
+                ))
+            } else {
+                std::sync::Arc::new(platform_hal::keychain::KeychainStore::new(service))
+            }
+        };
+        let credentials = store(platform_hal::keychain::FASTDB_KEYCHAIN_SERVICE);
+        let ssh_credentials = store("fastdb-ssh");
+        let client_identity_credentials = store("fastdb-client-identity");
         Self {
             path,
             legacy_path: LEGACY_CONFIG_FILE.into(),
-            credentials: std::sync::Arc::new(platform_hal::keychain::KeychainStore::default()),
-            ssh_credentials: std::sync::Arc::new(platform_hal::keychain::KeychainStore::new(
-                "fastdb-ssh",
-            )),
-            client_identity_credentials: std::sync::Arc::new(
-                platform_hal::keychain::KeychainStore::new("fastdb-client-identity"),
-            ),
+            credentials,
+            ssh_credentials,
+            client_identity_credentials,
         }
     }
     pub fn load_saved_connections_from_str(
@@ -455,7 +471,7 @@ impl ConnectionRepository {
                         connection.password = Some(password);
                         connection.password_unavailable = false;
                     }
-                    _ => warning = Some("Some saved passwords could not be read from the keychain. Unlock the keychain and restart, or re-enter the password in Edit connection.".into()),
+                    _ => warning = Some("Some saved passwords could not be read from credential storage. Check storage access and restart, or re-enter the password in Edit connection.".into()),
                 }
             }
             if let Some(ssh) = &mut connection.ssh
@@ -466,7 +482,7 @@ impl ConnectionRepository {
                         ssh.secret = Some(secret);
                         ssh.secret_unavailable = false;
                     }
-                    _ => warning = Some("Some SSH credentials could not be read from the keychain. Unlock it and restart, or re-enter the secret in Edit connection.".into()),
+                    _ => warning = Some("Some SSH credentials could not be read from credential storage. Check storage access and restart, or re-enter the secret in Edit connection.".into()),
                 }
             }
             if let Some(identity) = &mut connection.client_identity
@@ -477,12 +493,12 @@ impl ConnectionRepository {
                         identity.password = Some(password);
                         identity.password_unavailable = false;
                     }
-                    _ => warning = Some("Some TLS client identity passwords could not be read from the keychain. Unlock it and restart, or re-enter the password in Edit connection.".into()),
+                    _ => warning = Some("Some TLS client identity passwords could not be read from credential storage. Check storage access and restart, or re-enter the password in Edit connection.".into()),
                 }
             }
         }
         if migrate && self.save(&connections, active.as_deref()).is_err() {
-            warning = Some("Could not finish migrating credentials or cleaning up old secrets. Unlock the keychain and retry saving. Plaintext is removed only after its password is stored in the keychain.".into());
+            warning = Some("Could not finish migrating credentials or cleaning up old secrets. Check credential storage access and retry saving. Legacy plaintext is removed only after its password is stored successfully.".into());
         }
         (connections, active, warning)
     }
@@ -564,7 +580,7 @@ impl ConnectionRepository {
                     Ok(old) => old,
                     Err(_) => {
                         rollback(&changed);
-                        return Err("Cannot access the keychain. Unlock it and retry saving the connection.".into());
+                        return Err("Cannot access credential storage. Check storage access and retry saving the connection.".into());
                     }
                 };
                 if old.as_deref() == Some(secret) {
@@ -572,7 +588,7 @@ impl ConnectionRepository {
                 }
                 if store(credential_kind).save(&connection.id, secret).is_err() {
                     rollback(&changed);
-                    return Err("Cannot save a credential in the keychain. Unlock it and retry saving the connection.".into());
+                    return Err("Cannot save a credential. Check credential storage access and retry saving the connection.".into());
                 }
                 changed.push((credential_kind, connection.id.clone(), old));
             }
@@ -598,7 +614,7 @@ impl ConnectionRepository {
         }
         for (credential_kind, id) in &cleanup {
             store(*credential_kind).delete(id)
-                .map_err(|_| "Connection config saved, but an unused password could not be deleted from the keychain. Retry saving after unlocking it.".to_string())?;
+                .map_err(|_| "Connection config saved, but an unused password could not be deleted from credential storage. Check storage access and retry saving.".to_string())?;
         }
         if legacy_source {
             match std::fs::remove_file(&self.legacy_path) {
@@ -1158,6 +1174,46 @@ mod credential_tests {
         (temp, repo, store)
     }
     const PLAINTEXT: &str = r#"{"active_connection_id":"a","connections":[{"id":"a","database":"db","password":"test-secret"}]}"#;
+
+    #[test]
+    fn local_credentials_roundtrip_all_secrets_across_repository_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("connections.json");
+        let mut repo = ConnectionRepository::with_local_credentials(path.clone(), true);
+        repo.legacy_path = temp.path().join("absent-legacy.json");
+        let (mut profiles, active) =
+            ConnectionRepository::load_saved_connections_from_str(PLAINTEXT);
+        profiles[0].ssh = Some(SavedSsh {
+            host: "jump.internal".into(),
+            port: 22,
+            user: "dev".into(),
+            fingerprint: "SHA256:fixture".into(),
+            key_path: None,
+            secret: Some("ssh-fixture".into()),
+            secret_unavailable: false,
+        });
+        profiles[0].client_identity = Some(SavedClientIdentity {
+            archive_path: "/keys/client.p12".into(),
+            password: Some("tls-fixture".into()),
+            password_unavailable: false,
+        });
+        repo.save(&profiles, active.as_deref()).unwrap();
+        let config = std::fs::read_to_string(&path).unwrap();
+        for secret in ["test-secret", "ssh-fixture", "tls-fixture"] {
+            assert!(!config.contains(secret));
+        }
+        drop(repo);
+        let mut reopened = ConnectionRepository::with_local_credentials(path, true);
+        reopened.legacy_path = temp.path().join("absent-legacy.json");
+        assert_eq!(
+            reopened.load_saved_connections(),
+            (profiles.clone(), active, None)
+        );
+        reopened.save(&[], None).unwrap();
+        assert_eq!(reopened.credentials.get("a").unwrap(), None);
+        assert_eq!(reopened.ssh_credentials.get("a").unwrap(), None);
+        assert_eq!(reopened.client_identity_credentials.get("a").unwrap(), None);
+    }
 
     #[test]
     fn client_identity_password_roundtrips_only_in_its_keychain() {
