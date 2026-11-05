@@ -145,6 +145,123 @@ impl Workspace {
         .detach();
     }
 
+    pub(super) fn export_all_result(
+        &mut self,
+        index: usize,
+        format: ExportFormat,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_export(index) {
+            return;
+        }
+        let Some(driver) = self.tab_session(index).driver.clone() else {
+            return;
+        };
+        let dialect = SqlDialect(self.tab_provider(index));
+        let tab = &mut self.tabs[index];
+        let id = tab.id;
+        let target = sql_target(
+            dialect,
+            tab.schema_name.as_deref(),
+            tab.table_name.as_deref(),
+        );
+        let name = tab.table_name.as_deref().unwrap_or("query_result");
+        let safe_name: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let name = format!("{safe_name}_all.{}", format.extension());
+        let full_format = match format {
+            ExportFormat::Csv => db_wire::transfer::export::FullExportFormat::Csv,
+            ExportFormat::Sql => db_wire::transfer::export::FullExportFormat::Sql,
+        };
+        let source_sql = if let (Some(_schema), Some(_table)) =
+            (tab.schema_name.as_deref(), tab.table_name.as_deref())
+        {
+            let filter = tab.filter_sql.trim();
+            if filter.is_empty() {
+                format!("SELECT * FROM {target}")
+            } else if filter.to_uppercase().starts_with("WHERE ")
+                || filter.to_uppercase().starts_with("ORDER BY ")
+            {
+                format!("SELECT * FROM {target} {filter}")
+            } else {
+                format!("SELECT * FROM {target} WHERE {filter}")
+            }
+        } else {
+            let sql = tab.editor.buffer.text().trim().to_string();
+            let upper = sql.to_uppercase();
+            if !upper.starts_with("SELECT") && !upper.starts_with("WITH") {
+                tab.export.message =
+                    Some("Full export requires a SELECT query to avoid repeating mutations".into());
+                cx.notify();
+                return;
+            }
+            sql
+        };
+        tab.export.busy = true;
+        tab.export.message = Some("Choose a destination for full export…".into());
+        let dialog = cx.prompt_for_new_path(&platform_hal::paths::downloads_dir(), Some(&name));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let outcome = match dialog.await {
+                Ok(Ok(Some(path))) => {
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
+                            tab.export.message =
+                                Some("Exporting all rows streaming to file…".into());
+                            cx.notify();
+                        }
+                    });
+                    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                    let (progress_tx, _) = tokio::sync::watch::channel(0);
+                    let settings = db_wire::transfer::export::FullExportSettings {
+                        format: full_format,
+                        csv_options: db_wire::transfer::csv::CsvOptions::default(),
+                        target_table: target,
+                        dialect,
+                    };
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            db_wire::transfer::export::run_full_export(
+                                driver,
+                                source_sql,
+                                &path,
+                                settings,
+                                cancel_rx,
+                                progress_tx,
+                            )
+                            .await
+                            .map(|count| {
+                                format!("Exported all {count} row(s) to {}", path.display())
+                            })
+                            .map_err(|e| format!("Full export failed: {e}"))
+                        })
+                        .await;
+                    Some(result.unwrap_or_else(|message| message))
+                }
+                Ok(Ok(None)) => None,
+                Ok(Err(error)) => Some(format!("Cannot open export dialog: {error}")),
+                Err(_) => Some("Export dialog closed unexpectedly".into()),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
+                    tab.export.busy = false;
+                    tab.export.message = outcome;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn render_export_toolbar(
         &self,
         index: usize,
@@ -153,22 +270,52 @@ impl Workspace {
         let enabled = self.can_export(index);
         let theme = self.theme.clone();
         let mut toolbar = div().flex().flex_none().items_center().gap_1();
-        for (label, format) in [
-            ("Export CSV", ExportFormat::Csv),
-            ("Export SQL", ExportFormat::Sql),
+        for (label, format, is_all) in [
+            ("Export CSV", ExportFormat::Csv, false),
+            ("Export SQL", ExportFormat::Sql, false),
+            ("Export All (CSV)", ExportFormat::Csv, true),
+            ("Export All (SQL)", ExportFormat::Sql, true),
         ] {
             let mut button = div().id(label).px_1().rounded_xs().child(label);
             if enabled {
                 button = button
                     .cursor_pointer()
                     .hover(move |s| s.bg(theme.bg_surface_hover))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.export_result(index, format, cx)),
-                    );
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if is_all {
+                            this.export_all_result(index, format, cx);
+                        } else {
+                            this.export_result(index, format, cx);
+                        }
+                    }));
             } else {
                 button = button.opacity(0.4);
             }
             toolbar = toolbar.child(button);
+        }
+        if let Some(table) = self.tabs[index].table_name.clone() {
+            let schema = self.tabs[index]
+                .schema_name
+                .clone()
+                .unwrap_or_else(|| "public".to_string());
+            let conn_id = self.tabs[index]
+                .connection_id
+                .clone()
+                .or_else(|| self.connections.active_connection_id.clone());
+            let import_theme = self.theme.clone();
+            let import_btn = div()
+                .id("toolbar-import-csv")
+                .px_1()
+                .rounded_xs()
+                .cursor_pointer()
+                .hover(move |s| s.bg(import_theme.bg_surface_hover))
+                .child("Import CSV…")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(ref cid) = conn_id {
+                        this.open_import_modal(cid, &schema, &table, cx);
+                    }
+                }));
+            toolbar = toolbar.child(import_btn);
         }
         toolbar.child(div().child(
             if self.tabs[index].grid.changeset.is_dirty()
@@ -176,7 +323,7 @@ impl Workspace {
             {
                 "(save/cancel edits first)"
             } else {
-                "(loaded rows)"
+                "(loaded or full source)"
             },
         ))
     }

@@ -24,6 +24,11 @@ enum Action {
         events: flume::Sender<StreamEvent>,
     },
     Insert(crate::transfer::batch::Batch),
+    BeginTransfer {
+        schema: String,
+        table: String,
+        columns: Vec<crate::ColumnMeta>,
+    },
 }
 struct Command {
     action: Action,
@@ -133,6 +138,23 @@ impl ScriptSession for MySqlScriptSession {
         .map(|_| ())
     }
 
+    async fn begin_transfer(
+        &self,
+        schema: &str,
+        table: &str,
+        _expected_object_id: Option<&str>,
+        columns: &[crate::ColumnMeta],
+    ) -> Result<()> {
+        anyhow::ensure!(!self.read_only, "{}", read_only::DENIED);
+        self.dispatch(Action::BeginTransfer {
+            schema: schema.to_string(),
+            table: table.to_string(),
+            columns: columns.to_vec(),
+        })
+        .await
+        .map(|_| ())
+    }
+
     async fn insert_batch(&self, batch: crate::transfer::batch::Batch) -> Result<u64> {
         anyhow::ensure!(!self.read_only, "{}", read_only::DENIED);
         self.dispatch(Action::Insert(batch)).await
@@ -190,6 +212,24 @@ async fn worker(
                         }).collect::<Vec<_>>();
                         connection.exec_drop(sql, Params::Positional(values)).await?;
                         Ok(connection.affected_rows())
+                    }
+                    Action::BeginTransfer { schema, table, columns } => {
+                        let check_sql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'";
+                        let rows: Vec<u64> = connection.exec(check_sql, (schema.clone(), table.clone())).await?;
+                        anyhow::ensure!(rows.first().copied().unwrap_or(0) > 0, "MySQL destination table not found or is a view");
+
+                        let col_sql = "SELECT column_name, data_type, is_nullable, column_key FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position";
+                        let col_rows: Vec<(String, String, String, String)> = connection.exec(col_sql, (schema.clone(), table.clone())).await?;
+                        let current: Vec<ColumnMeta> = col_rows.into_iter().map(|(n, dt, is_null, k)| info_schema_column(n, &dt, &is_null, &k)).collect();
+                        for expected in &columns {
+                            anyhow::ensure!(
+                                current.iter().any(|c| c.name == expected.name && c.data_type == expected.data_type && c.nullable == expected.nullable),
+                                "Destination column changed since mapping: {}",
+                                expected.name
+                            );
+                        }
+                        connection.query_drop("START TRANSACTION").await?;
+                        Ok(0)
                     }
                 }
             } => Some(result),

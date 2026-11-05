@@ -28,6 +28,45 @@ impl SqliteScriptSession {
 
 #[async_trait]
 impl ScriptSession for SqliteScriptSession {
+    async fn begin_transfer(
+        &self,
+        schema: &str,
+        table: &str,
+        _expected_object_id: Option<&str>,
+        columns: &[ColumnMeta],
+    ) -> Result<()> {
+        anyhow::ensure!(
+            schema == "main",
+            "SQLite transfers require a table in the main schema"
+        );
+        let slot = self.connection.clone();
+        let closed = self.closed.clone();
+        let table = table.to_owned();
+        let columns = columns.to_vec();
+        crate::get_runtime().spawn_blocking(move || {
+            let slot = slot.lock();
+            anyhow::ensure!(!closed.load(Ordering::SeqCst), "Script session is closed");
+            let connection = slot.as_ref().context("Script session is closed")?.lock();
+            anyhow::ensure!(connection.is_autocommit(), "Transfer requires an idle session");
+            connection.execute_batch("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE")?;
+            let ordinary: bool = connection.query_row(
+                "SELECT EXISTS (SELECT 1 FROM pragma_table_list WHERE schema = 'main' AND name = ?1 AND type = 'table')",
+                [&table], |row| row.get(0),
+            )?;
+            anyhow::ensure!(ordinary, "SQLite transfers require an ordinary table");
+            let mut metadata = connection.prepare(r#"SELECT name, type, "notnull", pk FROM pragma_table_info(?1)"#)?;
+            let current = metadata.query_map([&table], |row| Ok((row.get::<_, String>(0)?, (row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?))))?
+                .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
+            for column in &columns {
+                anyhow::ensure!(
+                    current.get(&column.name).is_some_and(|(kind, not_null, primary_key)| sqlite_decl_data_type(kind) == column.data_type && (*not_null == 0) == column.nullable && (*primary_key > 0) == column.is_primary_key),
+                    "Destination column changed since mapping: {}", column.name,
+                );
+            }
+            Ok(())
+        }).await?
+    }
+
     async fn insert_batch(&self, batch: crate::transfer::batch::Batch) -> Result<u64> {
         let slot = self.connection.clone();
         let closed = self.closed.clone();

@@ -53,12 +53,29 @@ impl ToSql for Parameter<'_> {
     postgres_types::to_sql_checked!();
 }
 
-pub(super) async fn insert(client: &tokio_postgres::Client, batch: Batch) -> Result<u64> {
-    let sql = batch.sql(crate::DbDriverKind::Postgres)?;
+pub(super) async fn insert(
+    client: &tokio_postgres::Client,
+    batch: Batch,
+    expected_relation: Option<u32>,
+) -> Result<u64> {
+    let mut sql = batch.sql(crate::DbDriverKind::Postgres)?;
+    if expected_relation.is_some() {
+        sql.push_str(" RETURNING tableoid");
+    }
     let statement = client
         .prepare(&sql)
         .await
         .context("Cannot prepare transfer batch")?;
+    if let Some(expected) = expected_relation {
+        anyhow::ensure!(
+            statement
+                .columns()
+                .first()
+                .and_then(|column| column.table_oid())
+                == Some(expected),
+            "PostgreSQL destination identity changed before batch execution"
+        );
+    }
     let values: Vec<_> = batch.values().map(Parameter).collect();
     let parameters: Vec<&(dyn ToSql + Sync)> = values
         .iter()

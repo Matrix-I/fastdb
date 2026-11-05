@@ -7,6 +7,17 @@ use std::{sync::Arc, time::Duration};
 
 #[async_trait]
 pub trait ScriptSession: Send + Sync {
+    /// Begin and validate a transactional transfer on this physical session.
+    async fn begin_transfer(
+        &self,
+        _schema: &str,
+        _table: &str,
+        _expected_object_id: Option<&str>,
+        _columns: &[crate::ColumnMeta],
+    ) -> Result<()> {
+        anyhow::bail!("Transactional transfers are unavailable for this provider")
+    }
+
     /// Executes one checked batch with native bound parameters; caller owns transaction boundaries.
     async fn insert_batch(&self, _batch: crate::transfer::batch::Batch) -> Result<u64> {
         anyhow::bail!("Parameterized transfer inserts are unavailable for this provider")
