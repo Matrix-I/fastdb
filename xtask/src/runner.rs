@@ -108,7 +108,7 @@ fn monitor(
             {
                 capture.rss.push((now, value));
             }
-            let (at, line) = match rx.recv_timeout(Duration::from_millis(50)) {
+            let (at, line) = match rx.recv_timeout(Duration::from_millis(40)) {
                 Ok(message) => message,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(error) => bail!("benchmark output reader disconnected: {error}"),
@@ -326,7 +326,7 @@ mod tests {
             thread::sleep(Duration::from_secs(30));
             return;
         }
-        thread::sleep(Duration::from_millis(1200));
+        thread::sleep(Duration::from_millis(1800));
         emit(json!({"event":"query_start"}));
         emit(
             json!({"event":"query_done", "rows":if mode == "wrong_rows" {10} else {1000000}, "columns":20, "query_ms":100.0, "first_batch_ms":2.0}),
