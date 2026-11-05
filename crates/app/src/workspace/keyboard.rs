@@ -43,6 +43,35 @@ impl Workspace {
             return;
         }
 
+        // Toggle Theme shortcut: Cmd+Shift+T / Ctrl+Shift+T
+        if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && event.keystroke.modifiers.shift
+            && event.keystroke.key.eq_ignore_ascii_case("t")
+        {
+            self.toggle_theme(cx);
+            return;
+        }
+
+        // Editor Zoom shortcuts: Cmd+= / Cmd+- / Cmd+0
+        if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && matches!(event.keystroke.key.as_str(), "=" | "+")
+        {
+            self.zoom_in_editor(cx);
+            return;
+        }
+        if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && event.keystroke.key == "-"
+        {
+            self.zoom_out_editor(cx);
+            return;
+        }
+        if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+            && event.keystroke.key == "0"
+        {
+            self.reset_editor_zoom(cx);
+            return;
+        }
+
         if self.show_about_dialog {
             if self
                 .column_pending

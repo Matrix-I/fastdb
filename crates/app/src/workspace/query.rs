@@ -66,6 +66,7 @@ impl Workspace {
 
         self.tab_scroll.scroll_to_item(self.active_tab);
         self.input.is_filter_focused = false;
+        self.save_session();
         self.run_active_query(cx);
     }
 

@@ -92,6 +92,7 @@ impl Workspace {
             .and_then(|id| self.tabs.iter().position(|t| t.id == id))
             .unwrap_or(new_index);
         self.input.is_filter_focused = false;
+        self.save_session();
         cx.notify();
     }
 

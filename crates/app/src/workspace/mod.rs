@@ -49,6 +49,7 @@ mod panel_resize;
 mod panes;
 mod params_modal;
 mod pinned_script;
+mod preferences;
 mod properties;
 mod properties_panel;
 mod query;
@@ -95,6 +96,7 @@ pub use filter_suggest::FilterSuggest;
 pub use nav_context_menu::{NavContextMenu, NavContextTarget};
 use panel_resize::{CENTER_CHROME_WIDTH, NAVIGATOR_DEFAULT_WIDTH, PanelDrag, PanelSplitter};
 pub use panes::Panes;
+pub use preferences::Preferences;
 pub use script_chooser::ScriptChooser;
 pub use script_store::{ScriptFile, ScriptStore, filter_scripts};
 pub use tab_context_menu::TabContextMenu;
@@ -110,14 +112,14 @@ use ui_editor::line_input::{
 use value_panel::{VALUE_PANEL_WIDTH, ValuePanelState};
 use widgets::{dbeaver_driver_icon, render_field_content};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TableSubTab {
     Properties,
     Data,
     Diagram,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PropertySection {
     Columns,
     Constraints,
@@ -214,18 +216,19 @@ pub struct Workspace {
     _update_changed: Subscription,
     _restart_requested: Subscription,
     pub show_about_dialog: bool,
+    pub preferences: Preferences,
 }
 
 impl Workspace {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let theme = Theme::dark();
+        let config_dir = platform_hal::paths::config_dir();
+        let preferences = preferences::load_preferences(&config_dir);
+        let theme = preferences.theme.to_theme();
         let focus_handle = cx.focus_handle();
 
         let (saved_connections, active_connection_id, credential_warning) =
-            connection_config::ConnectionRepository::new(
-                platform_hal::paths::config_dir().join("connections.json"),
-            )
-            .load_saved_connections();
+            connection_config::ConnectionRepository::new(config_dir.join("connections.json"))
+                .load_saved_connections();
         if let Some(warning) = credential_warning {
             tracing::warn!("{warning}");
         }
@@ -256,7 +259,7 @@ impl Workspace {
             },
         );
         let navigator_scroll = ScrollHandle::new();
-        let workspace = Self {
+        let mut workspace = Self {
             theme,
             focus_handle,
             active_tab: 0,
@@ -299,6 +302,7 @@ impl Workspace {
             value_job: Arc::default(),
             panes: None,
             show_about_dialog: false,
+            preferences,
             form: ConnectionFormState::from_saved(initial_active_conn.as_ref()),
             connections: ConnectionManager::new(saved_connections, active_connection_id),
             input: WorkspaceInput {
@@ -328,6 +332,10 @@ impl Workspace {
                 grid_context_menu: None,
             },
         };
+
+        if !crate::benchmark::enabled() {
+            workspace.restore_session(cx);
+        }
 
         // Automatic background update check on app startup (throttled to once a day)
         let now = std::time::SystemTime::now()
@@ -486,6 +494,7 @@ impl Render for Workspace {
                     MouseButton::Left,
                     cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
                         this.layout.resizing_panel = None;
+                        this.save_session();
                         cx.notify();
                     }),
                 )
@@ -493,6 +502,7 @@ impl Render for Workspace {
                     MouseButton::Left,
                     cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
                         this.layout.resizing_panel = None;
+                        this.save_session();
                         cx.notify();
                     }),
                 );
