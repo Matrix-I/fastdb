@@ -1,6 +1,10 @@
 # Provider workflow acceptance
 
-Tracking date: 2026-11-03. Manual acceptance is **skipped for now at the user's request**.
+Current release scope (2026-11-05): **PostgreSQL acceptance is required**. Follow
+[the ordered v0.2.0 PostgreSQL runbook](testing/0.2.0-postgres-manual-acceptance.md).
+MariaDB, Oracle, SQL Server and Db2 are disabled with **Feature is coming**.
+MySQL/SQLite are outside this manual release gate. Historical matrix rows below
+retain their evidence status; no manual case is marked passed by this update.
 This matrix is a test protocol, not evidence of successful desktop workflows.
 Historical provider runs are recorded in [PROVIDERS.md](PROVIDERS.md); they do
 not replace acceptance on the current build.
@@ -43,6 +47,8 @@ quotes/newlines, an exact decimal and a foreign key; use native provider types.
    empty fields; record that limit. Execute SQL into a disposable compatible
    target and compare values/counts. Do not describe this as a binary backup or
    full-source export. Verify destination errors leave previous files intact.
+   Full-source Export All must also be exercised separately from loaded export;
+   see the runbook for filtered counts, cancellation and transfer UI gaps.
 6. **Cancel/disconnect:** cancel a long read, wait for feedback, then execute a
    fresh read. Disconnect during loading and verify stale completions cannot
    resurrect the session or overwrite another tab.
@@ -58,7 +64,8 @@ quotes/newlines, an exact decimal and a foreign key; use native provider types.
   Confirm the documented guard and verify no silent loss or unintended save.
 - PostgreSQL: use two script runs to create/use a temporary table; Begin, write,
   fail a statement, Rollback and read independently. Repeat with a savepoint.
-  Other providers' pinned-session parity remains open; do not expect it to pass.
+  Other providers have session implementations, but their desktop/live acceptance
+  is outside the current PostgreSQL release gate.
 - Columns: inspect long native types/defaults/comments at narrow and HiDPI
   sizes; select a row, copy full details, double-click and press Enter. Repeat
   on same-named objects across connections and after a column disappears on

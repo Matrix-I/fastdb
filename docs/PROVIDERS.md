@@ -1,5 +1,13 @@
 # Provider setup and validation
 
+## v0.2.0 desktop availability
+
+PostgreSQL is the required release acceptance provider. MariaDB, Oracle, SQL
+Server and Db2 are disabled in the desktop connection dialog with **Feature is
+coming**, including Test/Connect for saved profiles. MySQL and SQLite remain
+available. The driver setup and test protocols below remain useful for future
+provider validation; they do not override this desktop availability policy.
+
 ## PostgreSQL metadata
 
 Properties loads PostgreSQL catalog details in the background on connection and
@@ -125,9 +133,11 @@ without those delimiters with these providers.
 
 ## SQL and results
 
-All seven providers are selectable in the connection dialog. Use **Test
-Connection**, then **Connect**, open a SQL script and run the statement at the
-caret. SQL for these three providers is sent without automatic SELECT wrapping;
+All seven providers have driver implementations; only PostgreSQL, MySQL and
+SQLite are currently selectable in the desktop connection dialog. Deferred ODBC
+providers retain the setup and future validation protocol below. For an enabled
+provider use **Test Connection**, then **Connect**, open a SQL script and run the
+statement at the caret. SQL for these three providers is sent without automatic SELECT wrapping;
 use the database's own `TOP`, `FETCH`, or other limits when needed. Oracle SQL and Db2 statement
 terminators are removed; Oracle PL/SQL block semicolons are retained.
 In Run script, standalone `GO` separates SQL Server batches, standalone `/`

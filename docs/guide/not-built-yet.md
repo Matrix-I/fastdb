@@ -2,6 +2,11 @@
 
 The [audited roadmap](../ROADMAP.md) separates working paths, partial features, UI-only controls and missing workflows. Major gaps include:
 
+- **Title bar zoom acceptance.** Double-clicking the title or empty top bar toggles window maximize/restore; manual desktop acceptance, including tab and button click isolation, remains pending.
+
+- **Deferred desktop providers for v0.2.0.** MariaDB, Oracle, SQL Server and Db2 connection choices are disabled with **Feature is coming**; existing profiles cannot Test/Connect. PostgreSQL is the current release acceptance gate; MySQL and SQLite remain selectable.
+- **Data transfer UI gaps.** The backend supports streaming table/query transfer and configurable CSV mapping/encoding/NULL tokens, but the desktop app has no transfer entry point or manual mapping/encoding/NULL-token controls. CSV import currently uses automatic name-based mapping, UTF-8 and the default `\N` NULL token. Full-source export also lacks an exposed cancellation control and live row progress. These P1-08 GUI gaps require implementation or an explicit release scope deferral.
+
 - **Additional Properties mutations.** Virtual keys/relationships are not implemented. PostgreSQL catalog sections are read-only; other providers explicitly show unsupported sections.
 - **Advanced column editing.** PostgreSQL ordinary-column drafts, preview/Persist and Revert are implemented; identity/generated/storage/collation/permissions transitions and other-provider mutation support remain open. The [GUI/business analysis](../DBEAVER_WORKFLOWS.md) specifies this workflow and broader screen coverage.
 - **Core DBeaver workflows.** ER diagram export (the focused four-sided layout, saved table positioning, whole-card dragging, content-fit card widths, separate connector lanes, clickable arrows and mapped-column highlights without PK/FK text badges or column data types await manual GUI acceptance), schema-aware XML editing, backup/restore, and session/lock monitoring remain open (CSV data import, streaming table transfer, full-source export, workspace session restoration and preferences are implemented; desktop acceptance pending). See the roadmap for scope and acceptance criteria.
@@ -18,3 +23,13 @@ The [audited roadmap](../ROADMAP.md) separates working paths, partial features, 
 - **Credential storage preferences.** Local development can opt into plaintext file credentials with `FASTDB_LOCAL_CREDENTIALS=1` (see [Connections](connections.md#local-development-without-keychain-prompts)); an in-app toggle and automatic migration between Keychain and local files are not implemented. Manual desktop acceptance is pending.
 
 - **Credential notification acceptance.** Missing saved credentials at startup are logged without a persistent workspace banner; manual desktop acceptance of this presentation change remains pending. Save failures still expose a retry action.
+
+- **Result tab close acceptance.** Each script result tab has a × button; closing results and selecting the adjacent result have automated coverage. Manual desktop acceptance remains pending.
+
+- **Two-step connection dialog acceptance.** Database selection and tabbed configuration share a fixed-size frame with no scrolling form; manual desktop acceptance of spacing, all tab contents and footer visibility remains pending.
+
+- **Execute boundary acceptance.** Automatic whole-script syntax warnings are disabled. Selected SQL and caret-based statement boundaries have automated coverage; manual desktop acceptance remains pending.
+
+- **Provider logo desktop acceptance.** PostgreSQL, MySQL and SQLite now use SVG artwork instead of 16px PNGs. Native SVG rendering and Retina appearance in the picker/navigator await manual GUI acceptance.
+
+- **SQL action rail acceptance.** Vertical icon buttons beside the line numbers, hover explanations, independent scrolling and Execute/Cancel presentation await manual desktop acceptance.
