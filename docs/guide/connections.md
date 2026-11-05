@@ -5,7 +5,7 @@
 - TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
 - Saved connections with create / edit / delete / test, plus quick presets per driver.
 - **TLS for PostgreSQL and MySQL**: enable TLS in the connection dialog to require encryption and verify the server certificate and hostname. Leave the root CA path empty for system trust, or supply a PEM/DER root CA certificate for a private CA. TLS uses TCP even when Unix socket discovery is enabled. Existing connections default to TLS disabled.
-- Saved connection passwords use the OS keychain (macOS Keychain / Linux Secret Service). Existing plaintext passwords migrate automatically after successful keychain storage; config files retain only credential references. Keychain/save failures are shown in the workspace with a retry action.
+- Saved connection passwords use the OS keychain (macOS Keychain / Linux Secret Service). Existing plaintext passwords migrate automatically after successful keychain storage; config files retain only credential references. Save failures are shown in the workspace with a retry action. Missing credentials at startup are logged without a persistent workspace banner.
 
 ## Read-only connections
 
@@ -67,3 +67,33 @@ For an isolated development profile, set `FASTDB_CONFIG_DIR=/tmp/fastdb-smoke` b
 Saved connections are written to `connections.json` in the user config directory (`~/Library/Application Support/com.fastdb.FastDB/` on macOS, `~/.config/fastdb/` on Linux), so they survive rebuilds and launches from Finder. A `.fastdb_config.json` left in the working directory by older builds is migrated on first launch and removed after a successful save. Passwords are stored under the `com.fastdb.credentials` keychain service, keyed by connection ID; JSON contains a `keychain_password` reference flag, never a new plaintext password. Migration retains the source file if secure storage fails.
 
 An unlocked macOS Keychain or Linux Secret Service is required to save passwords. If a saved secret is missing or inaccessible, its reference is preserved and connecting requires re-entering the password or unlocking the keychain and restarting. Clearing a password or deleting a connection removes its stored secret; failed deletions are retried on the next save or startup. Failed saves show a workspace banner with **Retry saving connections** and block Quit until a successful retry. Ad-hoc signed macOS updates may prompt again for keychain access; cross-update access still needs release smoke testing.
+
+## Local development without Keychain prompts
+
+Set `FASTDB_LOCAL_CREDENTIALS=1` when launching to bypass the OS keychain for
+saved database passwords, SSH secrets and TLS client identity passwords. Use a
+separate persistent development profile, for example:
+
+```bash
+FASTDB_LOCAL_CREDENTIALS=1 \
+FASTDB_CONFIG_DIR="$HOME/.fastdb-dev" \
+cargo run -p fastdb-app
+```
+
+For an already built binary, apply the same environment variables to
+`./target/debug/fastdb` or `./dist/FastDB.app/Contents/MacOS/FastDB`. Environment
+variables supplied to the build command alone do not configure later launches
+from Finder.
+
+This mode stores **plaintext secrets** in individual files under
+`<profile>/local-credentials/`, separated by credential service and connection
+ID. On macOS/Linux, newly created directories are owner-only (0700) and files
+are owner-only (0600); writes replace each file atomically. Keep this profile
+out of version control and shared/synced directories. Passwords survive rebuilds
+and app restarts. `connections.json` keeps the existing reference format.
+
+Only the exact value `1` enables this mode. Unset the variable to use Keychain
+again. Switching modes does not copy or delete secrets in the other store;
+re-enter passwords on first use in the selected store, or use separate profiles.
+Legacy plaintext connection files migrate into whichever store is selected.
+There is no in-app toggle or automatic Keychain-to-file migration.
