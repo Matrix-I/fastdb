@@ -105,6 +105,7 @@ impl Workspace {
         self.input.is_filter_focused = false;
         self.blur_fetch_size();
         self.activate_script_connection(cx);
+        self.save_session();
         cx.notify();
     }
     pub(super) fn create_script(&mut self, connection_id: String, cx: &mut Context<Self>) {

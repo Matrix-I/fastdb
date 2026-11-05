@@ -9,7 +9,9 @@ mod benchmark;
 pub mod updater;
 mod workspace;
 use assets::FastDbAssetSource;
-use ui_core::actions::{About, CheckForUpdates, Quit};
+use ui_core::actions::{
+    About, CheckForUpdates, Quit, ResetZoom, ToggleSidebar, ToggleTheme, ZoomIn, ZoomOut,
+};
 use workspace::Workspace;
 
 fn about(_: &About, cx: &mut App) {
@@ -68,6 +70,71 @@ fn check_for_updates(_: &CheckForUpdates, cx: &mut App) {
     });
 }
 
+fn toggle_theme(_: &ToggleTheme, cx: &mut App) {
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                let _ = handle.update(cx, |workspace, _, cx| {
+                    workspace.toggle_theme(cx);
+                });
+                break;
+            }
+        }
+    });
+}
+
+fn toggle_sidebar(_: &ToggleSidebar, cx: &mut App) {
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                let _ = handle.update(cx, |workspace, _, cx| {
+                    workspace.toggle_sidebar(cx);
+                });
+                break;
+            }
+        }
+    });
+}
+
+fn zoom_in(_: &ZoomIn, cx: &mut App) {
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                let _ = handle.update(cx, |workspace, _, cx| {
+                    workspace.zoom_in_editor(cx);
+                });
+                break;
+            }
+        }
+    });
+}
+
+fn zoom_out(_: &ZoomOut, cx: &mut App) {
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                let _ = handle.update(cx, |workspace, _, cx| {
+                    workspace.zoom_out_editor(cx);
+                });
+                break;
+            }
+        }
+    });
+}
+
+fn reset_zoom(_: &ResetZoom, cx: &mut App) {
+    cx.defer(|cx| {
+        for handle in cx.windows() {
+            if let Some(handle) = handle.downcast::<Workspace>() {
+                let _ = handle.update(cx, |workspace, _, cx| {
+                    workspace.reset_editor_zoom(cx);
+                });
+                break;
+            }
+        }
+    });
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -96,22 +163,52 @@ fn main() -> Result<()> {
         cx.on_action(quit);
         cx.on_action(about);
         cx.on_action(check_for_updates);
+        cx.on_action(toggle_theme);
+        cx.on_action(toggle_sidebar);
+        cx.on_action(zoom_in);
+        cx.on_action(zoom_out);
+        cx.on_action(reset_zoom);
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("ctrl-q", Quit, None),
+            KeyBinding::new("cmd-shift-t", ToggleTheme, None),
+            KeyBinding::new("ctrl-shift-t", ToggleTheme, None),
+            KeyBinding::new("cmd-b", ToggleSidebar, None),
+            KeyBinding::new("ctrl-b", ToggleSidebar, None),
+            KeyBinding::new("cmd-=", ZoomIn, None),
+            KeyBinding::new("ctrl-=", ZoomIn, None),
+            KeyBinding::new("cmd-+", ZoomIn, None),
+            KeyBinding::new("ctrl-+", ZoomIn, None),
+            KeyBinding::new("cmd--", ZoomOut, None),
+            KeyBinding::new("ctrl--", ZoomOut, None),
+            KeyBinding::new("cmd-0", ResetZoom, None),
+            KeyBinding::new("ctrl-0", ResetZoom, None),
         ]);
-        cx.set_menus(vec![Menu {
-            name: "FastDB".into(),
-            items: vec![
-                MenuItem::action("About FastDB", About),
-                MenuItem::separator(),
-                MenuItem::action("Check for Updates...", CheckForUpdates),
-                MenuItem::separator(),
-                MenuItem::os_submenu("Services", SystemMenuType::Services),
-                MenuItem::separator(),
-                MenuItem::action("Quit FastDB", Quit),
-            ],
-        }]);
+        cx.set_menus(vec![
+            Menu {
+                name: "FastDB".into(),
+                items: vec![
+                    MenuItem::action("About FastDB", About),
+                    MenuItem::separator(),
+                    MenuItem::action("Check for Updates...", CheckForUpdates),
+                    MenuItem::separator(),
+                    MenuItem::os_submenu("Services", SystemMenuType::Services),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit FastDB", Quit),
+                ],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![
+                    MenuItem::action("Toggle Theme", ToggleTheme),
+                    MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                    MenuItem::separator(),
+                    MenuItem::action("Zoom In (Editor)", ZoomIn),
+                    MenuItem::action("Zoom Out (Editor)", ZoomOut),
+                    MenuItem::action("Reset Zoom (Editor)", ResetZoom),
+                ],
+            },
+        ]);
 
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {

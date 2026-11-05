@@ -13,7 +13,7 @@ use crate::line_input::{PickAction, pick_action};
 use crate::text_edit::{TextClipboard, TextCommand, TextTarget, dispatch};
 
 use crate::layout::{
-    CODE_PADDING, EditorLayout, GUTTER_WIDTH, LINE_HEIGHT, MONO_FONT, VERTICAL_PADDING, reveal_axis,
+    CODE_PADDING, EditorLayout, GUTTER_WIDTH, MONO_FONT, VERTICAL_PADDING, reveal_axis,
 };
 
 /// Reports mouse presses and drags at `(line, col)`; `col` may be past the
@@ -27,6 +27,8 @@ pub struct SqlEditorView {
     pub buffer: RopeyBuffer,
     pub parser: Option<SqlParser>,
     pub theme: Theme,
+    pub font_size: f32,
+    pub font_family: Option<String>,
     pub schema_cache: Option<Arc<SchemaCache>>,
     pub completion_items: Vec<CompletionItem>,
     pub selected_completion: usize,
@@ -48,6 +50,8 @@ impl SqlEditorView {
             buffer: RopeyBuffer::new(initial_code),
             parser: SqlParser::new(),
             theme,
+            font_size: 13.0,
+            font_family: None,
             schema_cache,
             completion_items: Vec::new(),
             selected_completion: 0,
@@ -58,6 +62,25 @@ impl SqlEditorView {
             layout: EditorLayout::default(),
             line_drag_anchor: None,
         }
+    }
+
+    pub fn with_font(mut self, font_size: f32, font_family: Option<String>) -> Self {
+        self.font_size = font_size.clamp(9.0, 32.0);
+        self.font_family = font_family;
+        self
+    }
+
+    pub fn set_font(&mut self, font_size: f32, font_family: Option<String>) {
+        let size = font_size.clamp(9.0, 32.0);
+        if (self.font_size - size).abs() > f32::EPSILON || self.font_family != font_family {
+            self.font_size = size;
+            self.font_family = font_family;
+            self.layout.invalidate();
+        }
+    }
+
+    pub fn line_height(&self) -> f32 {
+        (self.font_size * 1.5).round().max(16.0)
     }
 
     pub fn select_all(&mut self) {
@@ -353,8 +376,16 @@ impl SqlEditorView {
         window: &mut Window,
     ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
+        let font_size = self.font_size.clamp(9.0, 32.0);
+        let font_family_shared: SharedString = self
+            .font_family
+            .clone()
+            .unwrap_or_else(|| MONO_FONT.into())
+            .into();
+        let line_height = self.line_height();
         let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
-        self.layout.update(&self.buffer, window);
+        self.layout
+            .update(&self.buffer, window, font_size, self.font_family.as_deref());
         let content_width = self.layout.content_width();
         if std::mem::take(&mut self.caret_moved) {
             let viewport = self.scroll_handle.bounds().size;
@@ -364,7 +395,7 @@ impl SqlEditorView {
                 + self
                     .layout
                     .prefix_width(&self.buffer, cursor_line, cursor_col);
-            let y = VERTICAL_PADDING + cursor_line as f32 * LINE_HEIGHT;
+            let y = VERTICAL_PADDING + cursor_line as f32 * line_height;
             self.scroll_handle.set_offset(point(
                 px(reveal_axis(
                     offset.x.into(),
@@ -376,9 +407,9 @@ impl SqlEditorView {
                 px(reveal_axis(
                     offset.y.into(),
                     y,
-                    y + LINE_HEIGHT,
+                    y + line_height,
                     viewport.height.into(),
-                    self.buffer.line_count() as f32 * LINE_HEIGHT + VERTICAL_PADDING * 2.0,
+                    self.buffer.line_count() as f32 * line_height + VERTICAL_PADDING * 2.0,
                 )),
             ));
         }
@@ -410,6 +441,8 @@ impl SqlEditorView {
                 &on_pick,
                 &theme,
                 content_width,
+                font_size,
+                line_height,
             ));
         }
 
@@ -422,15 +455,15 @@ impl SqlEditorView {
             .min_h_0()
             .bg(theme.bg_editor)
             .text_color(theme.text_primary)
-            .font_family(MONO_FONT)
+            .font_family(font_family_shared)
             .font_weight(FontWeight::NORMAL)
-            .text_size(px(13.0))
+            .text_size(px(font_size))
             .overflow_hidden()
             .child(lines);
 
         if focused && self.show_completions && !self.completion_items.is_empty() {
             let scroll_y = f32::from(self.scroll_handle.offset().y);
-            let top = (cursor_line as f32 + 1.0) * LINE_HEIGHT + 4.0 + scroll_y;
+            let top = (cursor_line as f32 + 1.0) * line_height + 4.0 + scroll_y;
             let left = GUTTER_WIDTH
                 + CODE_PADDING
                 + self
@@ -620,6 +653,7 @@ fn caret_bar(visible: bool) -> AnyElement {
 
 /// One editor line: its number in the gutter, then one cell per char. Clicking the left or
 /// right half of a char reports the caret position before or after it through `on_pick`.
+#[allow(clippy::too_many_arguments)]
 fn render_line(
     line: usize,
     content: &str,
@@ -628,6 +662,8 @@ fn render_line(
     on_pick: &EditorPick,
     theme: &Theme,
     content_width: f32,
+    font_size: f32,
+    line_height: f32,
 ) -> AnyElement {
     let caret_col = caret.map(|(col, _)| col);
     let caret_visible = caret.is_some_and(|(_, visible)| visible);
@@ -706,7 +742,7 @@ fn render_line(
         .flex_none()
         .min_w_full()
         .w(px(content_width))
-        .h(px(LINE_HEIGHT))
+        .h(px(line_height))
         .child(
             div()
                 .flex()
@@ -719,7 +755,7 @@ fn render_line(
                 .bg(theme.bg_surface)
                 .border_r_1()
                 .border_color(theme.border)
-                .text_size(px(12.0))
+                .text_size(px((font_size - 1.0).max(9.0)))
                 .text_color(if caret_col.is_some() {
                     theme.text_accent
                 } else {

@@ -300,6 +300,7 @@ impl Workspace {
                             );
                         } else {
                             this.allow_quit = true;
+                            this.save_session();
                             if restart {
                                 crate::updater::restart_application();
                             } else {
@@ -322,6 +323,7 @@ impl Workspace {
         self.filter_builder = None;
         self.script_chooser = None;
         self.script_action = None;
+        self.save_session();
         self.save_then(
             self.tabs.iter().map(|t| t.id).collect(),
             AfterSave::Quit,

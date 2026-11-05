@@ -3,7 +3,6 @@ use crate::buffer::RopeyBuffer;
 use gpui::*;
 use std::collections::HashMap;
 
-pub(super) const LINE_HEIGHT: f32 = 20.0;
 pub(super) const GUTTER_WIDTH: f32 = 48.0;
 pub(super) const CODE_PADDING: f32 = 12.0;
 pub(super) const VERTICAL_PADDING: f32 = 4.0;
@@ -12,16 +11,33 @@ pub(super) const MONO_FONT: &str = ".AppleSystemUIFontMonospaced, Menlo, monospa
 #[derive(Default)]
 pub(super) struct EditorLayout {
     revision: Option<u64>,
+    font_size: Option<f32>,
+    font_family: Option<String>,
     pub widths: Vec<f32>,
     glyphs: HashMap<char, f32>,
 }
 impl EditorLayout {
-    pub fn update(&mut self, buffer: &RopeyBuffer, window: &Window) {
-        if self.revision == Some(buffer.revision()) {
+    pub fn update(
+        &mut self,
+        buffer: &RopeyBuffer,
+        window: &Window,
+        font_size: f32,
+        font_family: Option<&str>,
+    ) {
+        let size = font_size.clamp(9.0, 32.0);
+        let family = font_family.unwrap_or(MONO_FONT);
+        if self.revision == Some(buffer.revision())
+            && self.font_size == Some(size)
+            && self.font_family.as_deref() == Some(family)
+        {
             return;
         }
+        self.font_size = Some(size);
+        self.font_family = Some(family.to_string());
+        self.glyphs.clear();
+        let family_shared: SharedString = family.to_string().into();
         let font = Font {
-            family: MONO_FONT.into(),
+            family: family_shared,
             weight: FontWeight::NORMAL,
             ..window.text_style().font()
         };
@@ -50,7 +66,7 @@ impl EditorLayout {
                             f32::from(
                                 window
                                     .text_system()
-                                    .shape_line(text, px(13.0), &[run], None)
+                                    .shape_line(text, px(size), &[run], None)
                                     .width,
                             )
                         })
@@ -59,6 +75,12 @@ impl EditorLayout {
             })
             .collect();
         self.revision = Some(buffer.revision());
+    }
+
+    pub fn invalidate(&mut self) {
+        self.revision = None;
+        self.glyphs.clear();
+        self.widths.clear();
     }
     pub fn prefix_width(&self, buffer: &RopeyBuffer, line: usize, col: usize) -> f32 {
         buffer
