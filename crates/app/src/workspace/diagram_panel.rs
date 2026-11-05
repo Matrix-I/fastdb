@@ -257,6 +257,17 @@ impl Workspace {
                     theme.border
                 })
                 .bg(theme.bg_surface)
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, _| {
+                        if event.click_count == 1
+                            && let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id)
+                        {
+                            tab.diagram.drag = Some((i, event.position, card_x, card_y));
+                        }
+                    }),
+                )
                 .child(
                     div()
                         .h(px(HEADER * zoom))
@@ -276,10 +287,6 @@ impl Workspace {
                                     && let Some(owner) = &owner
                                 {
                                     this.query_table(owner, &schema, &table, cx);
-                                } else if event.click_count == 1
-                                    && let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id)
-                                {
-                                    tab.diagram.drag = Some((i, event.position, card_x, card_y));
                                 }
                             }),
                         )
@@ -422,7 +429,7 @@ impl Workspace {
             let f = &e.fk;
             format!("{}: {}.{}.{} → {}.{}.{}", f.name, f.source_schema, f.source_table,
                 f.source_column, f.target_schema, f.target_table, f.target_column)
-        }).unwrap_or_else(|| "FK arrows point to referenced columns · Scroll both axes · Cmd/Ctrl + scroll or +/− to zoom · Click a column for properties · Middle-drag to pan · Drag a table header to move · Double-click a table to open".into());
+        }).unwrap_or_else(|| "FK arrows point to referenced columns · Scroll both axes · Cmd/Ctrl + scroll or +/− to zoom · Click a column for properties · Middle-drag to pan · Drag anywhere on a table to move · Double-click a table to open".into());
         if let Some((node, column)) = self.tabs[index].diagram.selected_column
             && let Some(node) = graph.nodes.get(node)
             && let Some(c) = node.columns.get(column)
@@ -530,5 +537,20 @@ fn paint_links(
         if let Ok(path) = path.build() {
             window.paint_path(path, if selected == Some(i) { accent } else { color });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn drag_handler_covers_the_whole_table_card() {
+        let source = include_str!("diagram_panel.rs");
+        let card = source.split("let mut card = div()").nth(1).unwrap();
+        let (card_handlers, children) = card.split_once(".child(").unwrap();
+        assert!(card_handlers.contains(".on_mouse_down("));
+        assert!(card_handlers.contains("tab.diagram.drag = Some("));
+        let header = children.split("if node.columns.is_empty()").next().unwrap();
+        assert!(header.contains("this.query_table("));
+        assert!(!header.contains("tab.diagram.drag = Some("));
     }
 }
