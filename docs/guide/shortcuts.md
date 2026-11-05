@@ -14,5 +14,10 @@
 | `Enter` (in filter bar) | `Enter` (in filter bar) | Apply the filter and re-run |
 | `Esc` (in filter bar) | `Esc` (in filter bar) | Leave the filter bar |
 | `Cmd + W` | `Ctrl + W` | Close the active tab |
+| `Cmd + Shift + T` | `Ctrl + Shift + T` | Toggle theme (Dark / Light) |
+| `Cmd + B` | `Ctrl + B` | Toggle navigator sidebar visibility |
+| `Cmd + =` / `Cmd + +` | `Ctrl + =` / `Ctrl + +` | Zoom in SQL editor font |
+| `Cmd + -` | `Ctrl + -` | Zoom out SQL editor font |
+| `Cmd + 0` | `Ctrl + 0` | Reset SQL editor zoom (13px) |
 | `Cmd + Q` | `Ctrl + Q` | Quit |
 | `Cmd + A / C / X / V` | `Ctrl + A / C / X / V` | Select all, copy, cut, paste in text fields |
