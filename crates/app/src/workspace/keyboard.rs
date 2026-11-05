@@ -282,11 +282,15 @@ impl Workspace {
                 self.form.active_field =
                     match (self.form.selected_driver_kind, self.form.active_field) {
                         (DbDriverKind::Sqlite, None) => Some(FormField::Name),
-                        (DbDriverKind::Sqlite, Some(FormField::Name)) => Some(FormField::Database),
+                        (_, Some(FormField::Name)) => Some(FormField::ConnectionGroup),
+                        (_, Some(FormField::ConnectionGroup)) => Some(FormField::ConnectionColor),
+                        (DbDriverKind::Sqlite, Some(FormField::ConnectionColor)) => {
+                            Some(FormField::Database)
+                        }
                         (DbDriverKind::Sqlite, Some(FormField::Database)) => Some(FormField::Name),
                         (DbDriverKind::Sqlite, _) => Some(FormField::Database),
                         (_, None) => Some(FormField::Name),
-                        (_, Some(FormField::Name)) => Some(FormField::Host),
+                        (_, Some(FormField::ConnectionColor)) => Some(FormField::Host),
                         (_, Some(FormField::Host)) => Some(FormField::Port),
                         (_, Some(FormField::Port)) => Some(FormField::Database),
                         (_, Some(FormField::Database)) => Some(FormField::User),
@@ -294,25 +298,75 @@ impl Workspace {
                         (_, Some(FormField::Password)) if self.form.form_tls_enabled => {
                             Some(FormField::TlsCa)
                         }
-                        (_, Some(FormField::Password | FormField::TlsCa)) => Some(FormField::Name),
+                        (_, Some(FormField::Password | FormField::TlsCa))
+                            if self.form.shows_client_identity() =>
+                        {
+                            Some(FormField::ClientArchive)
+                        }
+                        (_, Some(FormField::ClientArchive)) => {
+                            Some(FormField::ClientArchivePassword)
+                        }
+                        (
+                            _,
+                            Some(
+                                FormField::Password
+                                | FormField::TlsCa
+                                | FormField::ClientArchivePassword,
+                            ),
+                        ) => Some(FormField::ConnectTimeout),
+                        (_, Some(FormField::ConnectTimeout))
+                            if self.form.selected_driver_kind == DbDriverKind::Postgres
+                                || !self.form.application_name.is_empty() =>
+                        {
+                            Some(FormField::ApplicationName)
+                        }
+                        (_, Some(FormField::ConnectTimeout | FormField::ApplicationName))
+                            if self.form.ssh.enabled =>
+                        {
+                            Some(FormField::SshHost)
+                        }
+                        (_, Some(FormField::SshHost)) => Some(FormField::SshPort),
+                        (_, Some(FormField::SshPort)) => Some(FormField::SshUser),
+                        (_, Some(FormField::SshUser)) => Some(FormField::SshFingerprint),
+                        (_, Some(FormField::SshFingerprint)) => Some(FormField::SshKey),
+                        (_, Some(FormField::SshKey)) => Some(FormField::SshSecret),
+                        _ => Some(FormField::Name),
                     };
                 cx.notify();
                 return;
             }
             if let Some(field) = self.form.active_field {
+                if matches!(
+                    field,
+                    FormField::SshSecret | FormField::ClientArchivePassword
+                ) && (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                    && (event.keystroke.key.eq_ignore_ascii_case("c")
+                        || event.keystroke.key.eq_ignore_ascii_case("x"))
+                {
+                    return;
+                }
                 let mut caret = self.form.field_cursor;
                 let mut anchor = self.form.field_anchor;
                 let mut history = self.form.form_history.remove(&field).unwrap_or_default();
+                let text = self.field_value_mut(field);
+                let before = text.clone();
                 let input = LineInput {
-                    text: self.field_value_mut(field),
+                    text,
                     caret: &mut caret,
                     anchor: &mut anchor,
-                    digits_only: field == FormField::Port,
+                    digits_only: matches!(
+                        field,
+                        FormField::Port | FormField::SshPort | FormField::ConnectTimeout
+                    ),
                     history: &mut history,
                 };
                 let consumed = handle_line_key(input, &event.keystroke, cx);
                 self.form.form_history.insert(field, history);
                 if consumed {
+                    if *self.field_value_mut(field) != before {
+                        self.form.test_result = None;
+                        self.form.invalidate();
+                    }
                     self.form.field_cursor = caret;
                     self.form.field_anchor = anchor;
                     self.input.cursor_visible = true;

@@ -2,8 +2,12 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use mem_engine::{ColumnMeta, DataType};
 use parking_lot::Mutex;
-use rusqlite::Connection;
 use rusqlite::types::ValueRef;
+use rusqlite::{
+    Connection, OpenFlags,
+    hooks::{AuthAction, AuthContext, Authorization},
+};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,22 +20,82 @@ pub struct SqliteDriver {
     pub config: ConnectionConfig,
     conn: Arc<Mutex<Connection>>,
     interrupt_handle: Arc<Mutex<rusqlite::InterruptHandle>>,
-    session_database: String,
+    session_database: PathBuf,
+    read_only: bool,
+}
+
+fn open_connection(database: &Path, read_only: bool) -> Result<Connection> {
+    if !read_only {
+        return Ok(Connection::open(database)?);
+    }
+    let conn = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.authorizer(Some(authorize_read_only));
+    Ok(conn)
+}
+
+fn authorize_read_only(context: AuthContext<'_>) -> Authorization {
+    let allowed = match context.action {
+        AuthAction::Select
+        | AuthAction::Read { .. }
+        | AuthAction::Recursive
+        | AuthAction::Transaction { .. }
+        | AuthAction::Savepoint { .. } => true,
+        AuthAction::Function { function_name } => {
+            !function_name.eq_ignore_ascii_case("load_extension")
+        }
+        AuthAction::Pragma {
+            pragma_name,
+            pragma_value,
+        } => {
+            let pragma = pragma_name.to_ascii_lowercase();
+            matches!(
+                pragma.as_str(),
+                "table_info"
+                    | "table_xinfo"
+                    | "foreign_key_list"
+                    | "index_list"
+                    | "index_info"
+                    | "index_xinfo"
+            ) || (pragma_value.is_none()
+                && matches!(
+                    pragma.as_str(),
+                    "query_only" | "database_list" | "schema_version" | "user_version"
+                ))
+        }
+        _ => false,
+    };
+    if allowed {
+        Authorization::Allow
+    } else {
+        Authorization::Deny
+    }
 }
 
 impl SqliteDriver {
     pub fn new(config: ConnectionConfig) -> Result<Self> {
         // Each driver owns a unique in-memory database; tab connections share its
         // main schema while keeping transaction state and TEMP objects isolated.
-        let session_database = if config.database == ":memory:" || config.database.is_empty() {
-            format!(
+        let in_memory = config.database == ":memory:" || config.database.is_empty();
+        anyhow::ensure!(
+            !config.read_only || !in_memory,
+            "Read-only SQLite requires an existing database file"
+        );
+        let read_only = config.read_only;
+        let session_database = if in_memory {
+            PathBuf::from(format!(
                 "file:fastdb-{}?mode=memory&cache=shared",
                 uuid::Uuid::new_v4()
-            )
+            ))
+        } else if read_only {
+            // Capture the path once and bypass SQLite URI options.
+            std::path::absolute(&config.database)?
         } else {
-            config.database.clone()
+            PathBuf::from(&config.database)
         };
-        let conn = Connection::open(&session_database)
+        let conn = open_connection(&session_database, read_only)
             .with_context(|| format!("Failed to open SQLite database: {}", config.database))?;
 
         let interrupt_handle = conn.get_interrupt_handle();
@@ -41,6 +105,7 @@ impl SqliteDriver {
             conn: Arc::new(Mutex::new(conn)),
             interrupt_handle: Arc::new(Mutex::new(interrupt_handle)),
             session_database,
+            read_only,
         })
     }
 
@@ -139,8 +204,12 @@ fn sqlite_decl_data_type(decl_type: &str) -> DataType {
 
 #[async_trait]
 impl DatabaseDriver for SqliteDriver {
+    fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     fn supports_transfer(&self) -> bool {
-        true
+        !self.is_read_only()
     }
 
     fn supports_script_session(&self) -> bool {
@@ -149,9 +218,10 @@ impl DatabaseDriver for SqliteDriver {
 
     async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
         let database = self.session_database.clone();
+        let read_only = self.is_read_only();
         crate::get_runtime()
             .spawn_blocking(move || {
-                let connection = Connection::open(database)?;
+                let connection = open_connection(&database, read_only)?;
                 Ok(Arc::new(script::SqliteScriptSession::new(connection))
                     as Arc<dyn crate::script::ScriptSession>)
             })
@@ -210,6 +280,7 @@ impl DatabaseDriver for SqliteDriver {
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
+        anyhow::ensure!(!self.is_read_only(), "This SQLite connection is read-only");
         let conn = Arc::clone(&self.conn);
         let statements = statements.to_vec();
         crate::get_runtime()
@@ -320,6 +391,7 @@ impl DatabaseDriver for SqliteDriver {
     }
 
     async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
+        anyhow::ensure!(!self.is_read_only(), "This SQLite connection is read-only");
         let conn = self.conn.lock();
         conn.execute_batch(sql)?;
         Ok(())

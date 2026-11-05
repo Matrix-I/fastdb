@@ -142,12 +142,24 @@ pub enum DataViewMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormField {
     Name,
+    ConnectionGroup,
+    ConnectionColor,
     Host,
     Port,
     Database,
     User,
     Password,
     TlsCa,
+    ClientArchive,
+    ClientArchivePassword,
+    ConnectTimeout,
+    ApplicationName,
+    SshHost,
+    SshPort,
+    SshUser,
+    SshFingerprint,
+    SshKey,
+    SshSecret,
 }
 
 pub struct Workspace {

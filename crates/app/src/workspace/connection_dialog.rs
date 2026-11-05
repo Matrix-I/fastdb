@@ -89,6 +89,366 @@ impl Workspace {
             .into_any_element()
     }
 
+    fn render_read_only_setting(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.form.read_only && !self.form.selected_driver_kind.supports_read_only() {
+            return div().into_any_element();
+        }
+        div()
+            .id("toggle-read-only")
+            .cursor_pointer()
+            .text_size(px(12.0))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.form.read_only = !this.form.read_only;
+                this.form.test_result = None;
+                this.form.invalidate();
+                cx.notify();
+            }))
+            .child(if self.form.read_only {
+                "☑ Read-only"
+            } else {
+                "☐ Read-only"
+            })
+            .into_any_element()
+    }
+
+    fn render_connection_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let mut fields = div().flex().gap_2();
+        for (field, label, value, placeholder) in [
+            (
+                FormField::ConnectionGroup,
+                "Navigator group",
+                self.form.connection_group.as_str(),
+                "Optional, e.g. Development",
+            ),
+            (
+                FormField::ConnectionColor,
+                "Navigator color",
+                self.form.connection_color.as_str(),
+                "Optional, e.g. #d29922",
+            ),
+        ] {
+            let active = self.form.active_field == Some(field);
+            let pick = self.field_caret_pick(field, cx);
+            fields = fields.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_secondary)
+                            .child(label),
+                    )
+                    .child(
+                        ui_editor::line_input::pick_surface(div(), usize::MAX, &pick)
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(theme.bg_app)
+                            .border_1()
+                            .border_color(if active {
+                                theme.border_focused
+                            } else {
+                                theme.border
+                            })
+                            .text_size(px(12.0))
+                            .cursor_text()
+                            .overflow_hidden()
+                            .child(render_field_content(
+                                value,
+                                placeholder,
+                                active,
+                                self.form.field_anchor,
+                                self.form.field_cursor,
+                                self.input.cursor_visible,
+                                theme,
+                                &pick,
+                            )),
+                    ),
+            );
+        }
+        fields.into_any_element()
+    }
+
+    fn render_client_identity(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.form.shows_client_identity() {
+            return div().into_any_element();
+        }
+        let masked = "•".repeat(self.form.client_archive_password.chars().count());
+        let theme = &self.theme;
+        let mut fields = div().flex().gap_2();
+        for (field, label, value, placeholder) in [
+            (
+                FormField::ClientArchive,
+                "PKCS#12 client identity",
+                self.form.client_archive.as_str(),
+                "Optional .p12 or .pfx path",
+            ),
+            (
+                FormField::ClientArchivePassword,
+                "Archive password",
+                masked.as_str(),
+                "Optional",
+            ),
+        ] {
+            let active = self.form.active_field == Some(field);
+            let pick = self.field_caret_pick(field, cx);
+            fields = fields.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_secondary)
+                            .child(label),
+                    )
+                    .child(
+                        ui_editor::line_input::pick_surface(div(), usize::MAX, &pick)
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(theme.bg_app)
+                            .border_1()
+                            .border_color(if active {
+                                theme.border_focused
+                            } else {
+                                theme.border
+                            })
+                            .text_size(px(12.0))
+                            .cursor_text()
+                            .overflow_hidden()
+                            .child(render_field_content(
+                                value,
+                                placeholder,
+                                active,
+                                self.form.field_anchor,
+                                self.form.field_cursor,
+                                self.input.cursor_visible,
+                                theme,
+                                &pick,
+                            )),
+                    ),
+            );
+        }
+        fields.into_any_element()
+    }
+
+    fn render_connection_timeout(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.form.selected_driver_kind == DbDriverKind::Sqlite {
+            return div().into_any_element();
+        }
+        let theme = &self.theme;
+        let field = FormField::ConnectTimeout;
+        let active = self.form.active_field == Some(field);
+        let pick = self.field_caret_pick(field, cx);
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_size(px(12.0))
+            .child("Connection timeout (seconds)")
+            .child(
+                ui_editor::line_input::pick_surface(div(), usize::MAX, &pick)
+                    .w(px(64.0))
+                    .px_2()
+                    .py_1()
+                    .cursor_text()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if active {
+                        theme.border_focused
+                    } else {
+                        theme.border
+                    })
+                    .bg(theme.bg_app)
+                    .child(render_field_content(
+                        &self.form.connect_timeout,
+                        "10",
+                        active,
+                        self.form.field_anchor,
+                        self.form.field_cursor,
+                        self.input.cursor_visible,
+                        theme,
+                        &pick,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_application_name(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.form.selected_driver_kind != DbDriverKind::Postgres
+            && self.form.application_name.is_empty()
+        {
+            return div().into_any_element();
+        }
+        let theme = &self.theme;
+        let field = FormField::ApplicationName;
+        let active = self.form.active_field == Some(field);
+        let pick = self.field_caret_pick(field, cx);
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_size(px(12.0))
+            .child("PostgreSQL application name")
+            .child(
+                ui_editor::line_input::pick_surface(div(), usize::MAX, &pick)
+                    .w(px(240.0))
+                    .px_2()
+                    .py_1()
+                    .cursor_text()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if active {
+                        theme.border_focused
+                    } else {
+                        theme.border
+                    })
+                    .bg(theme.bg_app)
+                    .child(render_field_content(
+                        &self.form.application_name,
+                        "Optional",
+                        active,
+                        self.form.field_anchor,
+                        self.form.field_cursor,
+                        self.input.cursor_visible,
+                        theme,
+                        &pick,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_ssh_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.form.selected_driver_kind.supports_ssh() && !self.form.ssh.enabled {
+            return div().into_any_element();
+        }
+        let ssh = &self.form.ssh;
+        let mut section = div().flex().flex_col().gap_2().child(
+            div()
+                .id("toggle-ssh")
+                .cursor_pointer()
+                .text_size(px(12.0))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.form.invalidate();
+                    this.form.test_result = None;
+                    this.form.ssh.enabled = !this.form.ssh.enabled;
+                    this.form.active_field = Some(if this.form.ssh.enabled {
+                        FormField::SshHost
+                    } else {
+                        FormField::Password
+                    });
+                    this.form.field_cursor = usize::MAX;
+                    this.form.field_anchor = None;
+                    cx.notify();
+                }))
+                .child(if ssh.enabled {
+                    "☑ Connect through SSH"
+                } else {
+                    "☐ Connect through SSH"
+                }),
+        );
+        if ssh.enabled {
+            let masked = "•".repeat(ssh.secret.chars().count());
+            for row in [
+                [
+                    (
+                        FormField::SshHost,
+                        "SSH host",
+                        ssh.host.as_str(),
+                        "jump.example.com",
+                    ),
+                    (FormField::SshPort, "SSH port", ssh.port.as_str(), "22"),
+                ],
+                [
+                    (
+                        FormField::SshUser,
+                        "SSH username",
+                        ssh.user.as_str(),
+                        "operator",
+                    ),
+                    (
+                        FormField::SshFingerprint,
+                        "Trusted host key fingerprint",
+                        ssh.fingerprint.as_str(),
+                        "SHA256:…",
+                    ),
+                ],
+                [
+                    (
+                        FormField::SshKey,
+                        "Private key path",
+                        ssh.key_path.as_str(),
+                        "Optional for password authentication",
+                    ),
+                    (
+                        FormField::SshSecret,
+                        "SSH password or key passphrase",
+                        masked.as_str(),
+                        "Optional for an unencrypted key",
+                    ),
+                ],
+            ] {
+                let mut fields = div().flex().gap_2();
+                for (field, label, value, placeholder) in row {
+                    let theme = &self.theme;
+                    let active = self.form.active_field == Some(field);
+                    let pick = self.field_caret_pick(field, cx);
+                    fields = fields.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(label),
+                            )
+                            .child(
+                                ui_editor::line_input::pick_surface(div(), usize::MAX, &pick)
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(theme.bg_app)
+                                    .border_1()
+                                    .border_color(if active {
+                                        theme.border_focused
+                                    } else {
+                                        theme.border
+                                    })
+                                    .text_size(px(12.0))
+                                    .cursor_text()
+                                    .overflow_hidden()
+                                    .child(render_field_content(
+                                        value,
+                                        placeholder,
+                                        active,
+                                        self.form.field_anchor,
+                                        self.form.field_cursor,
+                                        self.input.cursor_visible,
+                                        theme,
+                                        &pick,
+                                    )),
+                            ),
+                    );
+                }
+                section = section.child(fields);
+            }
+        }
+        section.into_any_element()
+    }
+
     fn render_provider_picker(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = &self.theme;
         let mut providers = div().flex().flex_wrap().gap_2();
@@ -168,7 +528,10 @@ impl Workspace {
             .justify_center()
             .child(
                 div()
+                    .id("connection-dialog-scroll")
                     .w(px(680.0))
+                    .max_h(relative(0.92))
+                    .overflow_y_scroll()
                     .bg(theme.bg_surface)
                     .border_1()
                     .border_color(theme.border_focused)
@@ -451,7 +814,13 @@ impl Workspace {
                                 div()
                             })
                     )
+                    .child(self.render_connection_appearance(cx))
+                    .child(self.render_read_only_setting(cx))
                     .child(self.render_tls_settings(cx))
+                    .child(self.render_client_identity(cx))
+                    .child(self.render_connection_timeout(cx))
+                    .child(self.render_application_name(cx))
+                    .child(self.render_ssh_settings(cx))
                     // Test Result Notification Banner
                     .child({
                         match &self.form.test_result {

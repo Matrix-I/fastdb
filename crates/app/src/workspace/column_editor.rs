@@ -327,6 +327,11 @@ impl Workspace {
             cx.notify();
             return;
         };
+        if driver.is_read_only() {
+            self.tabs[index].last_error = Some("This connection is read-only".into());
+            cx.notify();
+            return;
+        }
         let tab = &mut self.tabs[index];
         let Some(c) = &mut tab.column_editor else {
             return;

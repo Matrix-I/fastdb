@@ -32,6 +32,7 @@ struct Command {
 
 pub(super) struct MySqlScriptSession {
     commands: tokio::sync::mpsc::Sender<Command>,
+    read_only: bool,
     close: tokio::sync::watch::Sender<bool>,
     finished: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     closed: Arc<AtomicBool>,
@@ -39,7 +40,11 @@ pub(super) struct MySqlScriptSession {
 }
 
 impl MySqlScriptSession {
-    pub(super) fn new(connection: mysql_async::Conn) -> Self {
+    pub(super) fn new(
+        connection: mysql_async::Conn,
+        tunnel: Option<crate::SshTunnel>,
+        read_only: bool,
+    ) -> Self {
         let (commands, receiver) = tokio::sync::mpsc::channel(COMMAND_CAPACITY);
         let (close, closing) = tokio::sync::watch::channel(false);
         let (completed, finished) = tokio::sync::watch::channel(None);
@@ -48,12 +53,22 @@ impl MySqlScriptSession {
         let closed = Arc::new(AtomicBool::new(false));
         let worker_closed = closed.clone();
         crate::get_runtime().spawn(async move {
-            let result = worker(connection, receiver, closing, state, worker_closed.clone()).await;
+            let result = worker(
+                connection,
+                receiver,
+                closing,
+                state,
+                worker_closed.clone(),
+                read_only,
+            )
+            .await;
+            drop(tunnel);
             worker_closed.store(true, Ordering::SeqCst);
             completed.send_replace(Some(result.map_err(|error| format!("{error:#}"))));
         });
         Self {
             commands,
+            read_only,
             close,
             finished,
             closed,
@@ -119,6 +134,7 @@ impl ScriptSession for MySqlScriptSession {
     }
 
     async fn insert_batch(&self, batch: crate::transfer::batch::Batch) -> Result<u64> {
+        anyhow::ensure!(!self.read_only, "{}", read_only::DENIED);
         self.dispatch(Action::Insert(batch)).await
     }
 
@@ -147,6 +163,7 @@ async fn worker(
     mut closing: tokio::sync::watch::Receiver<bool>,
     transaction: Arc<AtomicU8>,
     closed: Arc<AtomicBool>,
+    read_only: bool,
 ) -> Result<()> {
     let reason = loop {
         let command = tokio::select! {
@@ -162,7 +179,7 @@ async fn worker(
             _ = closing.changed() => None,
             result = async {
                 match command.action {
-                    Action::Sql { sql, events } => MySqlDriver::stream_connection(&mut connection, sql, events, None, Instant::now()).await.map(|_| 0),
+                    Action::Sql { sql, events } => MySqlDriver::stream_connection(&mut connection, sql, events, None, Instant::now(), read_only).await.map(|_| 0),
                     Action::Insert(batch) => {
                         let sql = batch.sql(crate::DbDriverKind::MySql)?;
                         let values = batch.into_values().map(|value| match value {

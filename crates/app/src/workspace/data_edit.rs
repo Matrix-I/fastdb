@@ -61,7 +61,11 @@ impl Workspace {
             && (tab.table_name.is_some() || self.editable_query_result(self.active_tab))
             && tab.reference_picker.is_none()
             && tab.grid.pager.is_some()
-            && self.tab_session(self.active_tab).driver.is_some()
+            && self
+                .tab_session(self.active_tab)
+                .driver
+                .as_ref()
+                .is_some_and(|driver| !driver.is_read_only())
     }
 
     /// Whether the active tab has staged edits waiting for Save or Cancel

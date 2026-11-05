@@ -608,3 +608,124 @@ fn value_edits_roundtrip_binary_json_xml_empty_and_null() {
         assert_eq!(driver.apply_row_changes(&sql).await.unwrap(), 1);
     });
 }
+
+#[test]
+fn postgres_connection_deadline_covers_a_stalled_startup_handshake() {
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+
+    db_wire::get_runtime().block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let driver = PostgresDriver::new(ConnectionConfig {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            use_unix_socket: false,
+            connect_timeout: Duration::from_millis(200),
+            ..Default::default()
+        });
+        let peer = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut startup = [0; 8];
+            socket.read_exact(&mut startup).await.unwrap();
+            // Hold the socket open without sending a PostgreSQL response.
+            std::future::pending::<()>().await;
+        };
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::select! {
+                result = driver.ping() => result,
+                _ = peer => unreachable!(),
+            }
+        })
+        .await
+        .expect("driver deadline did not stop the stalled handshake");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("PostgreSQL connection timed out")
+        );
+    });
+}
+
+#[test]
+fn postgres_read_only_blocks_native_and_disguised_writes() {
+    let Some(config) = test_config() else { return };
+    let _catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
+    db_wire::get_runtime().block_on(async {
+        let writer = PostgresDriver::new(config.clone());
+        let schema = format!("fastdb_ro_{}", uuid::Uuid::new_v4().simple());
+        writer.execute_schema_ddl(&format!("CREATE SCHEMA {schema}; CREATE TABLE {schema}.items (id int PRIMARY KEY); INSERT INTO {schema}.items VALUES (1)")).await.unwrap();
+        let reader = PostgresDriver::new(ConnectionConfig { read_only: true, ..config });
+        let result = async {
+            anyhow::ensure!(reader.is_read_only() && !reader.supports_transfer());
+            let (pager, _, _) = reader.execute_query("SHOW transaction_read_only").await?;
+            anyhow::ensure!(pager.get_cell(0, 0).as_deref() == Some(b"on".as_slice()));
+            let write = format!("WITH written AS (INSERT INTO {schema}.items VALUES (2) RETURNING id) SELECT id FROM written");
+            let error = reader.execute_query(&write).await.err().expect("write was accepted");
+            anyhow::ensure!(format!("{error:#}").contains("read-only transaction"));
+            anyhow::ensure!(reader.execute_schema_ddl(&format!("DROP TABLE {schema}.items")).await.is_err());
+            anyhow::ensure!(reader.apply_row_changes(&[format!("DELETE FROM {schema}.items")]).await.is_err());
+            let session = reader.open_script_session().await?;
+            let batch = db_wire::transfer::batch::Batch::new(
+                &schema,
+                "items",
+                vec!["id".into()],
+                vec![vec![db_wire::transfer::mapping::Value::Text("2".into())]],
+            )?;
+            anyhow::ensure!(session.insert_batch(batch).await.is_err());
+            let run = |sql: String| {
+                let session = &session;
+                async move {
+                    let (tx, _rx) = flume::bounded(16);
+                    session.execute_streaming(&sql, tx).await
+                }
+            };
+            run("SELECT set_config('default_transaction_read_only', 'off', false)".into()).await?;
+            for sql in ["BEGIN READ WRITE".to_owned(), write] {
+                anyhow::ensure!(run(sql).await.is_err());
+            }
+            run(format!("SET search_path TO {schema}")).await?;
+            run("BEGIN; ".into()).await?;
+            run("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ".into()).await?;
+            run("SAVEPOINT safe".into()).await?;
+            anyhow::ensure!(run("SET TRANSACTION READ WRITE".into()).await.is_err());
+            run(format!("/* outer /* nested */ comment */ SELECT id FROM {schema}.items")).await?;
+            run("ROLLBACK TO SAVEPOINT safe".into()).await?;
+            run("RELEASE SAVEPOINT safe".into()).await?;
+            run("ROLLBACK".into()).await?;
+            session.finish().await?;
+            let (pager, rows, _) = writer.execute_query(&format!("SELECT id FROM {schema}.items")).await?;
+            anyhow::ensure!(rows == 1 && pager.get_cell(0, 0).as_deref() == Some(b"1".as_slice()));
+            Ok::<_, anyhow::Error>(())
+        }.await;
+        writer.execute_schema_ddl(&format!("DROP SCHEMA {schema} CASCADE")).await.unwrap();
+        result.unwrap();
+    });
+}
+
+#[test]
+fn postgres_application_name_reaches_normal_and_script_connections() {
+    let Some(config) = test_config() else { return };
+    let driver = PostgresDriver::new(ConnectionConfig {
+        application_name: Some("FastDB reporting".into()),
+        ..config
+    });
+    db_wire::get_runtime().block_on(async {
+        let (pager, _, _) = driver.execute_query("SHOW application_name").await.unwrap();
+        assert_eq!(
+            pager.get_cell(0, 0).as_deref(),
+            Some(b"FastDB reporting".as_slice())
+        );
+        let session = driver.open_script_session().await.unwrap();
+        let (events, results) = flume::bounded(16);
+        session
+            .execute_streaming("SHOW application_name", events)
+            .await
+            .unwrap();
+        assert!(results.try_iter().any(|event| matches!(
+            event, db_wire::StreamEvent::SchemaReady(pager)
+                if pager.get_cell(0, 0).as_deref() == Some(b"FastDB reporting".as_slice())
+        )));
+        session.finish().await.unwrap();
+    });
+}

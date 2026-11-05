@@ -146,7 +146,26 @@ Oracle initially lists objects owned by the connected user. Schema constraints,
 indexes and primary-key enrichment are not implemented for these providers yet.
 Cancellation calls ODBC `SQLCancel`; responsiveness depends on the vendor driver.
 
+## SSH forwarding
+
+PostgreSQL, MySQL, and MariaDB use password or private-key authentication
+against a jump host pinned by its OpenSSH SHA256 fingerprint. The database
+endpoint is resolved from the jump host. TLS verification uses the database
+hostname, including for tunneled connections. The driver factory rejects SSH
+settings for SQLite and vendor ODBC providers.
+
+`cargo test --workspace --locked --lib ssh_` runs the SSH fixtures. Set
+`FASTDB_TEST_PG_PORT` and `FASTDB_TEST_MYSQL_PORT` and the usual optional
+credentials to exercise main and isolated script sessions with real databases.
+
 ## TLS
+
+PostgreSQL, MySQL, and MariaDB drivers accept an optional PKCS#12 client
+identity through `ConnectionConfig::tls_client_identity`. TLS must be enabled.
+The archive contains the client certificate and private key. The database
+server certificate and hostname are verified independently. The
+`ci/test-tls.sh` fixture verifies both normal and isolated script connections
+against PostgreSQL certificate authentication and MySQL `REQUIRE X509`.
 
 - SQL Server presets enable TLS. Certificate and hostname verification stay on;
   install private CAs in the driver/system trust store. The Root CA field is not

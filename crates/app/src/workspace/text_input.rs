@@ -68,13 +68,25 @@ impl Workspace {
 
     pub(super) fn field_value_mut(&mut self, field: FormField) -> &mut String {
         match field {
+            FormField::ConnectionGroup => &mut self.form.connection_group,
+            FormField::ConnectionColor => &mut self.form.connection_color,
             FormField::Name => &mut self.form.form_name,
             FormField::Host => &mut self.form.form_host,
             FormField::Port => &mut self.form.form_port,
             FormField::Database => &mut self.form.form_database,
             FormField::User => &mut self.form.form_user,
             FormField::Password => &mut self.form.form_password,
+            FormField::ApplicationName => &mut self.form.application_name,
+            FormField::ConnectTimeout => &mut self.form.connect_timeout,
+            FormField::ClientArchive => &mut self.form.client_archive,
+            FormField::ClientArchivePassword => &mut self.form.client_archive_password,
             FormField::TlsCa => &mut self.form.form_tls_ca_cert,
+            FormField::SshHost => &mut self.form.ssh.host,
+            FormField::SshPort => &mut self.form.ssh.port,
+            FormField::SshUser => &mut self.form.ssh.user,
+            FormField::SshFingerprint => &mut self.form.ssh.fingerprint,
+            FormField::SshKey => &mut self.form.ssh.key_path,
+            FormField::SshSecret => &mut self.form.ssh.secret,
         }
     }
 

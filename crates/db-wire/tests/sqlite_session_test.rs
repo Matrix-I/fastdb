@@ -134,3 +134,62 @@ fn sqlite_tab_runs_preserve_temp_state_and_owner_drop_rolls_back() {
         assert_eq!(count, 0);
     });
 }
+
+#[test]
+fn sqlite_read_only_blocks_writes_in_main_and_isolated_sessions() {
+    struct DatabaseFile(std::path::PathBuf);
+    impl Drop for DatabaseFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let file = DatabaseFile(
+        std::env::temp_dir().join(format!("fastdb-readonly-{}.sqlite", uuid::Uuid::new_v4())),
+    );
+    let initial = rusqlite::Connection::open(&file.0).unwrap();
+    initial
+        .execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY); INSERT INTO items VALUES (1)")
+        .unwrap();
+    drop(initial);
+    db_wire::get_runtime().block_on(async {
+        let mut driver = SqliteDriver::new(db_wire::ConnectionConfig {
+            driver: db_wire::DbDriverKind::Sqlite,
+            database: file.0.to_str().unwrap().into(),
+            read_only: true,
+            ..Default::default()
+        }).unwrap();
+        driver.config.read_only = false;
+        assert!(driver.is_read_only());
+        assert!(!driver.supports_transfer());
+        assert_eq!(driver.list_columns("main", "items").await.unwrap()[0].name, "id");
+        assert!(driver.execute_schema_ddl("DROP TABLE items").await.is_err());
+        assert!(driver.apply_row_changes(&["UPDATE items SET id=2 WHERE id=1".into()]).await.is_err());
+        let session = driver.open_script_session().await.unwrap();
+        assert!(driver.list_foreign_keys().await.unwrap().unwrap().is_empty());
+        let batch = db_wire::transfer::batch::Batch::new(
+            "main",
+            "items",
+            vec!["id".into()],
+            vec![vec![db_wire::transfer::mapping::Value::Text("2".into())]],
+        ).unwrap();
+        assert!(session.insert_batch(batch).await.is_err());
+        for sql in [
+            "INSERT INTO items VALUES (2)",
+            "CREATE TEMP TABLE scratch (id INTEGER)",
+            "ATTACH DATABASE ':memory:' AS writable",
+            "PRAGMA query_only = OFF",
+        ] {
+            let (tx, _rx) = flume::bounded(16);
+            assert!(session.execute_streaming(sql, tx).await.is_err(), "{sql}");
+            assert!(driver.execute_query(sql).await.is_err(), "{sql}");
+        }
+        assert!(execute(session.as_ref(), "SELECT id FROM items").await.iter().any(|event| matches!(
+            event, StreamEvent::SchemaReady(pager) if pager.get_cell(0, 0).as_deref() == Some(b"1".as_slice())
+        )));
+        session.finish().await.unwrap();
+        let (pager, rows, _) = driver.execute_query("SELECT id FROM items").await.unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(pager.get_cell(0, 0).as_deref(), Some(b"1".as_slice()));
+    });
+}
