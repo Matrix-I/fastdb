@@ -34,6 +34,7 @@ mod grid_clipboard;
 mod grid_paste;
 mod grid_references;
 mod grid_selection;
+mod import_modal;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
@@ -197,6 +198,7 @@ pub struct Workspace {
     object_browser: Option<object_browser::ObjectBrowser>,
     object_search: Option<object_search::ObjectSearch>,
     pub schema_action_modal: Option<schema_action_modal::SchemaActionModal>,
+    pub import_modal: Option<import_modal::ImportModal>,
     pub params_modal: Option<params_modal::ParameterBindingModal>,
     pub snippet_modal: Option<snippet_modal::SnippetModal>,
     pub script_chooser: Option<ScriptChooser>,
@@ -280,6 +282,7 @@ impl Workspace {
             object_browser: None,
             object_search: None,
             schema_action_modal: None,
+            import_modal: None,
             params_modal: None,
             snippet_modal: None,
             script_chooser: None,
@@ -572,6 +575,9 @@ impl Render for Workspace {
         }
         if self.schema_action_modal.is_some() {
             root = root.child(self.render_schema_action_modal(cx));
+        }
+        if self.import_modal.is_some() {
+            root = root.child(self.render_import_modal(cx));
         }
         if self.params_modal.is_some() {
             root = root.child(self.render_params_modal(cx));

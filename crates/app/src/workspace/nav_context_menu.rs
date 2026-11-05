@@ -78,6 +78,10 @@ enum NavMenuAction {
         schema: String,
         table: String,
     },
+    ImportCsv {
+        schema: String,
+        table: String,
+    },
     RenameTable {
         schema: String,
         table: String,
@@ -283,6 +287,17 @@ impl Workspace {
                         "View Table Data",
                         is_connected,
                         NavMenuAction::OpenData {
+                            schema: schema.clone(),
+                            table: table.clone(),
+                        },
+                        cx,
+                    ))
+                    .child(item(
+                        "nav-menu-table-import",
+                        "icons/table.svg",
+                        "Import CSV Data…",
+                        is_connected,
+                        NavMenuAction::ImportCsv {
                             schema: schema.clone(),
                             table: table.clone(),
                         },
@@ -495,6 +510,9 @@ impl Workspace {
 
             NavMenuAction::OpenData { schema, table } => {
                 self.query_table(conn_id, &schema, &table, cx);
+            }
+            NavMenuAction::ImportCsv { schema, table } => {
+                self.open_import_modal(conn_id, &schema, &table, cx);
             }
             NavMenuAction::RenameTable { schema, table } => {
                 self.open_schema_action(

@@ -93,6 +93,21 @@ impl Workspace {
             self.schema_action_modal_key(&event.keystroke, cx);
             return;
         }
+        if self.import_modal.is_some()
+            && !self.updates.read(cx).is_open()
+            && self.column_pending.is_none()
+        {
+            if event.keystroke.key == "escape" {
+                if let Some(m) = &mut self.import_modal
+                    && let Some(ctrl) = &m.control
+                {
+                    ctrl.cancel();
+                }
+                self.import_modal = None;
+                cx.notify();
+            }
+            return;
+        }
         if self.params_modal.is_some()
             && !self.updates.read(cx).is_open()
             && self.column_pending.is_none()
