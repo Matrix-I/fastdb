@@ -3,6 +3,16 @@ use gpui::prelude::FluentBuilder;
 
 pub(super) const TOP_BAR_HEIGHT: f32 = 38.0;
 
+fn handle_title_bar_click(event: &ClickEvent, zoom: impl FnOnce()) {
+    if let ClickEvent::Mouse(event) = event
+        && event.down.button == MouseButton::Left
+        && event.up.button == MouseButton::Left
+        && event.up.click_count == 2
+    {
+        zoom();
+    }
+}
+
 impl Workspace {
     /// Window title bar with connection actions and toolbar
     pub(super) fn render_top_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -26,6 +36,7 @@ impl Workspace {
         #[cfg(not(target_os = "macos"))]
         let top_bar_left_pad = 14.0;
         div()
+            .id("workspace-title-bar")
             .flex()
             .items_center()
             .w_full()
@@ -33,6 +44,9 @@ impl Workspace {
             .bg(theme.bg_surface)
             .border_b_1()
             .border_color(theme.border)
+            .on_click(|event, window, _| {
+                handle_title_bar_click(event, || window.zoom_window());
+            })
             // Left section spans the navigator so the tab strip starts where the center area does
             .child(
                 div()
@@ -102,6 +116,7 @@ impl Workspace {
                             })
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
                                 this.active_tab = i;
                                 this.tab_scroll.scroll_to_item(i);
                                 this.input.is_filter_focused = false;
@@ -165,6 +180,7 @@ impl Workspace {
                         .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_primary))
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
                             this.open_sql_script(None, cx);
                             cx.notify();
                         }))
@@ -194,6 +210,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(rgb(0x388bfd)))
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
                             this.updates.update(cx, |updates, cx| {
                                 updates.show_release(info_for_click.clone(), cx)
                             });
@@ -203,5 +220,52 @@ impl Workspace {
                         .child(format!("Update ({})", tag)),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_title_bar_click;
+    use gpui::{ClickEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseUpEvent};
+
+    fn mouse_click(button: MouseButton, click_count: usize) -> ClickEvent {
+        ClickEvent::Mouse(MouseClickEvent {
+            down: MouseDownEvent {
+                button,
+                click_count,
+                ..Default::default()
+            },
+            up: MouseUpEvent {
+                button,
+                click_count,
+                ..Default::default()
+            },
+        })
+    }
+
+    #[test]
+    fn title_bar_double_click_toggles_zoom_and_restores() {
+        let mut zoomed = false;
+        let event = mouse_click(MouseButton::Left, 2);
+        handle_title_bar_click(&event, || zoomed = !zoomed);
+        assert!(zoomed);
+        handle_title_bar_click(&event, || zoomed = !zoomed);
+        assert!(!zoomed);
+    }
+
+    #[test]
+    fn title_bar_ignores_other_clicks() {
+        for event in [
+            mouse_click(MouseButton::Left, 0),
+            mouse_click(MouseButton::Left, 1),
+            mouse_click(MouseButton::Left, 3),
+            mouse_click(MouseButton::Right, 2),
+            mouse_click(MouseButton::Middle, 2),
+            ClickEvent::default(),
+        ] {
+            let mut zoomed = false;
+            handle_title_bar_click(&event, || zoomed = true);
+            assert!(!zoomed, "unexpected zoom for {event:?}");
+        }
     }
 }

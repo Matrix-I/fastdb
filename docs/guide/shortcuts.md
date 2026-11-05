@@ -1,5 +1,9 @@
 # Keyboard shortcuts
 
+Double-click the FastDB title or an empty area of the top bar to maximize the
+window. Double-click again to restore its previous size. Tabs, close buttons,
+the + SQL button and the update badge keep their normal click actions.
+
 | macOS | Linux | Action |
 | :--- | :--- | :--- |
 | `Cmd + Enter` | `Ctrl + Enter` | Run the active tab's query (in a SQL script: selection or statement under the caret) |
