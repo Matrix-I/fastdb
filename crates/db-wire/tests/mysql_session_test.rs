@@ -262,3 +262,102 @@ fn mysql_tab_runs_keep_state_and_owner_close_removes_server_session() {
         }).await.expect("closing a SQL tab must close its server connection");
     });
 }
+
+#[test]
+fn mysql_read_only_preserves_data_across_pool_and_script_paths() {
+    let Some(config) = config() else { return };
+    db_wire::get_runtime().block_on(async {
+        let writer = MySqlDriver::new(config.clone());
+        let table = format!("fastdb_ro_{}", uuid::Uuid::new_v4().simple());
+        writer
+            .execute_schema_ddl(&format!(
+                "CREATE TABLE {table} (id INT PRIMARY KEY) ENGINE=InnoDB"
+            ))
+            .await
+            .unwrap();
+        let result = async {
+            writer
+                .execute_schema_ddl(&format!("INSERT INTO {table} VALUES (1)"))
+                .await?;
+            let database = db_wire::sql::quote_ident(DbDriverKind::MySql, &config.database);
+            let reader = MySqlDriver::new(ConnectionConfig {
+                read_only: true,
+                ..config
+            });
+            anyhow::ensure!(reader.is_read_only() && !reader.supports_transfer());
+            let update = format!("UPDATE {table} SET id = 2");
+            anyhow::ensure!(
+                reader
+                    .execute_query(&format!("SELECT 1; {update}"))
+                    .await
+                    .is_err()
+            );
+            anyhow::ensure!(reader.execute_schema_ddl(&update).await.is_err());
+            anyhow::ensure!(reader.apply_row_changes(&[update]).await.is_err());
+            let session = reader.open_script_session().await?;
+            let (tx, rx) = flume::bounded(16);
+            anyhow::ensure!(
+                session
+                    .execute_streaming("START TRANSACTION READ WRITE", tx)
+                    .await
+                    .is_err()
+            );
+            anyhow::ensure!(
+                rx.try_iter()
+                    .any(|event| matches!(event, StreamEvent::Error(_)))
+            );
+            let (tx, _rx) = flume::bounded(16);
+            anyhow::ensure!(
+                session
+                    .execute_streaming(&format!("SELECT 1; DELETE FROM {table}"), tx)
+                    .await
+                    .is_err()
+            );
+            execute(session.as_ref(), &format!("USE {database}")).await;
+            execute(session.as_ref(), "START TRANSACTION").await;
+            execute(session.as_ref(), "SAVEPOINT `safe point`").await;
+            execute(session.as_ref(), "ROLLBACK TO `safe point`").await;
+            execute(session.as_ref(), "RELEASE SAVEPOINT `safe point`").await;
+            let (tx, _rx) = flume::bounded(16);
+            anyhow::ensure!(
+                session
+                    .execute_streaming(&format!("SELECT id FROM {table} FOR UPDATE"), tx)
+                    .await
+                    .is_err()
+            );
+            execute(session.as_ref(), "ROLLBACK").await;
+            anyhow::ensure!(
+                cell(&execute(session.as_ref(), &format!("SELECT id FROM {table}")).await) == b"1"
+            );
+            let temporal = [
+                ("CAST('2026-11-05' AS DATE)", b"2026-11-05".as_slice()),
+                (
+                    "CAST('2026-11-05 01:02:03.001234' AS DATETIME(6))",
+                    b"2026-11-05 01:02:03.001234".as_slice(),
+                ),
+                (
+                    "CAST('-31:02:03.456789' AS TIME(6))",
+                    b"-31:02:03.456789".as_slice(),
+                ),
+            ];
+            for (expression, expected) in temporal {
+                anyhow::ensure!(
+                    cell(&execute(session.as_ref(), &format!("SELECT {expression}")).await)
+                        == expected
+                );
+            }
+            session.finish().await?;
+            let (pager, rows, _) = writer
+                .execute_query(&format!("SELECT id FROM {table}"))
+                .await?;
+            anyhow::ensure!(rows == 1 && pager.get_cell(0, 0).as_deref() == Some(b"1".as_slice()));
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        writer
+            .execute_schema_ddl(&format!("DROP TABLE {table}"))
+            .await
+            .unwrap();
+        result.unwrap();
+    });
+}

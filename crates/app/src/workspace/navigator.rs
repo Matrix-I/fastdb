@@ -133,8 +133,28 @@ impl Workspace {
                             ),
                     );
                 } else {
+                    let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
                     for conn in &self.connections.saved_connections {
-                        nav_tree = self.append_connection_node(nav_tree, conn, cx);
+                        groups
+                            .entry(conn.appearance.group.as_deref())
+                            .or_default()
+                            .push(conn);
+                    }
+                    for (name, connections) in groups {
+                        if let Some(name) = name {
+                            nav_tree = nav_tree.child(
+                                div()
+                                    .pl_2()
+                                    .pt_1()
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text_secondary)
+                                    .child(name.to_owned()),
+                            );
+                        }
+                        for conn in connections {
+                            nav_tree = self.append_connection_node(nav_tree, conn, cx);
+                        }
                     }
                 }
 

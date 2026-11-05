@@ -629,6 +629,12 @@ impl Workspace {
             return;
         };
 
+        if driver.is_read_only() {
+            modal.error_message = Some("This connection is read-only".into());
+            cx.notify();
+            return;
+        }
+
         modal.is_executing = true;
         modal.error_message = None;
         cx.notify();

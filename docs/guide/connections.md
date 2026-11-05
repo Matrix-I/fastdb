@@ -7,6 +7,59 @@
 - **TLS for PostgreSQL and MySQL**: enable TLS in the connection dialog to require encryption and verify the server certificate and hostname. Leave the root CA path empty for system trust, or supply a PEM/DER root CA certificate for a private CA. TLS uses TCP even when Unix socket discovery is enabled. Existing connections default to TLS disabled.
 - Saved connection passwords use the OS keychain (macOS Keychain / Linux Secret Service). Existing plaintext passwords migrate automatically after successful keychain storage; config files retain only credential references. Keychain/save failures are shown in the workspace with a retry action.
 
+## Read-only connections
+
+Enable **Read-only** for PostgreSQL, MySQL, MariaDB or SQLite to guard against
+accidental writes. Reconnect to apply a profile change to an open connection.
+The navigator displays the live connection's mode. Grid edits, schema changes
+and transfer destinations are blocked. Read-only SQL uses provider safeguards.
+Use database accounts with restricted grants for access control over privileged
+server functions, extensions and external resources. SQLite read-only profiles
+require an existing database file.
+
+## Organize connections
+
+Set **Navigator group** to show related connections under a shared heading.
+Connections with an empty group appear first. Set **Navigator color** to an RGB
+hex value such as `#d29922` to add a color marker beside a connection name.
+
+## TLS client identity
+
+When TLS is enabled on PostgreSQL, MySQL or MariaDB, you can supply a PKCS#12
+archive (.p12 or .pfx) containing the client certificate and its private key.
+Enter the archive password if required. FastDB stores the archive path in the
+profile and the password in the OS keychain. Clear both fields to remove the
+identity. Keep the server CA and hostname settings configured for the server you
+intend to verify.
+
+## PostgreSQL application name
+
+Set **PostgreSQL application name** to identify FastDB sessions in
+`pg_stat_activity` and server logs that include the application name. The label
+can contain up to 63 printable ASCII bytes. It applies to new connections,
+including isolated SQL tab sessions. An empty field leaves the server default.
+
+## Connection timeout
+
+Network profiles accept a timeout from 1 to 120 seconds. An empty field and
+older profiles use 10 seconds. **Test** and **Connect** use this deadline for
+the connection attempt, including SSH and database authentication. The initial
+metadata load after connecting has a separate 15-second deadline.
+
+## Connect through SSH
+
+For PostgreSQL, MySQL, or MariaDB, keep the database address in the main
+connection fields and enable **Connect through SSH**. Enter the jump host,
+SSH username, and its trusted OpenSSH `SHA256:…` host key fingerprint. Get
+that fingerprint from the administrator or another trusted source. Enter
+either an SSH password or a private key path. With a private key path, the
+secret field is the key's passphrase. **Test** uses the current form values
+and checks the database through the tunnel.
+
+SSH secrets use a separate OS keychain service. The saved connection file
+contains the jump host settings and a credential reference. If TLS is enabled,
+FastDB checks the database certificate against the database hostname.
+
 ## Where settings are stored
 
 For an isolated development profile, set `FASTDB_CONFIG_DIR=/tmp/fastdb-smoke` before launching. This keeps saved connections, scripts and update preferences separate from your normal profile.

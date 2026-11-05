@@ -62,6 +62,16 @@ where
 }
 
 pub fn create_driver(config: ConnectionConfig) -> Result<Arc<dyn DatabaseDriver>> {
+    config.validate_tls_identity()?;
+    config.validate_application_name()?;
+    anyhow::ensure!(
+        !config.read_only || config.driver.supports_read_only(),
+        "Read-only connections are unavailable for this provider"
+    );
+    anyhow::ensure!(
+        config.ssh_tunnel.is_none() || config.driver.supports_ssh(),
+        "SSH tunnels are unavailable for this provider"
+    );
     match config.driver {
         DbDriverKind::Postgres => Ok(Arc::new(PostgresDriver::new(config))),
         DbDriverKind::MySql | DbDriverKind::MariaDb => Ok(Arc::new(MySqlDriver::new(config))),

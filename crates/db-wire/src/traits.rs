@@ -50,21 +50,121 @@ impl DbDriverKind {
             Self::Db2 => 50000,
         }
     }
+    pub fn supports_read_only(self) -> bool {
+        matches!(
+            self,
+            Self::Sqlite | Self::Postgres | Self::MySql | Self::MariaDb
+        )
+    }
+
+    pub fn supports_ssh(self) -> bool {
+        matches!(self, Self::Postgres | Self::MySql | Self::MariaDb)
+    }
+
+    pub fn supports_tls_client_identity(self) -> bool {
+        matches!(self, Self::Postgres | Self::MySql | Self::MariaDb)
+    }
+
     pub fn uses_odbc(self) -> bool {
         matches!(self, Self::SqlServer | Self::Oracle | Self::Db2)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SshTunnelConfig {
     pub host: String,
     pub port: u16,
     pub user: String,
+    /// Trusted OpenSSH SHA256 fingerprint obtained out of band.
+    pub host_key_fingerprint: String,
     pub key_path: Option<String>,
     pub password: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for SshTunnelConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SshTunnelConfig")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
+pub struct TlsClientIdentity {
+    pub archive_path: String,
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for TlsClientIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TlsClientIdentity")
+            .finish_non_exhaustive()
+    }
+}
+
+impl TlsClientIdentity {
+    pub(crate) fn parse_archive(&self, archive: &[u8]) -> Result<native_tls::Identity> {
+        let password = self.password.as_deref().unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        validate_macos_identity(archive, password)?;
+        native_tls::Identity::from_pkcs12(archive, password)
+            .map_err(|_| anyhow::anyhow!("{INVALID_TLS_IDENTITY}"))
+    }
+
+    pub(crate) fn read_archive(&self) -> Result<Vec<u8>> {
+        use std::io::Read;
+        const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024;
+        let read = || -> std::io::Result<Vec<u8>> {
+            if !std::fs::metadata(&self.archive_path)?.is_file() {
+                return Err(std::io::ErrorKind::InvalidInput.into());
+            }
+            let file = std::fs::File::open(&self.archive_path)?;
+            if !file.metadata()?.is_file() {
+                return Err(std::io::ErrorKind::InvalidInput.into());
+            }
+            let mut bytes = Vec::new();
+            file.take(MAX_ARCHIVE_BYTES + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        };
+        let bytes = read().map_err(|_| anyhow::anyhow!("Cannot read the TLS client identity archive; check that it is a readable regular file"))?;
+        anyhow::ensure!(
+            bytes.len() as u64 <= MAX_ARCHIVE_BYTES,
+            "TLS client identity archive exceeds 1 MiB"
+        );
+        Ok(bytes)
+    }
+}
+
+const INVALID_TLS_IDENTITY: &str =
+    "Cannot open the TLS client identity; check the PKCS#12 archive, private key and password";
+
+#[cfg(target_os = "macos")]
+fn validate_macos_identity(archive: &[u8], password: &str) -> Result<()> {
+    use security_framework::{
+        import_export::Pkcs12ImportOptions, os::macos::keychain::CreateOptions,
+    };
+
+    // native-tls 0.2.18 expects the last imported item to contain an identity and
+    // panics otherwise. Inspect it first in a disposable keychain.
+    let directory = tempfile::tempdir()?;
+    let keychain = CreateOptions::new()
+        .password(&uuid::Uuid::new_v4().to_string())
+        .create(directory.path().join("identity.keychain"))
+        .map_err(|_| anyhow::anyhow!("Cannot create temporary keychain for TLS client identity"))?;
+    let items = Pkcs12ImportOptions::new()
+        .passphrase(password)
+        .keychain(keychain)
+        .import(archive)
+        .map_err(|_| anyhow::anyhow!("{INVALID_TLS_IDENTITY}"))?;
+    anyhow::ensure!(
+        items.last().is_some_and(|item| item.identity.is_some()),
+        "{INVALID_TLS_IDENTITY}"
+    );
+    Ok(())
+}
+
+#[derive(Clone)]
 pub struct ConnectionConfig {
     pub driver: DbDriverKind,
     pub host: String,
@@ -77,8 +177,51 @@ pub struct ConnectionConfig {
     pub tls_enabled: bool,
     /// Optional PEM or DER root CA certificate; system trust is used otherwise.
     pub tls_ca_cert: Option<String>,
+    pub tls_client_identity: Option<TlsClientIdentity>,
     pub ssh_tunnel: Option<SshTunnelConfig>,
     pub connect_timeout: Duration,
+    pub read_only: bool,
+    pub application_name: Option<String>,
+}
+
+impl std::fmt::Debug for ConnectionConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConnectionConfig")
+            .field("driver", &self.driver)
+            .field("tls_enabled", &self.tls_enabled)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConnectionConfig {
+    pub fn validate_application_name(&self) -> Result<()> {
+        if let Some(name) = &self.application_name {
+            anyhow::ensure!(
+                self.driver == DbDriverKind::Postgres,
+                "Application name is available for PostgreSQL only"
+            );
+            anyhow::ensure!(
+                name.len() <= 63 && name.bytes().all(|byte| (b' '..=b'~').contains(&byte)),
+                "PostgreSQL application name must contain at most 63 printable ASCII bytes"
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_tls_identity(&self) -> Result<()> {
+        if self.tls_client_identity.is_some() {
+            anyhow::ensure!(
+                self.driver.supports_tls_client_identity(),
+                "TLS client identity is unavailable for this provider"
+            );
+            anyhow::ensure!(
+                self.tls_enabled,
+                "TLS must be enabled to use a client identity"
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Default for ConnectionConfig {
@@ -93,8 +236,11 @@ impl Default for ConnectionConfig {
             use_unix_socket: true,
             tls_enabled: false,
             tls_ca_cert: None,
+            tls_client_identity: None,
             ssh_tunnel: None,
             connect_timeout: Duration::from_secs(5),
+            read_only: false,
+            application_name: None,
         }
     }
 }
@@ -220,6 +366,10 @@ pub struct QueryCellUpdate {
 
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
     fn supports_transfer(&self) -> bool {
         false
     }

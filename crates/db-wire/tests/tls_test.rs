@@ -190,3 +190,105 @@ fn postgres_pinned_script_session_verifies_tls_and_cancels_its_own_backend() {
         driver.ping().await.unwrap();
     });
 }
+
+#[test]
+fn postgres_tls_client_identity_is_required_and_used_by_both_session_paths() {
+    verify_client_identity(DbDriverKind::Postgres);
+}
+
+#[test]
+fn mysql_tls_client_identity_is_required_and_used_by_both_session_paths() {
+    verify_client_identity(DbDriverKind::MySql);
+}
+
+struct ArchiveCopy(std::path::PathBuf);
+
+impl Drop for ArchiveCopy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn verify_client_identity(kind: DbDriverKind) {
+    let Ok(archive) = std::env::var("FASTDB_TLS_CLIENT_ARCHIVE") else {
+        assert!(std::env::var_os("FASTDB_REQUIRE_TLS_TESTS").is_none());
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let mut config = config(kind).unwrap();
+        config.user = "fastdb_tls_client".into();
+        if kind == DbDriverKind::MySql {
+            config.database = "fastdb_tls".into();
+        }
+        assert!(
+            ping(config.clone()).await.is_err(),
+            "{kind:?} accepted an absent client certificate"
+        );
+        if let Ok(cert_only) = std::env::var("FASTDB_TLS_CERT_ONLY_ARCHIVE") {
+            let mut no_key = config.clone();
+            no_key.tls_client_identity = Some(db_wire::TlsClientIdentity {
+                archive_path: cert_only,
+                password: Some("fixture-archive".into()),
+            });
+            let error = ping(no_key).await.unwrap_err();
+            assert!(
+                format!("{error:#}").contains("Cannot open the TLS client identity"),
+                "{error:#}"
+            );
+        } else {
+            assert!(
+                std::env::var_os("FASTDB_REQUIRE_TLS_TESTS").is_none(),
+                "FASTDB_TLS_CERT_ONLY_ARCHIVE required"
+            );
+        }
+        let archive_copy = ArchiveCopy(
+            std::env::temp_dir().join(format!("fastdb-tls-{}.p12", uuid::Uuid::new_v4())),
+        );
+        std::fs::copy(&archive, &archive_copy.0).unwrap();
+        config.tls_client_identity = Some(db_wire::TlsClientIdentity {
+            archive_path: archive_copy.0.to_str().unwrap().into(),
+            password: Some("wrong-password".into()),
+        });
+        let error = ping(config.clone()).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Cannot open the TLS client identity"),
+            "{kind:?}: {error:#}"
+        );
+        config.tls_client_identity.as_mut().unwrap().password = Some("fixture-archive".into());
+        if kind == DbDriverKind::MySql {
+            let config = config.clone();
+            std::thread::spawn(move || {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                futures::executor::block_on(async {
+                    let driver = db_wire::create_driver(config)?;
+                    driver.ping().await?;
+                    driver.open_script_session().await?.finish().await
+                })
+            })
+            .join()
+            .unwrap()
+            .unwrap();
+        }
+        ping(config.clone()).await.unwrap();
+        let driver = db_wire::create_driver(config).unwrap();
+        let session = driver.open_script_session().await.unwrap();
+        drop(archive_copy);
+        let (events, results) = flume::bounded(16);
+        session
+            .execute_streaming("SELECT 42", events)
+            .await
+            .unwrap();
+        let value = results.try_iter().find_map(|event| match event {
+            db_wire::StreamEvent::SchemaReady(pager) => pager.get_cell(0, 0),
+            _ => None,
+        });
+        assert_eq!(value.as_deref(), Some(b"42".as_slice()));
+        if kind == DbDriverKind::Postgres {
+            // The cancel socket can still use the established identity after the file is gone.
+            session.cancel_active_query().await.unwrap();
+            session.abort();
+        } else {
+            session.finish().await.unwrap();
+        }
+    });
+}

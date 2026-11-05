@@ -7,8 +7,9 @@ use mysql_async::{Opts, OptsBuilder, Params, Pool, SslOpts, TxOpts, Value};
 use parking_lot::Mutex;
 use platform_hal::socket::{DbKind, detect_local_unix_socket};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+mod read_only;
 mod script;
 
 use crate::stream::{RowSink, report_error};
@@ -16,21 +17,67 @@ use crate::traits::{ConnectionConfig, DatabaseDriver, StreamEvent, TableSummary,
 
 pub struct MySqlDriver {
     pub config: ConnectionConfig,
-    pool: Arc<Mutex<Option<Pool>>>,
+    pool: tokio::sync::Mutex<Option<Arc<ConnectionPool>>>,
+    read_only: bool,
     /// Server connection id of the connection running the current query, for KILL QUERY
-    active_conn_id: Arc<Mutex<Option<u32>>>,
+    active_query: ActiveQuerySlot,
+}
+
+type ActiveQuerySlot = Arc<Mutex<Option<Arc<ActiveQuery>>>>;
+
+struct ActiveQuery {
+    id: u32,
+    pool: Arc<ConnectionPool>,
+}
+
+struct ActiveQueryGuard {
+    slot: ActiveQuerySlot,
+    query: Arc<ActiveQuery>,
+}
+
+impl Drop for ActiveQueryGuard {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock();
+        if slot
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &self.query))
+        {
+            *slot = None;
+        }
+    }
+}
+
+struct ConnectionPool {
+    pool: Pool,
+    tunnel: Option<crate::SshTunnel>,
+    timeout: Duration,
+    read_only: bool,
+}
+
+impl ConnectionPool {
+    async fn get_conn(&self) -> Result<mysql_async::Conn> {
+        tokio::time::timeout(self.timeout, self.pool.get_conn())
+            .await
+            .map_err(|_| anyhow::anyhow!("MySQL connection timed out"))?
+            .map_err(anyhow::Error::from)
+    }
 }
 
 impl MySqlDriver {
     pub fn new(config: ConnectionConfig) -> Self {
         Self {
+            read_only: config.read_only,
             config,
-            pool: Arc::new(Mutex::new(None)),
-            active_conn_id: Arc::new(Mutex::new(None)),
+            pool: tokio::sync::Mutex::new(None),
+            active_query: Arc::new(Mutex::new(None)),
         }
     }
 
-    fn get_opts(&self) -> Opts {
+    fn get_opts(
+        &self,
+        tunnel_port: Option<u16>,
+        identity: Option<mysql_async::ClientIdentity>,
+    ) -> Opts {
         let mut builder = OptsBuilder::default();
         builder = builder.user(Some(&self.config.user));
         if let Some(ref pw) = self.config.password {
@@ -38,13 +85,17 @@ impl MySqlDriver {
         }
         builder = builder.db_name(Some(&self.config.database));
 
-        let socket = if self.config.use_unix_socket && !self.config.tls_enabled {
+        let use_socket =
+            tunnel_port.is_none() && self.config.use_unix_socket && !self.config.tls_enabled;
+        let socket = if use_socket {
             detect_local_unix_socket(DbKind::MySql, &self.config.host, self.config.port)
         } else {
             None
         };
 
-        if let Some(sock_path) = socket {
+        if let Some(port) = tunnel_port {
+            builder = builder.ip_or_hostname("127.0.0.1").tcp_port(port);
+        } else if let Some(sock_path) = socket {
             builder = builder.socket(Some(sock_path.to_string_lossy().to_string()));
         } else {
             builder = builder
@@ -53,25 +104,84 @@ impl MySqlDriver {
         }
 
         // Disable mysql_async's implicit TCP-to-socket upgrade when TLS is requested.
-        builder = builder.prefer_socket(self.config.use_unix_socket && !self.config.tls_enabled);
+        builder = builder.prefer_socket(use_socket);
         if self.config.tls_enabled {
             let mut ssl = SslOpts::default();
             if let Some(path) = &self.config.tls_ca_cert {
                 ssl = ssl.with_root_certs(vec![std::path::PathBuf::from(path).into()]);
             }
+            if tunnel_port.is_some() {
+                ssl = ssl.with_danger_tls_hostname_override(Some(self.config.host.clone()));
+            }
+            ssl = ssl.with_client_identity(identity);
             builder = builder.ssl_opts(ssl);
         }
         builder.into()
     }
 
-    fn get_pool(&self) -> Result<Pool> {
-        let mut guard = self.pool.lock();
-        if let Some(ref p) = *guard {
-            return Ok(p.clone());
+    async fn connection_opts(&self, tunnel_port: Option<u16>) -> Result<Opts> {
+        self.config.validate_tls_identity()?;
+        let identity = if let Some(identity) = self.config.tls_client_identity.clone() {
+            let deadline = self.config.connect_timeout;
+            Some(
+                crate::run_on_shared_runtime(async move {
+                    tokio::time::timeout(
+                        deadline,
+                        tokio::task::spawn_blocking(move || {
+                            let archive = identity.read_archive()?;
+                            identity.parse_archive(&archive)?;
+                            Ok::<_, anyhow::Error>(
+                                mysql_async::ClientIdentity::new(archive.into())
+                                    .with_password(identity.password.unwrap_or_default()),
+                            )
+                        }),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Loading the TLS client identity timed out"))?
+                    .map_err(|_| anyhow::anyhow!("Could not load the TLS client identity"))?
+                })
+                .await?,
+            )
+        } else {
+            None
+        };
+        Ok(self.get_opts(tunnel_port, identity))
+    }
+
+    async fn open_tunnel(&self) -> Result<Option<crate::SshTunnel>> {
+        let Some(settings) = &self.config.ssh_tunnel else {
+            return Ok(None);
+        };
+        crate::SshTunnel::start_forwarding(
+            settings.clone(),
+            self.config.host.clone(),
+            self.config.port.into(),
+        )
+        .await
+        .map(Some)
+    }
+
+    async fn get_pool(&self) -> Result<Arc<ConnectionPool>> {
+        let mut guard = self.pool.lock().await;
+        if let Some(pool) = &*guard
+            && !pool
+                .tunnel
+                .as_ref()
+                .is_some_and(crate::SshTunnel::is_closed)
+        {
+            return Ok(pool.clone());
         }
 
-        let opts = self.get_opts();
-        let pool = Pool::new(opts);
+        let tunnel = self.open_tunnel().await?;
+        let opts = self
+            .connection_opts(tunnel.as_ref().map(|tunnel| tunnel.local_bound_port))
+            .await?;
+        let pool = Arc::new(ConnectionPool {
+            pool: Pool::new(opts),
+            tunnel,
+            timeout: self.config.connect_timeout,
+            read_only: self.read_only,
+        });
         *guard = Some(pool.clone());
         Ok(pool)
     }
@@ -82,7 +192,7 @@ impl MySqlDriver {
         T: FromRow + Send + 'static,
         P: Into<Params> + Send + 'static,
     {
-        let pool = self.get_pool()?;
+        let pool = self.get_pool().await?;
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
             Ok(conn.exec(sql, params).await?)
@@ -92,10 +202,10 @@ impl MySqlDriver {
 
     /// Streams a query's rows into a new pager; runs on the shared runtime via the caller
     async fn stream_query(
-        pool: Pool,
+        pool: Arc<ConnectionPool>,
         sql: String,
         event_tx: flume::Sender<StreamEvent>,
-        active_conn_id: Arc<Mutex<Option<u32>>>,
+        active_query: ActiveQuerySlot,
         control: Option<Arc<crate::execution::ExecutionControl>>,
     ) -> Result<()> {
         let start_time = Instant::now();
@@ -103,13 +213,25 @@ impl MySqlDriver {
             .get_conn()
             .await
             .map_err(|e| report_error(&event_tx, format!("MySQL connection error: {e}")))?;
-        *active_conn_id.lock() = Some(conn.id());
-
-        let result =
-            Self::stream_connection(&mut conn, sql, event_tx, control.as_deref(), start_time).await;
-        *active_conn_id.lock() = None;
-
-        result
+        let read_only = pool.read_only;
+        let query = Arc::new(ActiveQuery {
+            id: conn.id(),
+            pool,
+        });
+        *active_query.lock() = Some(query.clone());
+        let _active = ActiveQueryGuard {
+            slot: active_query,
+            query,
+        };
+        Self::stream_connection(
+            &mut conn,
+            sql,
+            event_tx,
+            control.as_deref(),
+            start_time,
+            read_only,
+        )
+        .await
     }
 
     async fn stream_connection(
@@ -118,51 +240,34 @@ impl MySqlDriver {
         event_tx: flume::Sender<StreamEvent>,
         control: Option<&crate::execution::ExecutionControl>,
         start_time: Instant,
+        read_only: bool,
     ) -> Result<()> {
         if let Some(control) = &control {
             control.check()?;
         }
-        let mut query_result = conn
-            .query_iter(sql)
-            .await
-            .map_err(|e| report_error(&event_tx, format!("MySQL query execution error: {e}")))?;
-
-        let columns: Vec<ColumnMeta> = query_result
-            .columns()
-            .as_ref()
-            .map(|cols| {
-                cols.iter()
-                    .map(|c| ColumnMeta::new(c.name_str().to_string(), mysql_column_data_type(c)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let has_columns = !columns.is_empty();
-        if !has_columns {
-            let _ = event_tx.send(StreamEvent::CommandComplete {
-                affected_rows: Some(query_result.affected_rows()),
-            });
-        }
-        let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
-
-        {
-            let stream = query_result
-                .stream::<mysql_async::Row>()
+        let (sql, prepared) = if read_only {
+            read_only::prepare(conn, &sql)
                 .await
-                .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
-            if let Some(mut stream) = stream {
-                while let Some(row_res) = stream.next().await {
-                    let row =
-                        row_res.map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
-                    for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
-                        *cell = mysql_value_to_bytes(row.get(i));
-                    }
-                    sink.commit_row()?;
-                }
-            }
+                .map_err(|error| report_error(&event_tx, format!("{error:#}")))?
+        } else {
+            (std::borrow::Cow::Borrowed(sql.as_str()), false)
+        };
+        if let Some(control) = &control {
+            control.check()?;
         }
-        let warnings = query_result.warnings();
-        let info = query_result.info().into_owned();
-        drop(query_result);
+        let report =
+            |error| report_error(&event_tx, format!("MySQL query execution error: {error}"));
+        let (sink, warnings, info) = if prepared {
+            // The server parses exactly one statement under the connection's SQL mode.
+            let result = conn
+                .exec_iter(sql.as_ref(), Params::Empty)
+                .await
+                .map_err(report)?;
+            Self::stream_result(result, &event_tx, start_time).await?
+        } else {
+            let result = conn.query_iter(sql.as_ref()).await.map_err(report)?;
+            Self::stream_result(result, &event_tx, start_time).await?
+        };
         if !info.is_empty() {
             let _ = event_tx.send(StreamEvent::Notice(info));
         }
@@ -196,6 +301,48 @@ impl MySqlDriver {
         }
         sink.finish();
         Ok(())
+    }
+    async fn stream_result<P: mysql_async::prelude::Protocol + Unpin>(
+        mut query_result: mysql_async::QueryResult<'_, '_, P>,
+        event_tx: &flume::Sender<StreamEvent>,
+        start_time: Instant,
+    ) -> Result<(RowSink, u16, String)> {
+        let columns: Vec<ColumnMeta> = query_result
+            .columns()
+            .as_ref()
+            .map(|cols| {
+                cols.iter()
+                    .map(|c| ColumnMeta::new(c.name_str().to_string(), mysql_column_data_type(c)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has_columns = !columns.is_empty();
+        if !has_columns {
+            let _ = event_tx.send(StreamEvent::CommandComplete {
+                affected_rows: Some(query_result.affected_rows()),
+            });
+        }
+        let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
+
+        {
+            let stream = query_result
+                .stream::<mysql_async::Row>()
+                .await
+                .map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+            if let Some(mut stream) = stream {
+                while let Some(row_res) = stream.next().await {
+                    let row =
+                        row_res.map_err(|e| sink.fail(format!("MySQL row stream error: {e}")))?;
+                    for (i, cell) in sink.cells_mut().iter_mut().enumerate() {
+                        *cell = mysql_cell_to_bytes(row.get(i), &row.columns_ref()[i]);
+                    }
+                    sink.commit_row()?;
+                }
+            }
+        }
+        let warnings = query_result.warnings();
+        let info = query_result.info().into_owned();
+        Ok((sink, warnings, info))
     }
 }
 
@@ -265,6 +412,45 @@ fn info_schema_column(
         .with_raw_type(data_type)
 }
 
+fn mysql_cell_to_bytes(value: Option<Value>, column: &mysql_async::Column) -> Option<Vec<u8>> {
+    use mysql_async::consts::ColumnType::{MYSQL_TYPE_DATE, MYSQL_TYPE_NEWDATE};
+    let scale = usize::from(column.decimals().min(6));
+    let fractional = |micros| {
+        if scale == 0 {
+            String::new()
+        } else {
+            let digits = format!("{micros:06}");
+            format!(".{}", &digits[..scale])
+        }
+    };
+    match value {
+        Some(Value::Date(y, m, d, _, _, _, _))
+            if matches!(column.column_type(), MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE) =>
+        {
+            Some(format!("{y:04}-{m:02}-{d:02}").into_bytes())
+        }
+        Some(Value::Date(y, m, d, h, min, s, micros)) => Some(
+            format!(
+                "{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}{}",
+                fractional(micros)
+            )
+            .into_bytes(),
+        ),
+        Some(Value::Time(negative, days, hours, minutes, seconds, micros)) => {
+            let sign = if negative { "-" } else { "" };
+            let hours = u64::from(days) * 24 + u64::from(hours);
+            Some(
+                format!(
+                    "{sign}{hours:02}:{minutes:02}:{seconds:02}{}",
+                    fractional(micros)
+                )
+                .into_bytes(),
+            )
+        }
+        value => mysql_value_to_bytes(value),
+    }
+}
+
 fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
     match val {
         None | Some(Value::NULL) => None,
@@ -285,14 +471,19 @@ fn mysql_value_to_bytes(val: Option<Value>) -> Option<Vec<u8>> {
 
 #[async_trait]
 impl DatabaseDriver for MySqlDriver {
+    fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     fn supports_transfer(&self) -> bool {
-        true
+        !self.is_read_only()
     }
 
     fn with_database(&self, database: &str) -> Result<Arc<dyn DatabaseDriver>> {
         crate::session_context::validate_name(database).map_err(anyhow::Error::msg)?;
         let mut config = self.config.clone();
         config.database = database.into();
+        config.read_only = self.read_only;
         Ok(Arc::new(Self::new(config)))
     }
 
@@ -301,14 +492,20 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn open_script_session(&self) -> Result<Arc<dyn crate::script::ScriptSession>> {
-        let opts = self.get_opts();
+        let tunnel = self.open_tunnel().await?;
+        let opts = self
+            .connection_opts(tunnel.as_ref().map(|tunnel| tunnel.local_bound_port))
+            .await?;
         let timeout = self.config.connect_timeout;
+        let read_only = self.read_only;
         crate::run_on_shared_runtime(async move {
             let conn = tokio::time::timeout(timeout, mysql_async::Conn::new(opts))
                 .await
                 .map_err(|_| anyhow::anyhow!("MySQL script connection timed out"))??;
-            Ok(Arc::new(script::MySqlScriptSession::new(conn))
-                as Arc<dyn crate::script::ScriptSession>)
+            Ok(
+                Arc::new(script::MySqlScriptSession::new(conn, tunnel, read_only))
+                    as Arc<dyn crate::script::ScriptSession>,
+            )
         })
         .await
     }
@@ -323,7 +520,7 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn ping(&self) -> Result<()> {
-        let pool = self.get_pool()?;
+        let pool = self.get_pool().await?;
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
             conn.query_drop("SELECT 1;").await?;
@@ -333,7 +530,8 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
-        let pool = self.get_pool()?;
+        anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
+        let pool = self.get_pool().await?;
         let sql = sql.to_string();
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
@@ -348,17 +546,11 @@ impl DatabaseDriver for MySqlDriver {
         sql: &str,
         event_tx: flume::Sender<StreamEvent>,
     ) -> Result<()> {
-        let pool = self.get_pool()?;
+        let pool = self.get_pool().await?;
         let sql = sql.to_string();
-        let active_conn_id = Arc::clone(&self.active_conn_id);
-        crate::run_on_shared_runtime(Self::stream_query(
-            pool,
-            sql,
-            event_tx,
-            active_conn_id,
-            None,
-        ))
-        .await
+        let active_query = Arc::clone(&self.active_query);
+        crate::run_on_shared_runtime(Self::stream_query(pool, sql, event_tx, active_query, None))
+            .await
     }
 
     async fn execute_streaming_controlled(
@@ -368,19 +560,20 @@ impl DatabaseDriver for MySqlDriver {
         control: Arc<crate::execution::ExecutionControl>,
     ) -> Result<()> {
         control.check()?;
-        let pool = self.get_pool()?;
+        let pool = self.get_pool().await?;
         crate::run_on_shared_runtime(Self::stream_query(
             pool,
             sql.to_owned(),
             tx,
-            self.active_conn_id.clone(),
+            self.active_query.clone(),
             Some(control),
         ))
         .await
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
-        let pool = self.get_pool()?;
+        anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
+        let pool = self.get_pool().await?;
         let statements = statements.to_vec();
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
@@ -403,13 +596,14 @@ impl DatabaseDriver for MySqlDriver {
     }
 
     async fn cancel_active_query(&self) -> Result<()> {
-        let Some(conn_id) = *self.active_conn_id.lock() else {
+        let Some(active) = self.active_query.lock().clone() else {
             return Ok(());
         };
-        let pool = self.get_pool()?;
         crate::run_on_shared_runtime(async move {
-            // KILL must run on a different connection than the one executing the query
-            let mut conn = pool.get_conn().await?;
+            // A reconnect can target another server. Use the exact pool which
+            // opened the running connection when issuing its cancellation.
+            let mut conn = active.pool.get_conn().await?;
+            let conn_id = active.id;
             conn.query_drop(format!("KILL QUERY {conn_id}")).await?;
             Ok(())
         })
@@ -574,7 +768,7 @@ mod tls_tests {
             tls_ca_cert: Some("/private-ca.pem".into()),
             ..ConnectionConfig::default()
         })
-        .get_opts();
+        .get_opts(None, None);
         assert!(!opts.prefer_socket());
         assert!(opts.socket().is_none());
         let ssl = opts.ssl_opts().unwrap();
@@ -584,12 +778,34 @@ mod tls_tests {
     }
 
     #[test]
+    fn ssh_dials_loopback_and_verifies_the_database_hostname() {
+        let opts = MySqlDriver::new(ConnectionConfig {
+            host: "database.internal".into(),
+            tls_enabled: true,
+            use_unix_socket: true,
+            ..ConnectionConfig::default()
+        })
+        .get_opts(Some(15432), None);
+        assert_eq!(opts.ip_or_hostname(), "127.0.0.1");
+        assert_eq!(opts.tcp_port(), 15432);
+        assert!(!opts.prefer_socket());
+        assert!(opts.socket().is_none());
+        let ssl = opts.ssl_opts().unwrap();
+        assert_eq!(
+            ssl,
+            &SslOpts::default().with_danger_tls_hostname_override(Some("database.internal"))
+        );
+        assert!(!ssl.skip_domain_validation());
+        assert!(!ssl.accept_invalid_certs());
+    }
+
+    #[test]
     fn legacy_connection_does_not_enable_tls() {
         let opts = MySqlDriver::new(ConnectionConfig {
             use_unix_socket: false,
             ..ConnectionConfig::default()
         })
-        .get_opts();
+        .get_opts(None, None);
         assert!(opts.ssl_opts().is_none());
         assert!(!opts.prefer_socket());
     }
@@ -622,7 +838,7 @@ mod filter_mode_tests {
                 use_unix_socket: false,
                 ..Default::default()
             });
-            let mut conn = driver.get_pool().unwrap().get_conn().await.unwrap();
+            let mut conn = driver.get_pool().await.unwrap().get_conn().await.unwrap();
             let original: String = conn
                 .query_first("SELECT @@SESSION.sql_mode")
                 .await

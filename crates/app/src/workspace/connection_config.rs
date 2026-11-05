@@ -1,5 +1,8 @@
 use db_wire::DbDriverKind;
-#[derive(Debug, Clone, PartialEq, Eq)]
+
+pub(super) const DEFAULT_CONNECT_TIMEOUT_SECS: u16 = 10;
+pub(super) const MAX_CONNECT_TIMEOUT_SECS: u16 = 120;
+#[derive(Clone, PartialEq, Eq)]
 pub struct SavedConnection {
     pub id: String,
     pub name: String,
@@ -14,6 +17,198 @@ pub struct SavedConnection {
     pub use_unix_socket: bool,
     pub tls_enabled: bool,
     pub tls_ca_cert: Option<String>,
+    pub ssh: Option<SavedSsh>,
+    pub client_identity: Option<SavedClientIdentity>,
+    pub connect_timeout_secs: u16,
+    pub appearance: ConnectionAppearance,
+    pub read_only: bool,
+    pub application_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionAppearance {
+    pub group: Option<String>,
+    pub color: Option<u32>,
+}
+
+impl ConnectionAppearance {
+    pub(super) fn parse(group: &str, color: &str) -> Result<Self, String> {
+        let group = group.trim();
+        let color = color.trim();
+        let color = if color.is_empty() {
+            None
+        } else {
+            let hex = color.strip_prefix('#').unwrap_or(color);
+            if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(
+                    "Connection color must be a six-digit RGB value such as #d29922".into(),
+                );
+            }
+            Some(u32::from_str_radix(hex, 16).map_err(|_| "Invalid connection color")?)
+        };
+        Ok(Self {
+            group: (!group.is_empty()).then(|| group.to_owned()),
+            color,
+        })
+    }
+
+    pub(super) fn color_text(&self) -> String {
+        self.color
+            .map(|color| format!("#{color:06x}"))
+            .unwrap_or_default()
+    }
+}
+
+impl std::fmt::Debug for SavedConnection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SavedConnection")
+            .field("id", &self.id)
+            .field("driver", &self.driver)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct SavedSsh {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub fingerprint: String,
+    pub key_path: Option<String>,
+    pub secret: Option<String>,
+    pub secret_unavailable: bool,
+}
+
+impl std::fmt::Debug for SavedSsh {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("SavedSsh").finish_non_exhaustive()
+    }
+}
+
+impl SavedSsh {
+    pub(super) fn from_config(config: &db_wire::SshTunnelConfig) -> Self {
+        Self {
+            host: config.host.clone(),
+            port: config.port,
+            user: config.user.clone(),
+            fingerprint: config.host_key_fingerprint.clone(),
+            key_path: config.key_path.clone(),
+            secret: config.password.clone(),
+            secret_unavailable: false,
+        }
+    }
+
+    fn read(value: &serde_json::Value) -> Option<Self> {
+        if value.is_null() {
+            return None;
+        }
+        Some(Self {
+            host: value["host"].as_str().unwrap_or_default().into(),
+            port: value["port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
+                .unwrap_or(0),
+            user: value["user"].as_str().unwrap_or_default().into(),
+            fingerprint: value["fingerprint"].as_str().unwrap_or_default().into(),
+            key_path: value["key_path"].as_str().map(str::to_owned),
+            secret: None,
+            secret_unavailable: value["keychain_secret"].as_bool().unwrap_or(false),
+        })
+    }
+
+    fn serialize(&self) -> serde_json::Value {
+        serde_json::json!({
+            "host": self.host,
+            "port": self.port,
+            "user": self.user,
+            "fingerprint": self.fingerprint,
+            "key_path": self.key_path,
+            "keychain_secret": self.secret_unavailable || self.secret.as_ref().is_some_and(|secret| !secret.is_empty()),
+        })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct SavedClientIdentity {
+    pub archive_path: String,
+    pub password: Option<String>,
+    pub password_unavailable: bool,
+}
+
+impl std::fmt::Debug for SavedClientIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SavedClientIdentity")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SavedClientIdentity {
+    pub(super) fn from_config(config: &db_wire::TlsClientIdentity) -> Self {
+        Self {
+            archive_path: config.archive_path.clone(),
+            password: config.password.clone(),
+            password_unavailable: false,
+        }
+    }
+
+    fn read(value: &serde_json::Value) -> Option<Self> {
+        (!value.is_null()).then(|| Self {
+            archive_path: value["archive_path"].as_str().unwrap_or_default().into(),
+            password: None,
+            password_unavailable: value["keychain_password"].as_bool().unwrap_or(false),
+        })
+    }
+
+    fn serialize(&self) -> serde_json::Value {
+        serde_json::json!({
+            "archive_path": self.archive_path,
+            "keychain_password": self.password_unavailable || self.password.as_ref().is_some_and(|password| !password.is_empty()),
+        })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CredentialKind {
+    Database,
+    Ssh,
+    ClientIdentity,
+}
+
+const CLEANUP_FIELDS: [(CredentialKind, &str); 3] = [
+    (CredentialKind::Database, "credential_cleanup"),
+    (CredentialKind::Ssh, "ssh_credential_cleanup"),
+    (
+        CredentialKind::ClientIdentity,
+        "client_identity_credential_cleanup",
+    ),
+];
+
+impl SavedConnection {
+    fn secrets(&self) -> [(CredentialKind, Option<&str>, bool); 3] {
+        [
+            (
+                CredentialKind::Database,
+                self.password.as_deref(),
+                self.password_unavailable,
+            ),
+            (
+                CredentialKind::Ssh,
+                self.ssh.as_ref().and_then(|ssh| ssh.secret.as_deref()),
+                self.ssh.as_ref().is_some_and(|ssh| ssh.secret_unavailable),
+            ),
+            (
+                CredentialKind::ClientIdentity,
+                self.client_identity
+                    .as_ref()
+                    .and_then(|identity| identity.password.as_deref()),
+                self.client_identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.password_unavailable),
+            ),
+        ]
+    }
 }
 
 /// Where builds before the config dir kept the connections, relative to the working directory
@@ -36,6 +231,8 @@ pub(super) struct ConnectionRepository {
     pub path: std::path::PathBuf,
     pub legacy_path: std::path::PathBuf,
     pub credentials: std::sync::Arc<dyn platform_hal::keychain::CredentialStore>,
+    ssh_credentials: std::sync::Arc<dyn platform_hal::keychain::CredentialStore>,
+    client_identity_credentials: std::sync::Arc<dyn platform_hal::keychain::CredentialStore>,
 }
 impl ConnectionRepository {
     pub fn new(path: std::path::PathBuf) -> Self {
@@ -43,6 +240,12 @@ impl ConnectionRepository {
             path,
             legacy_path: LEGACY_CONFIG_FILE.into(),
             credentials: std::sync::Arc::new(platform_hal::keychain::KeychainStore::default()),
+            ssh_credentials: std::sync::Arc::new(platform_hal::keychain::KeychainStore::new(
+                "fastdb-ssh",
+            )),
+            client_identity_credentials: std::sync::Arc::new(
+                platform_hal::keychain::KeychainStore::new("fastdb-client-identity"),
+            ),
         }
     }
     pub fn load_saved_connections_from_str(
@@ -113,6 +316,26 @@ impl ConnectionRepository {
                             .as_str()
                             .filter(|s| !s.trim().is_empty())
                             .map(str::to_owned),
+                        ssh: SavedSsh::read(&item["ssh"]),
+                        client_identity: SavedClientIdentity::read(&item["client_identity"]),
+                        read_only: item["read_only"].as_bool().unwrap_or(false),
+                        application_name: item["application_name"].as_str().map(str::to_owned),
+                        appearance: ConnectionAppearance {
+                            group: item["group"]
+                                .as_str()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(str::to_owned),
+                            color: item["color"]
+                                .as_str()
+                                .and_then(|color| ConnectionAppearance::parse("", color).ok())
+                                .and_then(|appearance| appearance.color),
+                        },
+                        connect_timeout_secs: item["connect_timeout_secs"]
+                            .as_u64()
+                            .and_then(|seconds| u16::try_from(seconds).ok())
+                            .filter(|seconds| (1..=MAX_CONNECT_TIMEOUT_SECS).contains(seconds))
+                            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS),
                     });
                 }
             }
@@ -162,6 +385,12 @@ impl ConnectionRepository {
                     use_unix_socket: sock,
                     tls_enabled: false,
                     tls_ca_cert: None,
+                    ssh: None,
+                    client_identity: None,
+                    connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                    appearance: ConnectionAppearance::default(),
+                    read_only: false,
+                    application_name: None,
                 });
             }
         }
@@ -214,7 +443,10 @@ impl ConnectionRepository {
             || connections.iter().any(|c| c.password.is_some())
             || serde_json::from_str::<serde_json::Value>(&content)
                 .ok()
-                .is_some_and(|v| v["credential_cleanup"].is_array() || v["legacy_cleanup"] == true);
+                .is_some_and(|v| {
+                    CLEANUP_FIELDS.iter().any(|(_, field)| v[*field].is_array())
+                        || v["legacy_cleanup"] == true
+                });
         let mut warning = None;
         for connection in &mut connections {
             if connection.password_unavailable && connection.password.is_none() {
@@ -224,6 +456,28 @@ impl ConnectionRepository {
                         connection.password_unavailable = false;
                     }
                     _ => warning = Some("Some saved passwords could not be read from the keychain. Unlock the keychain and restart, or re-enter the password in Edit connection.".into()),
+                }
+            }
+            if let Some(ssh) = &mut connection.ssh
+                && ssh.secret_unavailable
+            {
+                match self.ssh_credentials.get(&connection.id) {
+                    Ok(Some(secret)) => {
+                        ssh.secret = Some(secret);
+                        ssh.secret_unavailable = false;
+                    }
+                    _ => warning = Some("Some SSH credentials could not be read from the keychain. Unlock it and restart, or re-enter the secret in Edit connection.".into()),
+                }
+            }
+            if let Some(identity) = &mut connection.client_identity
+                && identity.password_unavailable
+            {
+                match self.client_identity_credentials.get(&connection.id) {
+                    Ok(Some(password)) => {
+                        identity.password = Some(password);
+                        identity.password_unavailable = false;
+                    }
+                    _ => warning = Some("Some TLS client identity passwords could not be read from the keychain. Unlock it and restart, or re-enter the password in Edit connection.".into()),
                 }
             }
         }
@@ -241,14 +495,20 @@ impl ConnectionRepository {
         active: Option<&str>,
     ) -> Result<(), String> {
         let mut legacy_source = !self.path.exists() && self.legacy_path.is_file();
-        let mut cleanup = Vec::<String>::new();
+        let mut cleanup = Vec::<(CredentialKind, String)>::new();
         let previous = match std::fs::read_to_string(&self.path) {
             Ok(content) => {
                 let json = serde_json::from_str::<serde_json::Value>(&content)
                     .map_err(|_| "Cannot replace an invalid connections config".to_string())?;
                 legacy_source |= json["legacy_cleanup"] == true;
-                if let Some(pending) = json["credential_cleanup"].as_array() {
-                    cleanup.extend(pending.iter().filter_map(|v| v.as_str().map(str::to_owned)));
+                for (credential_kind, field) in CLEANUP_FIELDS {
+                    if let Some(pending) = json[field].as_array() {
+                        cleanup.extend(
+                            pending
+                                .iter()
+                                .filter_map(|v| v.as_str().map(|id| (credential_kind, id.into()))),
+                        );
+                    }
                 }
                 Self::load_saved_connections_from_str(&content).0
             }
@@ -262,48 +522,59 @@ impl ConnectionRepository {
         {
             return Err("Connection IDs must be unique and nonempty".into());
         }
-        let keep = |id: &str| {
+        let keep = |credential_kind: CredentialKind, id: &str| {
             connections.iter().any(|c| {
                 c.id == id
-                    && (c.password_unavailable
-                        || c.password.as_ref().is_some_and(|p| !p.is_empty()))
+                    && c.secrets().into_iter().any(|(kind, secret, unavailable)| {
+                        kind == credential_kind
+                            && (unavailable || secret.is_some_and(|value| !value.is_empty()))
+                    })
             })
         };
-        cleanup.extend(
-            previous
-                .iter()
-                .filter(|c| (c.password_unavailable || c.password.is_some()) && !keep(&c.id))
-                .map(|c| c.id.clone()),
-        );
-        cleanup.retain(|id| !keep(id));
+        for connection in &previous {
+            for (credential_kind, secret, unavailable) in connection.secrets() {
+                if (unavailable || secret.is_some()) && !keep(credential_kind, &connection.id) {
+                    cleanup.push((credential_kind, connection.id.clone()));
+                }
+            }
+        }
+        cleanup.retain(|(credential_kind, id)| !keep(*credential_kind, id));
         cleanup.sort();
         cleanup.dedup();
+        let store = |kind| match kind {
+            CredentialKind::Database => &self.credentials,
+            CredentialKind::Ssh => &self.ssh_credentials,
+            CredentialKind::ClientIdentity => &self.client_identity_credentials,
+        };
         let mut changed = Vec::new();
-        let rollback = |changed: &[(String, Option<String>)]| {
-            for (id, old) in changed.iter().rev() {
+        let rollback = |changed: &[(CredentialKind, String, Option<String>)]| {
+            for (credential_kind, id, old) in changed.iter().rev() {
                 let _ = match old {
-                    Some(password) => self.credentials.save(id, password),
-                    None => self.credentials.delete(id),
+                    Some(secret) => store(*credential_kind).save(id, secret),
+                    None => store(*credential_kind).delete(id),
                 };
             }
         };
         for connection in connections {
-            if let Some(password) = connection.password.as_deref().filter(|p| !p.is_empty()) {
-                let old = match self.credentials.get(&connection.id) {
+            for (credential_kind, secret, _) in connection.secrets() {
+                let Some(secret) = secret.filter(|value| !value.is_empty()) else {
+                    continue;
+                };
+                let old = match store(credential_kind).get(&connection.id) {
                     Ok(old) => old,
                     Err(_) => {
                         rollback(&changed);
                         return Err("Cannot access the keychain. Unlock it and retry saving the connection.".into());
                     }
                 };
-                if old.as_deref() == Some(password) {
+                if old.as_deref() == Some(secret) {
                     continue;
                 }
-                if self.credentials.save(&connection.id, password).is_err() {
+                if store(credential_kind).save(&connection.id, secret).is_err() {
                     rollback(&changed);
-                    return Err("Cannot save password in the keychain. Unlock it and retry saving the connection.".into());
+                    return Err("Cannot save a credential in the keychain. Unlock it and retry saving the connection.".into());
                 }
-                changed.push((connection.id.clone(), old));
+                changed.push((credential_kind, connection.id.clone(), old));
             }
         }
         let content = Self::serialize_connections_config(connections, active);
@@ -312,15 +583,21 @@ impl ConnectionRepository {
         if legacy_source {
             json["legacy_cleanup"] = serde_json::json!(true);
         }
-        if !cleanup.is_empty() {
-            json["credential_cleanup"] = serde_json::json!(cleanup);
+        for (credential_kind, field) in CLEANUP_FIELDS {
+            let ids: Vec<_> = cleanup
+                .iter()
+                .filter_map(|(kind, id)| (*kind == credential_kind).then_some(id))
+                .collect();
+            if !ids.is_empty() {
+                json[field] = serde_json::json!(ids);
+            }
         }
         if write_connections_config(&self.path, &json.to_string()).is_err() {
             rollback(&changed);
             return Err("Cannot save connections config; credential updates were rolled back where possible".into());
         }
-        for id in &cleanup {
-            self.credentials.delete(id)
+        for (credential_kind, id) in &cleanup {
+            store(*credential_kind).delete(id)
                 .map_err(|_| "Connection config saved, but an unused password could not be deleted from the keychain. Retry saving after unlocking it.".to_string())?;
         }
         if legacy_source {
@@ -360,6 +637,13 @@ impl ConnectionRepository {
                     "use_unix_socket": c.use_unix_socket,
                     "tls_enabled": c.tls_enabled,
                     "tls_ca_cert": c.tls_ca_cert,
+                    "ssh": c.ssh.as_ref().map(SavedSsh::serialize),
+                    "client_identity": c.client_identity.as_ref().map(SavedClientIdentity::serialize),
+                    "connect_timeout_secs": c.connect_timeout_secs,
+                    "group": c.appearance.group,
+                    "read_only": c.read_only,
+                    "application_name": c.application_name,
+                    "color": c.appearance.color.map(|color| format!("#{color:06x}")),
                 })
             })
             .collect();
@@ -376,7 +660,21 @@ impl ConnectionRepository {
 
 #[cfg(test)]
 mod tls_tests {
-    use super::ConnectionRepository;
+    use super::{ConnectionAppearance, ConnectionRepository, DEFAULT_CONNECT_TIMEOUT_SECS};
+
+    #[test]
+    fn connection_appearance_roundtrips_and_rejects_invalid_color() {
+        let (mut profiles, _) = ConnectionRepository::load_saved_connections_from_str(
+            r#"{"connections":[{"database":"db"}]}"#,
+        );
+        assert_eq!(profiles[0].appearance, ConnectionAppearance::default());
+        assert!(ConnectionAppearance::parse("Production", "#123").is_err());
+        profiles[0].appearance = ConnectionAppearance::parse(" Production ", "#F85149").unwrap();
+        let json = ConnectionRepository::serialize_connections_config(&profiles, None);
+        let (loaded, _) = ConnectionRepository::load_saved_connections_from_str(&json);
+        assert_eq!(loaded[0].appearance.group.as_deref(), Some("Production"));
+        assert_eq!(loaded[0].appearance.color, Some(0xf85149));
+    }
 
     #[test]
     fn enterprise_provider_settings_survive_save_and_reload() {
@@ -409,6 +707,10 @@ mod tls_tests {
     fn saved_tls_settings_round_trip_and_legacy_defaults_to_disabled() {
         let legacy = r#"{"connections":[{"id":"pg","database":"postgres"}]}"#;
         let (mut connections, _) = ConnectionRepository::load_saved_connections_from_str(legacy);
+        assert_eq!(
+            connections[0].connect_timeout_secs,
+            DEFAULT_CONNECT_TIMEOUT_SECS
+        );
         assert!(!connections[0].tls_enabled);
         assert_eq!(connections[0].tls_ca_cert, None);
         connections[0].tls_enabled = true;
@@ -422,7 +724,7 @@ mod tls_tests {
 
 #[cfg(test)]
 mod relocated_tests {
-    use super::ConnectionRepository;
+    use super::{ConnectionAppearance, ConnectionRepository, DEFAULT_CONNECT_TIMEOUT_SECS};
     #[test]
     fn test_load_legacy_single_connection() {
         use crate::workspace::connection_config::ConnectionRepository;
@@ -471,6 +773,12 @@ mod relocated_tests {
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
+                ssh: None,
+                client_identity: None,
+                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                appearance: ConnectionAppearance::default(),
+                read_only: false,
+                application_name: None,
             },
             SavedConnection {
                 id: "conn_mysql".to_string(),
@@ -485,6 +793,12 @@ mod relocated_tests {
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
+                ssh: None,
+                client_identity: None,
+                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                appearance: ConnectionAppearance::default(),
+                read_only: false,
+                application_name: None,
             },
             SavedConnection {
                 id: "conn_sqlite".to_string(),
@@ -499,6 +813,12 @@ mod relocated_tests {
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
+                ssh: None,
+                client_identity: None,
+                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                appearance: ConnectionAppearance::default(),
+                read_only: false,
+                application_name: None,
             },
         ];
 
@@ -532,6 +852,12 @@ mod relocated_tests {
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
+            ssh: None,
+            client_identity: None,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+            appearance: ConnectionAppearance::default(),
+            read_only: false,
+            application_name: None,
         }];
 
         let new_conn = SavedConnection {
@@ -547,6 +873,12 @@ mod relocated_tests {
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
+            ssh: None,
+            client_identity: None,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+            appearance: ConnectionAppearance::default(),
+            read_only: false,
+            application_name: None,
         };
 
         if let Some(pos) = conns.iter().position(|c| c.id == new_conn.id) {
@@ -578,6 +910,12 @@ mod relocated_tests {
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
+                ssh: None,
+                client_identity: None,
+                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                appearance: ConnectionAppearance::default(),
+                read_only: false,
+                application_name: None,
             },
             SavedConnection {
                 id: "conn_2".to_string(),
@@ -592,6 +930,12 @@ mod relocated_tests {
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
+                ssh: None,
+                client_identity: None,
+                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                appearance: ConnectionAppearance::default(),
+                read_only: false,
+                application_name: None,
             },
         ];
 
@@ -608,6 +952,12 @@ mod relocated_tests {
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
+            ssh: None,
+            client_identity: None,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+            appearance: ConnectionAppearance::default(),
+            read_only: false,
+            application_name: None,
         };
 
         if let Some(pos) = conns.iter().position(|c| c.id == updated.id) {
@@ -640,6 +990,12 @@ mod relocated_tests {
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
+                ssh: None,
+                client_identity: None,
+                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                appearance: ConnectionAppearance::default(),
+                read_only: false,
+                application_name: None,
             },
             SavedConnection {
                 id: "conn_2".to_string(),
@@ -654,6 +1010,12 @@ mod relocated_tests {
                 use_unix_socket: false,
                 tls_enabled: false,
                 tls_ca_cert: None,
+                ssh: None,
+                client_identity: None,
+                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+                appearance: ConnectionAppearance::default(),
+                read_only: false,
+                application_name: None,
             },
         ];
 
@@ -678,6 +1040,12 @@ mod relocated_tests {
             use_unix_socket: false,
             tls_enabled: false,
             tls_ca_cert: None,
+            ssh: None,
+            client_identity: None,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+            appearance: ConnectionAppearance::default(),
+            read_only: false,
+            application_name: None,
         }
     }
 
@@ -725,6 +1093,12 @@ mod repository_tests {
             path: path.clone(),
             legacy_path: legacy,
             credentials: std::sync::Arc::new(
+                platform_hal::keychain::InMemoryCredentialStore::default(),
+            ),
+            ssh_credentials: std::sync::Arc::new(
+                platform_hal::keychain::InMemoryCredentialStore::default(),
+            ),
+            client_identity_credentials: std::sync::Arc::new(
                 platform_hal::keychain::InMemoryCredentialStore::default(),
             ),
         };
@@ -778,10 +1152,95 @@ mod credential_tests {
             path: temp.path().join("connections.json"),
             legacy_path: temp.path().join("legacy.json"),
             credentials: store.clone(),
+            ssh_credentials: Arc::new(InMemoryCredentialStore::default()),
+            client_identity_credentials: Arc::new(InMemoryCredentialStore::default()),
         };
         (temp, repo, store)
     }
     const PLAINTEXT: &str = r#"{"active_connection_id":"a","connections":[{"id":"a","database":"db","password":"test-secret"}]}"#;
+
+    #[test]
+    fn client_identity_password_roundtrips_only_in_its_keychain() {
+        let (_temp, repo, store) = setup();
+        let (mut profiles, _) = ConnectionRepository::load_saved_connections_from_str(
+            r#"{"connections":[{"id":"a","database":"db","tls_enabled":true}]}"#,
+        );
+        profiles[0].client_identity = Some(SavedClientIdentity {
+            archive_path: "/keys/client.p12".into(),
+            password: Some("archive-fixture-secret".into()),
+            password_unavailable: false,
+        });
+        repo.save(&profiles, Some("a")).unwrap();
+        let json = std::fs::read_to_string(&repo.path).unwrap();
+        assert!(json.contains("/keys/client.p12"));
+        assert!(!json.contains("archive-fixture-secret"));
+        assert!(store.get("a").unwrap().is_none());
+        assert_eq!(repo.load_saved_connections().0, profiles);
+        repo.client_identity_credentials.delete("a").unwrap();
+        let (loaded, _, warning) = repo.load_saved_connections();
+        assert!(warning.unwrap().contains("TLS client identity"));
+        assert!(
+            loaded[0]
+                .client_identity
+                .as_ref()
+                .unwrap()
+                .password_unavailable
+        );
+        repo.save(&profiles, Some("a")).unwrap();
+        profiles[0].client_identity = None;
+        repo.save(&profiles, Some("a")).unwrap();
+        assert!(repo.client_identity_credentials.get("a").unwrap().is_none());
+    }
+
+    #[test]
+    fn ssh_profile_roundtrips_without_exposing_its_secret() {
+        let (_temp, repo, store) = setup();
+        let (mut profiles, _) = ConnectionRepository::load_saved_connections_from_str(
+            r#"{"connections":[{"id":"a","database":"db"}]}"#,
+        );
+        assert!(profiles[0].ssh.is_none());
+        profiles[0].password = Some("database-password".into());
+        profiles[0].ssh = Some(SavedSsh {
+            host: "jump.internal".into(),
+            port: 2222,
+            user: "operator".into(),
+            fingerprint: "SHA256:fixture".into(),
+            key_path: Some("/keys/operator".into()),
+            secret: Some("ssh-passphrase".into()),
+            secret_unavailable: false,
+        });
+        repo.save(&profiles, Some("a")).unwrap();
+        let json = std::fs::read_to_string(&repo.path).unwrap();
+        assert!(!json.contains("ssh-passphrase"));
+        assert!(!json.contains("database-password"));
+        assert!(!format!("{:?}", profiles[0].ssh).contains("ssh-passphrase"));
+        let (loaded, active, warning) = repo.load_saved_connections();
+        assert!(warning.is_none());
+        assert_eq!(active.as_deref(), Some("a"));
+        assert_eq!(loaded, profiles);
+        profiles[0].ssh = None;
+        repo.save(&profiles, Some("a")).unwrap();
+        assert!(repo.ssh_credentials.get("a").unwrap().is_none());
+        assert_eq!(
+            store.get("a").unwrap().as_deref(),
+            Some("database-password")
+        );
+    }
+
+    #[test]
+    fn missing_ssh_secret_reference_survives_unrelated_save() {
+        let (_temp, repo, _) = setup();
+        std::fs::write(&repo.path, r#"{"connections":[{"id":"a","database":"db","ssh":{"host":"jump.internal","port":22,"user":"test","keychain_secret":true}}]}"#).unwrap();
+        let (mut profiles, active, warning) = repo.load_saved_connections();
+        assert!(warning.unwrap().contains("SSH credentials"));
+        assert!(profiles[0].ssh.as_ref().unwrap().secret_unavailable);
+        profiles[0].name = "Renamed".into();
+        repo.save(&profiles, active.as_deref()).unwrap();
+        let (loaded, _, warning) = repo.load_saved_connections();
+        assert!(warning.is_some());
+        assert_eq!(loaded, profiles);
+        assert!(loaded[0].ssh.as_ref().unwrap().secret.is_none());
+    }
 
     #[test]
     fn migration_restart_update_clear_and_delete() {

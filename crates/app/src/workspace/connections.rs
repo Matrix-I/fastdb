@@ -1,4 +1,4 @@
-use super::connection_config::ConnectionRepository;
+use super::connection_config::{ConnectionRepository, SavedClientIdentity, SavedSsh};
 fn connections_config_path() -> std::path::PathBuf {
     platform_hal::paths::config_dir().join("connections.json")
 }
@@ -100,7 +100,7 @@ impl Workspace {
                     // Drivers must live on the shared runtime: pools and sockets outlive this call
                     let rt = db_wire::get_runtime();
 
-                    let timeout_duration = std::time::Duration::from_millis(10000);
+                    let timeout_duration = config.connect_timeout;
                     let outcome = rt.block_on(async {
                         tokio::time::timeout(timeout_duration, async {
                             let driver = create_driver(config)
@@ -159,6 +159,15 @@ impl Workspace {
         self.form.test_result = None;
         cx.notify();
 
+        let appearance = match self.form.build_appearance() {
+            Ok(appearance) => appearance,
+            Err(error) => {
+                self.form.is_connecting = false;
+                self.form.test_result = Some(Err(error));
+                cx.notify();
+                return;
+            }
+        };
         let config = match self.form.build_config() {
             Ok(config) => config,
             Err(error) => {
@@ -178,9 +187,9 @@ impl Workspace {
                     // Drivers must live on the shared runtime: pools and sockets outlive this call
                     let rt = db_wire::get_runtime();
 
-                    let timeout_duration = std::time::Duration::from_millis(15000);
-                    let outcome = rt.block_on(async {
-                        tokio::time::timeout(timeout_duration, async {
+                    let timeout_duration = config.connect_timeout;
+                    rt.block_on(async {
+                        let connected = tokio::time::timeout(timeout_duration, async {
                             let driver = create_driver(config.clone())
                                 .map_err(|e| format!("Driver initialization error: {:#}", e))?;
 
@@ -189,21 +198,23 @@ impl Workspace {
                                 .await
                                 .map_err(|e| format!("Connection failed: {:#}", e))?;
 
-                            let metadata = fetch_schema_metadata(driver.as_ref()).await?;
-
-                            Ok::<_, String>((driver, metadata, config))
+                            Ok::<_, String>(driver)
                         })
-                        .await
-                    });
-
-                    match outcome {
-                        Ok(Ok(val)) => Ok(val),
-                        Ok(Err(e)) => Err(e),
-                        Err(_) => Err(
+                        .await;
+                        let driver = connected.map_err(|_| {
                             "Connection timed out (server unreachable or request took too long)"
-                                .to_string(),
-                        ),
-                    }
+                                .to_string()
+                        })??;
+                        let metadata = tokio::time::timeout(
+                            std::time::Duration::from_secs(15),
+                            fetch_schema_metadata(driver.as_ref()),
+                        )
+                        .await
+                        .map_err(|_| {
+                            "Connected, but loading database metadata timed out".to_string()
+                        })??;
+                        Ok::<_, String>((driver, metadata, config))
+                    })
                 })
                 .await;
 
@@ -281,6 +292,15 @@ impl Workspace {
                             use_unix_socket: config.use_unix_socket,
                             tls_enabled: config.tls_enabled,
                             tls_ca_cert: config.tls_ca_cert.clone(),
+                            ssh: config.ssh_tunnel.as_ref().map(SavedSsh::from_config),
+                            client_identity: config
+                                .tls_client_identity
+                                .as_ref()
+                                .map(SavedClientIdentity::from_config),
+                            connect_timeout_secs: config.connect_timeout.as_secs() as u16,
+                            appearance,
+                            read_only: config.read_only,
+                            application_name: config.application_name.clone(),
                         };
 
                         if let Some(pos) = this
@@ -682,9 +702,28 @@ impl Workspace {
         };
 
         self.form.load(Some(&saved), false);
-        if saved.password_unavailable {
+        let unavailable = if saved.password_unavailable {
+            Some(
+                "Saved password unavailable. Unlock the keychain and restart, or re-enter the password.",
+            )
+        } else if saved
+            .client_identity
+            .as_ref()
+            .is_some_and(|identity| identity.password_unavailable)
+        {
+            Some(
+                "Saved TLS client identity password unavailable. Unlock the keychain and restart, or re-enter the password.",
+            )
+        } else if saved.ssh.as_ref().is_some_and(|ssh| ssh.secret_unavailable) {
+            Some(
+                "Saved SSH secret unavailable. Unlock the keychain and restart, or re-enter the password or key passphrase.",
+            )
+        } else {
+            None
+        };
+        if let Some(message) = unavailable {
             self.form.show_connection_modal = true;
-            self.form.test_result = Some(Err("Saved password unavailable. Unlock the keychain and restart, or re-enter the password.".into()));
+            self.form.test_result = Some(Err(message.into()));
             return false;
         }
         true
@@ -729,6 +768,14 @@ impl Workspace {
             )
         });
 
+        let appearance = match self.form.build_appearance() {
+            Ok(appearance) => appearance,
+            Err(error) => {
+                self.form.is_connecting = false;
+                self.form.test_result = Some(Err(error));
+                return;
+            }
+        };
         let config = match self.form.build_config() {
             Ok(config) => config,
             Err(error) => {
@@ -775,6 +822,15 @@ impl Workspace {
             use_unix_socket: config.use_unix_socket,
             tls_enabled: config.tls_enabled,
             tls_ca_cert: config.tls_ca_cert.clone(),
+            ssh: config.ssh_tunnel.as_ref().map(SavedSsh::from_config),
+            client_identity: config
+                .tls_client_identity
+                .as_ref()
+                .map(SavedClientIdentity::from_config),
+            connect_timeout_secs: config.connect_timeout.as_secs() as u16,
+            appearance,
+            read_only: config.read_only,
+            application_name: config.application_name.clone(),
         };
 
         if let Some(pos) = self

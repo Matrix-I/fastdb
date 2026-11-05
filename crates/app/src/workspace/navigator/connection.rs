@@ -11,6 +11,12 @@ impl Workspace {
         let conn_id = conn.id.clone();
         let is_this_active = self.connections.active_connection_id.as_deref() == Some(&conn_id);
         let is_this_connected = self.is_connection_live(&conn_id);
+        let read_only = self
+            .connections
+            .session(&conn_id)
+            .driver
+            .as_ref()
+            .map_or(conn.read_only, |driver| driver.is_read_only());
         let is_this_connecting = self.form.is_connecting && is_this_active;
         // Only the active connection's tree is loaded into the navigator
         let is_conn_exp = self.connections.navigator().nav_connection_expanded
@@ -86,6 +92,21 @@ impl Workspace {
                             move |this, cx| this.toggle_or_connect(&conn_id_for_chev, cx),
                         ))
                         .child(dbeaver_driver_icon(&drv_name, is_this_connected))
+                        .when(read_only, |row| {
+                            row.child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(theme.text_warning)
+                                    .child("Read-only"),
+                            )
+                        })
+                        .children(conn.appearance.color.map(|color| {
+                            div()
+                                .size(px(8.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(rgb(color))
+                        }))
                         .child(
                             div()
                                 .font_weight(if is_this_connected {

@@ -4,6 +4,7 @@ mod column;
 mod metadata;
 mod objects;
 mod query_edit;
+mod read_only;
 mod script;
 mod transfer;
 
@@ -13,6 +14,7 @@ use futures::StreamExt;
 use mem_engine::ColumnMeta;
 use parking_lot::Mutex;
 use platform_hal::socket::{DbKind, detect_local_unix_socket};
+use postgres_native_tls::MakeTlsConnector;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio_postgres::{CancelToken, Client, NoTls};
@@ -28,7 +30,30 @@ pub struct PostgresDriver {
     pub config: ConnectionConfig,
     notices: NoticeTarget,
     client: tokio::sync::Mutex<Option<Arc<Client>>>,
-    cancel_token: Arc<Mutex<Option<CancelToken>>>,
+    cancellation: Mutex<Option<PgCancellation>>,
+    read_only: Option<tokio::sync::Mutex<()>>,
+}
+
+#[derive(Clone)]
+struct PgCancellation {
+    token: CancelToken,
+    tls: Option<MakeTlsConnector>,
+}
+
+impl PgCancellation {
+    async fn cancel(&self) -> Result<()> {
+        match &self.tls {
+            Some(tls) => self.token.cancel_query(tls.clone()).await?,
+            None => self.token.cancel_query(NoTls).await?,
+        }
+        Ok(())
+    }
+}
+
+struct EstablishedConnection {
+    client: Client,
+    task: tokio::task::JoinHandle<()>,
+    cancellation: PgCancellation,
 }
 
 struct SocketGuard(tokio::task::JoinHandle<()>);
@@ -106,7 +131,7 @@ fn info_schema_column(
 }
 
 /// Uses system roots plus an optional private CA, always verifying the server identity.
-fn tls_connector(config: &ConnectionConfig) -> Result<postgres_native_tls::MakeTlsConnector> {
+fn tls_connector(config: &ConnectionConfig) -> Result<MakeTlsConnector> {
     let mut builder = native_tls::TlsConnector::builder();
     builder.min_protocol_version(Some(native_tls::Protocol::Tlsv12));
     if let Some(path) = &config.tls_ca_cert {
@@ -117,16 +142,22 @@ fn tls_connector(config: &ConnectionConfig) -> Result<postgres_native_tls::MakeT
             .with_context(|| format!("Invalid TLS CA certificate: {path}"))?;
         builder.add_root_certificate(cert);
     }
-    Ok(postgres_native_tls::MakeTlsConnector::new(builder.build()?))
+    if let Some(identity) = &config.tls_client_identity {
+        let archive = identity.read_archive()?;
+        let identity = identity.parse_archive(&archive)?;
+        builder.identity(identity);
+    }
+    Ok(MakeTlsConnector::new(builder.build()?))
 }
 
 impl PostgresDriver {
     pub fn new(config: ConnectionConfig) -> Self {
         Self {
+            read_only: config.read_only.then(|| tokio::sync::Mutex::new(())),
             config,
             notices: Arc::default(),
             client: tokio::sync::Mutex::new(None),
-            cancel_token: Arc::new(Mutex::new(None)),
+            cancellation: Mutex::new(None),
         }
     }
 
@@ -141,15 +172,12 @@ impl PostgresDriver {
         // Connect on the shared runtime so the socket outlives the caller's runtime
         let config = self.config.clone();
         let notices = self.notices.clone();
-        let client = Arc::new(
-            crate::run_on_shared_runtime(async move {
-                Self::connect_with_notices(config, notices)
-                    .await
-                    .map(|(client, _)| client)
-            })
-            .await?,
-        );
-        *self.cancel_token.lock() = Some(client.cancel_token());
+        let established = crate::run_on_shared_runtime(async move {
+            Self::connect_with_notices(config, notices).await
+        })
+        .await?;
+        let client = Arc::new(established.client);
+        *self.cancellation.lock() = Some(established.cancellation);
         *guard = Some(Arc::clone(&client));
         Ok(client)
     }
@@ -157,23 +185,55 @@ impl PostgresDriver {
     async fn connect_with_task(
         config: ConnectionConfig,
     ) -> Result<(Client, tokio::task::JoinHandle<()>)> {
-        Self::connect_with_notices(config, Arc::default()).await
+        let established = Self::connect_with_notices(config, Arc::default()).await?;
+        Ok((established.client, established.task))
     }
 
     async fn connect_with_notices(
         config: ConnectionConfig,
         notices: NoticeTarget,
-    ) -> Result<(Client, tokio::task::JoinHandle<()>)> {
+    ) -> Result<EstablishedConnection> {
+        tokio::time::timeout(
+            config.connect_timeout,
+            Self::connect_before_deadline(config, notices),
+        )
+        .await
+        .context("PostgreSQL connection timed out")?
+    }
+
+    async fn connect_before_deadline(
+        config: ConnectionConfig,
+        notices: NoticeTarget,
+    ) -> Result<EstablishedConnection> {
+        config.validate_tls_identity()?;
+        config.validate_application_name()?;
         let mut pg_config = tokio_postgres::Config::new();
         pg_config.user(&config.user);
         if let Some(ref pw) = config.password {
             pg_config.password(pw);
         }
         pg_config.dbname(&config.database);
+        if let Some(name) = &config.application_name {
+            pg_config.application_name(name);
+        }
         pg_config.connect_timeout(config.connect_timeout);
 
-        // Check for local Unix Domain Socket if enabled
-        let unix_socket = if config.use_unix_socket && !config.tls_enabled {
+        let tunnel = if let Some(settings) = config.ssh_tunnel.clone() {
+            Some(
+                crate::SshTunnel::start_forwarding(
+                    settings,
+                    config.host.clone(),
+                    config.port.into(),
+                )
+                .await
+                .context("Could not open PostgreSQL SSH tunnel")?,
+            )
+        } else {
+            None
+        };
+
+        // An SSH connection always uses TCP through the authenticated forwarder.
+        let unix_socket = if tunnel.is_none() && config.use_unix_socket && !config.tls_enabled {
             detect_local_unix_socket(DbKind::Postgres, &config.host, config.port)
         } else {
             None
@@ -185,13 +245,32 @@ impl PostgresDriver {
         } else {
             info!("Connecting to PostgreSQL via TCP");
             pg_config.host(&config.host);
-            pg_config.port(config.port);
+            if let Some(tunnel) = &tunnel {
+                // hostaddr controls the socket address. host remains the TLS identity.
+                pg_config.hostaddr(std::net::Ipv4Addr::LOCALHOST.into());
+                pg_config.port(tunnel.local_bound_port);
+            } else {
+                pg_config.port(config.port);
+            }
         }
 
-        let client = if config.tls_enabled {
+        let tls = if config.tls_enabled {
+            let settings = config.clone();
+            Some(
+                tokio::task::spawn_blocking(move || tls_connector(&settings))
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("Could not prepare the PostgreSQL TLS configuration")
+                    })??,
+            )
+        } else {
+            None
+        };
+
+        let (client, task) = if let Some(connector) = &tls {
             pg_config.ssl_mode(tokio_postgres::config::SslMode::Require);
             let (client, mut connection) = pg_config
-                .connect(tls_connector(&config)?)
+                .connect(connector.clone())
                 .await
                 .with_context(|| {
                     format!(
@@ -200,6 +279,7 @@ impl PostgresDriver {
                     )
                 })?;
             let task = crate::get_runtime().spawn(async move {
+                let _tunnel = tunnel;
                 while let Some(message) =
                     futures::future::poll_fn(|cx| connection.poll_message(cx)).await
                 {
@@ -227,6 +307,7 @@ impl PostgresDriver {
                 )
             })?;
             let task = crate::get_runtime().spawn(async move {
+                let _tunnel = tunnel;
                 while let Some(message) =
                     futures::future::poll_fn(|cx| connection.poll_message(cx)).await
                 {
@@ -247,17 +328,29 @@ impl PostgresDriver {
             (client, task)
         };
 
-        Ok(client)
+        Ok(EstablishedConnection {
+            cancellation: PgCancellation {
+                token: client.cancel_token(),
+                tls,
+            },
+            client,
+            task,
+        })
     }
 }
 
 #[async_trait]
 impl DatabaseDriver for PostgresDriver {
+    fn is_read_only(&self) -> bool {
+        self.read_only.is_some()
+    }
+
     fn supports_transfer(&self) -> bool {
-        true
+        !self.is_read_only()
     }
 
     async fn load_editable_query(&self, sql: &str) -> Result<Arc<crate::QueryResultPager>> {
+        anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
         query_edit::load(self.config.clone(), sql.to_owned()).await
     }
     async fn save_query_edits(
@@ -265,6 +358,7 @@ impl DatabaseDriver for PostgresDriver {
         pager: Arc<crate::QueryResultPager>,
         edits: Vec<crate::QueryCellUpdate>,
     ) -> Result<()> {
+        anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
         query_edit::save(self.config.clone(), pager, edits).await
     }
 
@@ -272,6 +366,7 @@ impl DatabaseDriver for PostgresDriver {
         crate::session_context::validate_name(database).map_err(anyhow::Error::msg)?;
         let mut config = self.config.clone();
         config.database = database.into();
+        config.read_only = self.is_read_only();
         Ok(Arc::new(Self::new(config)))
     }
 
@@ -305,15 +400,14 @@ impl DatabaseDriver for PostgresDriver {
         let config = self.config.clone();
         let notices = NoticeTarget::default();
         let target = notices.clone();
-        let (client, task) = crate::run_on_shared_runtime(async move {
+        let established = crate::run_on_shared_runtime(async move {
             Self::connect_with_notices(config, target).await
         })
         .await?;
         Ok(Arc::new(script::PostgresScriptSession::new(
-            client,
-            task,
-            self.config.clone(),
+            established,
             notices,
+            self.is_read_only(),
         )))
     }
 
@@ -334,6 +428,7 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
+        anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
         let (client, task) = Self::connect_with_task(self.config.clone()).await?;
         let _guard = SocketGuard(task);
         client
@@ -376,6 +471,9 @@ impl DatabaseDriver for PostgresDriver {
         original: &crate::column::ColumnDefinition,
         draft: &crate::column::ColumnDraft,
     ) -> crate::column::ColumnApplyOutcome {
+        if self.is_read_only() {
+            return crate::column::ColumnApplyOutcome::Rejected(read_only::DENIED.into());
+        }
         self.persist_column(original, draft).await
     }
 
@@ -396,9 +494,15 @@ impl DatabaseDriver for PostgresDriver {
             .await
             .map_err(|e| report_error(&event_tx, format!("{e:#}")))?;
 
-        // Update cancel token for this connection
-        *self.cancel_token.lock() = Some(client.cancel_token());
-
+        let (_guard, sql) = if let Some(lock) = &self.read_only {
+            let guard = lock.lock().await;
+            let sql = read_only::prepare(&client, sql)
+                .await
+                .map_err(|error| report_error(&event_tx, format!("{error:#}")))?;
+            (Some(guard), sql)
+        } else {
+            (None, sql)
+        };
         stream_client(
             &client,
             sql,
@@ -421,7 +525,16 @@ impl DatabaseDriver for PostgresDriver {
         let started = Instant::now();
         let client = self.get_or_connect().await?;
         control.check()?;
-        *self.cancel_token.lock() = Some(client.cancel_token());
+        let (_guard, sql) = if let Some(lock) = &self.read_only {
+            let guard = lock.lock().await;
+            control.check()?;
+            let sql = read_only::prepare(&client, sql)
+                .await
+                .map_err(|error| report_error(&tx, format!("{error:#}")))?;
+            (Some(guard), sql)
+        } else {
+            (None, sql)
+        };
         stream_client(
             &client,
             sql,
@@ -435,6 +548,7 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
+        anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
         let client = self.get_or_connect().await?;
         client
             .batch_execute("BEGIN")
@@ -461,13 +575,9 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     async fn cancel_active_query(&self) -> Result<()> {
-        let maybe_token = self.cancel_token.lock().clone();
-        if let Some(token) = maybe_token {
-            if self.config.tls_enabled {
-                token.cancel_query(tls_connector(&self.config)?).await?;
-            } else {
-                token.cancel_query(NoTls).await?;
-            }
+        let cancellation = self.cancellation.lock().clone();
+        if let Some(cancellation) = cancellation {
+            cancellation.cancel().await?;
             info!("Cancelled active PostgreSQL query");
         }
         Ok(())

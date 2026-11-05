@@ -46,6 +46,11 @@ impl Workspace {
         let Some(driver) = self.tab_session(index).driver.clone() else {
             return;
         };
+        if driver.is_read_only() {
+            self.tabs[index].last_error = Some("This connection is read-only".into());
+            cx.notify();
+            return;
+        }
         let Some(connection_id) = self.tabs[index].connection_id.clone() else {
             return;
         };
