@@ -315,6 +315,13 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            if self.form.choosing_provider {
+                if event.keystroke.key == "enter" || event.keystroke.key == "return" {
+                    self.form.show_configuration();
+                    cx.notify();
+                }
+                return;
+            }
             if event.keystroke.key == "enter" || event.keystroke.key == "return" {
                 self.connect_to_database(cx);
                 return;
@@ -323,59 +330,8 @@ impl Workspace {
                 self.form.field_anchor = None;
                 self.form.field_cursor = usize::MAX;
                 self.input.cursor_visible = true;
-                self.form.active_field =
-                    match (self.form.selected_driver_kind, self.form.active_field) {
-                        (DbDriverKind::Sqlite, None) => Some(FormField::Name),
-                        (_, Some(FormField::Name)) => Some(FormField::ConnectionGroup),
-                        (_, Some(FormField::ConnectionGroup)) => Some(FormField::ConnectionColor),
-                        (DbDriverKind::Sqlite, Some(FormField::ConnectionColor)) => {
-                            Some(FormField::Database)
-                        }
-                        (DbDriverKind::Sqlite, Some(FormField::Database)) => Some(FormField::Name),
-                        (DbDriverKind::Sqlite, _) => Some(FormField::Database),
-                        (_, None) => Some(FormField::Name),
-                        (_, Some(FormField::ConnectionColor)) => Some(FormField::Host),
-                        (_, Some(FormField::Host)) => Some(FormField::Port),
-                        (_, Some(FormField::Port)) => Some(FormField::Database),
-                        (_, Some(FormField::Database)) => Some(FormField::User),
-                        (_, Some(FormField::User)) => Some(FormField::Password),
-                        (_, Some(FormField::Password)) if self.form.form_tls_enabled => {
-                            Some(FormField::TlsCa)
-                        }
-                        (_, Some(FormField::Password | FormField::TlsCa))
-                            if self.form.shows_client_identity() =>
-                        {
-                            Some(FormField::ClientArchive)
-                        }
-                        (_, Some(FormField::ClientArchive)) => {
-                            Some(FormField::ClientArchivePassword)
-                        }
-                        (
-                            _,
-                            Some(
-                                FormField::Password
-                                | FormField::TlsCa
-                                | FormField::ClientArchivePassword,
-                            ),
-                        ) => Some(FormField::ConnectTimeout),
-                        (_, Some(FormField::ConnectTimeout))
-                            if self.form.selected_driver_kind == DbDriverKind::Postgres
-                                || !self.form.application_name.is_empty() =>
-                        {
-                            Some(FormField::ApplicationName)
-                        }
-                        (_, Some(FormField::ConnectTimeout | FormField::ApplicationName))
-                            if self.form.ssh.enabled =>
-                        {
-                            Some(FormField::SshHost)
-                        }
-                        (_, Some(FormField::SshHost)) => Some(FormField::SshPort),
-                        (_, Some(FormField::SshPort)) => Some(FormField::SshUser),
-                        (_, Some(FormField::SshUser)) => Some(FormField::SshFingerprint),
-                        (_, Some(FormField::SshFingerprint)) => Some(FormField::SshKey),
-                        (_, Some(FormField::SshKey)) => Some(FormField::SshSecret),
-                        _ => Some(FormField::Name),
-                    };
+                self.form
+                    .cycle_settings_field(event.keystroke.modifiers.shift);
                 cx.notify();
                 return;
             }

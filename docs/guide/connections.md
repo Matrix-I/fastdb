@@ -1,5 +1,11 @@
 # Connections
 
+For v0.2.0, PostgreSQL is the required release acceptance provider. MariaDB,
+Oracle, SQL Server and Db2 choices are disabled and labelled **Feature is coming**.
+Existing profiles are retained but Test/Connect are blocked, including navigator
+Connect. MySQL and SQLite remain available. Driver capabilities described below
+do not imply that a deferred provider is enabled in the desktop app.
+
 - **PostgreSQL** (`tokio-postgres`), **MySQL / MariaDB** (`mysql_async`) and **SQLite** (`rusqlite`, bundled). MariaDB has its own provider preset, saved identity and MySQL-compatible SQL handling.
 - **Db2 for LUW**, **Oracle** and **SQL Server** support connections, SQL execution and streamed results through installed vendor ODBC drivers. The driver manager is bundled. See [provider setup and live tests](../PROVIDERS.md).
 - TCP, or automatic local **Unix domain socket** discovery for PostgreSQL (`/tmp/.s.PGSQL.*`, `/var/run/postgresql`, `/run/postgresql`) and MySQL.
@@ -97,3 +103,25 @@ again. Switching modes does not copy or delete secrets in the other store;
 re-enter passwords on first use in the selected store, or use separate profiles.
 Legacy plaintext connection files migrate into whichever store is selected.
 There is no in-app toggle or automatic Keychain-to-file migration.
+
+## Add a connection
+
+**Add new connection** opens two screens. First select a database type and click
+**Next** (or press Enter). Then fill in the configuration and use **Test
+Connection**, **Save**, or **Connect Database**. **Back** returns to database
+selection; choosing the same type preserves the draft, while a different type
+applies its preset. Editing a saved connection opens configuration directly.
+
+Both steps share the same 840 × 600 dialog frame (bounded by the workspace),
+with a fixed header and bottom actions. Database types appear as icon cards.
+Configuration is split into **Main** (server/file and authentication), **SSH**,
+**TLS** (including client identity) and **Advanced** (navigator appearance,
+read-only, timeout and application name). SSH/TLS tabs are omitted when they do
+not apply to the provider; a retained TLS client identity keeps its tab available
+so it can be cleared after switching to SQLite. Switching tabs preserves all
+draft values; Tab and Shift+Tab cycle only through the visible fields. Connection feedback stays
+above the footer; **Copy details** copies the full message if it is truncated.
+
+PostgreSQL, MySQL and SQLite use vector logos in the provider picker and navigator
+for sharp display on Retina screens. Asset sources are recorded in
+[the icon attribution](../../assets/icons/README.md).

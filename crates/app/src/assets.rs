@@ -32,6 +32,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provider_card_logos_are_scalable_vector_artwork() {
+        let source = FastDbAssetSource;
+        for path in [
+            "icons/postgresql.svg",
+            "icons/mysql.svg",
+            "icons/sqlite.svg",
+        ] {
+            let data = source.load(path).unwrap().unwrap();
+            assert!(
+                !data.starts_with(b"\x89PNG"),
+                "{path}: raster logo cannot scale cleanly from 16px to 88px Retina cards"
+            );
+            let svg = std::str::from_utf8(&data).unwrap();
+            assert!(
+                svg.contains("<svg") && svg.contains("viewBox="),
+                "{path}: missing scalable canvas"
+            );
+            assert!(svg.contains("<path"), "{path}: missing vector artwork");
+            assert!(
+                !svg.contains("<image"),
+                "{path}: embedded bitmap would still pixelate"
+            );
+        }
+    }
+
+    #[test]
     fn test_dbeaver_icons_loadable() {
         let source = FastDbAssetSource;
         assert!(source.load("icons/folder_database.svg").unwrap().is_some());
@@ -70,9 +96,9 @@ mod tests {
         assert!(source.load("icons/sql_validate.svg").unwrap().is_some());
         assert!(source.load("icons/function.svg").unwrap().is_some());
         assert!(source.load("icons/sql.svg").unwrap().is_some());
-        assert!(source.load("icons/postgresql.png").unwrap().is_some());
-        assert!(source.load("icons/mysql.png").unwrap().is_some());
-        assert!(source.load("icons/sqlite.png").unwrap().is_some());
+        assert!(source.load("icons/postgresql.svg").unwrap().is_some());
+        assert!(source.load("icons/mysql.svg").unwrap().is_some());
+        assert!(source.load("icons/sqlite.svg").unwrap().is_some());
         assert!(source.load("icons/success_ovr.png").unwrap().is_some());
     }
 }

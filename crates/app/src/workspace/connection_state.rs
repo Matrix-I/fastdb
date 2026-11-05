@@ -10,11 +10,21 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use ui_editor::line_input::LineHistory;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConnectionSettingsTab {
+    Main,
+    Ssh,
+    Tls,
+    Advanced,
+}
+
 pub(super) struct ConnectionFormState {
     pub request_id: u64,
     pub editing_connection_id: Option<String>,
     pub is_connecting: bool,
     pub show_connection_modal: bool,
+    pub choosing_provider: bool,
+    pub settings_tab: ConnectionSettingsTab,
     pub selected_driver_kind: DbDriverKind,
     pub form_name: String,
     pub connection_group: String,
@@ -211,6 +221,22 @@ impl ConnectionManager {
 }
 
 impl ConnectionFormState {
+    pub const FEATURE_COMING_MESSAGE: &str = "Feature is coming";
+
+    pub fn provider_is_available(kind: DbDriverKind) -> bool {
+        matches!(
+            kind,
+            DbDriverKind::Postgres | DbDriverKind::MySql | DbDriverKind::Sqlite
+        )
+    }
+
+    pub fn available_config(&self) -> Result<ConnectionConfig, String> {
+        if !Self::provider_is_available(self.selected_driver_kind) {
+            return Err(Self::FEATURE_COMING_MESSAGE.into());
+        }
+        self.build_config()
+    }
+
     pub fn snapshot(&self) -> Vec<String> {
         vec![
             self.editing_connection_id.clone().unwrap_or_default(),
@@ -267,6 +293,9 @@ impl ConnectionFormState {
         !self.client_archive.is_empty()
             || !self.client_archive_password.is_empty()
             || self.client_archive_password_unavailable
+            // Keep both clearing controls mounted until the user leaves this tab.
+            || (self.selected_driver_kind == DbDriverKind::Sqlite
+                && self.settings_tab == ConnectionSettingsTab::Tls)
             || (self.form_tls_enabled && self.selected_driver_kind.supports_tls_client_identity())
     }
 
@@ -358,6 +387,112 @@ impl ConnectionFormState {
             self.active_field = Some(FormField::Database);
         }
     }
+    pub fn show_provider_selection(&mut self) {
+        self.invalidate();
+        self.choosing_provider = true;
+        self.active_field = None;
+        self.field_anchor = None;
+        self.test_result = None;
+    }
+
+    pub fn choose_provider(&mut self, kind: DbDriverKind) {
+        if !Self::provider_is_available(kind) {
+            return;
+        }
+        if self.selected_driver_kind != kind {
+            self.select_preset(kind);
+        }
+        self.active_field = None;
+    }
+
+    pub fn show_configuration(&mut self) {
+        if !Self::provider_is_available(self.selected_driver_kind) {
+            return;
+        }
+        self.choosing_provider = false;
+        self.select_settings_tab(ConnectionSettingsTab::Main);
+    }
+
+    pub fn settings_tabs(&self) -> Vec<ConnectionSettingsTab> {
+        let mut tabs = vec![ConnectionSettingsTab::Main];
+        if self.selected_driver_kind.supports_ssh() || self.ssh.enabled {
+            tabs.push(ConnectionSettingsTab::Ssh);
+        }
+        if self.selected_driver_kind != DbDriverKind::Sqlite || self.shows_client_identity() {
+            tabs.push(ConnectionSettingsTab::Tls);
+        }
+        tabs.push(ConnectionSettingsTab::Advanced);
+        tabs
+    }
+
+    pub fn visible_settings_fields(&self) -> Vec<FormField> {
+        use ConnectionSettingsTab::*;
+        use FormField::*;
+        match self.settings_tab {
+            Main if self.selected_driver_kind == DbDriverKind::Sqlite => vec![Name, Database],
+            Main => vec![Name, Host, Port, Database, User, Password],
+            Ssh if self.ssh.enabled => {
+                vec![SshHost, SshPort, SshUser, SshFingerprint, SshKey, SshSecret]
+            }
+            Ssh => vec![],
+            Tls => {
+                let mut fields = Vec::new();
+                if self.form_tls_enabled
+                    && (!self.selected_driver_kind.uses_odbc()
+                        || self.selected_driver_kind == DbDriverKind::Db2)
+                {
+                    fields.push(TlsCa);
+                }
+                if self.shows_client_identity() {
+                    fields.extend([ClientArchive, ClientArchivePassword]);
+                }
+                fields
+            }
+            Advanced => {
+                let mut fields = vec![ConnectionGroup, ConnectionColor];
+                if self.selected_driver_kind != DbDriverKind::Sqlite {
+                    fields.push(ConnectTimeout);
+                }
+                if self.selected_driver_kind == DbDriverKind::Postgres
+                    || !self.application_name.is_empty()
+                {
+                    fields.push(ApplicationName);
+                }
+                fields
+            }
+        }
+    }
+
+    pub fn select_settings_tab(&mut self, tab: ConnectionSettingsTab) {
+        if !self.settings_tabs().contains(&tab) {
+            return;
+        }
+        self.settings_tab = tab;
+        self.active_field = self.visible_settings_fields().first().copied();
+        self.field_cursor = usize::MAX;
+        self.field_anchor = None;
+    }
+
+    pub fn cycle_settings_field(&mut self, backwards: bool) {
+        let fields = self.visible_settings_fields();
+        self.active_field = if fields.is_empty() {
+            None
+        } else {
+            let current = fields
+                .iter()
+                .position(|field| Some(*field) == self.active_field);
+            let next = match current {
+                Some(index) if backwards => (index + fields.len() - 1) % fields.len(),
+                Some(index) => (index + 1) % fields.len(),
+                None if backwards => fields.len() - 1,
+                None => 0,
+            };
+            Some(fields[next])
+        };
+        self.field_cursor = usize::MAX;
+        self.field_anchor = None;
+    }
+
     pub fn select_preset(&mut self, kind: DbDriverKind) {
         self.invalidate();
         self.selected_driver_kind = kind;
@@ -440,6 +575,8 @@ impl ConnectionFormState {
             editing_connection_id: saved.map(|s| s.id.clone()),
             is_connecting: false,
             show_connection_modal: false,
+            choosing_provider: saved.is_none(),
+            settings_tab: ConnectionSettingsTab::Main,
             selected_driver_kind: saved
                 .and_then(|s| DbDriverKind::from_name(&s.driver))
                 .unwrap_or(DbDriverKind::Postgres),
@@ -454,12 +591,14 @@ impl ConnectionFormState {
             form_port: saved
                 .map(|s| s.port.to_string())
                 .unwrap_or_else(|| "5432".into()),
-            form_database: saved.map(|s| s.database.clone()).unwrap_or_default(),
+            form_database: saved
+                .map(|s| s.database.clone())
+                .unwrap_or_else(|| "postgres".into()),
             form_user: saved
                 .map(|s| s.user.clone())
                 .unwrap_or_else(|| "postgres".into()),
             form_password: saved.and_then(|s| s.password.clone()).unwrap_or_default(),
-            form_use_unix_socket: saved.is_some_and(|s| s.use_unix_socket),
+            form_use_unix_socket: saved.is_none_or(|s| s.use_unix_socket),
             form_tls_enabled: saved.is_some_and(|s| s.tls_enabled),
             form_tls_ca_cert: saved
                 .and_then(|s| s.tls_ca_cert.clone())
@@ -483,7 +622,7 @@ impl ConnectionFormState {
             application_name: saved
                 .and_then(|profile| profile.application_name.clone())
                 .unwrap_or_default(),
-            active_field: Some(FormField::Name),
+            active_field: saved.map(|_| FormField::Name),
             form_history: HashMap::new(),
             show_password: false,
             test_result: None,
@@ -638,6 +777,38 @@ mod preset_tests {
     use super::ConnectionFormState;
     use db_wire::DbDriverKind;
     #[test]
+    fn release_provider_availability_blocks_deferred_saved_profiles() {
+        use crate::workspace::connection_config::ConnectionRepository;
+        for (name, kind) in [
+            ("MariaDb", DbDriverKind::MariaDb),
+            ("Oracle", DbDriverKind::Oracle),
+            ("SqlServer", DbDriverKind::SqlServer),
+            ("Db2", DbDriverKind::Db2),
+        ] {
+            assert!(!ConnectionFormState::provider_is_available(kind), "{name}");
+            let json = format!(
+                r#"{{"connections":[{{"id":"saved","driver":"{name}","database":"fixture"}}]}}"#
+            );
+            let (saved, _) = ConnectionRepository::load_saved_connections_from_str(&json);
+            let mut form = ConnectionFormState::from_saved(None);
+            form.load(saved.first(), false);
+            assert_eq!(form.selected_driver_kind, kind);
+            assert_eq!(form.editing_connection_id.as_deref(), Some("saved"));
+            assert_eq!(form.available_config().unwrap_err(), "Feature is coming");
+        }
+        for kind in [
+            DbDriverKind::Postgres,
+            DbDriverKind::MySql,
+            DbDriverKind::Sqlite,
+        ] {
+            assert!(ConnectionFormState::provider_is_available(kind));
+            let mut form = ConnectionFormState::from_saved(None);
+            form.select_preset(kind);
+            assert_eq!(form.available_config().unwrap().driver, kind);
+        }
+    }
+
+    #[test]
     fn provider_presets_preserve_form_identity_and_invalidate_pending_requests() {
         let mut form = ConnectionFormState::from_saved(None);
         form.editing_connection_id = Some("existing".into());
@@ -656,5 +827,183 @@ mod preset_tests {
             assert_eq!(form.build_config().unwrap().driver, kind);
         }
         assert!(!form.accepts(request, &snapshot));
+    }
+}
+
+#[cfg(test)]
+mod dialog_step_tests {
+    use super::*;
+
+    #[test]
+    fn new_connection_navigation_preserves_draft_and_rejects_stale_requests() {
+        let mut form = ConnectionFormState::from_saved(None);
+        form.load(None, true);
+        assert!(form.choosing_provider);
+        assert_eq!(form.active_field, None);
+        form.choose_provider(DbDriverKind::Sqlite);
+        form.show_configuration();
+        assert!(!form.choosing_provider);
+        assert_eq!(form.build_config().unwrap().driver, DbDriverKind::Sqlite);
+        form.form_database = "draft.sqlite".into();
+        let request = form.begin_request();
+        let snapshot = form.snapshot();
+        form.show_provider_selection();
+        assert!(form.choosing_provider);
+        assert_eq!(form.active_field, None);
+        assert!(!form.accepts(request, &snapshot));
+        form.choose_provider(DbDriverKind::Sqlite);
+        form.show_configuration();
+        assert_eq!(form.form_database, "draft.sqlite");
+        form.show_provider_selection();
+        form.choose_provider(DbDriverKind::MySql);
+        form.show_configuration();
+        assert_eq!(form.form_database, "mysql");
+        assert_eq!(form.form_port, "3306");
+        form.load(None, true);
+        assert!(form.choosing_provider);
+        assert_eq!(form.form_database, "postgres");
+    }
+
+    #[test]
+    fn fresh_default_provider_keeps_postgres_preset() {
+        let mut form = ConnectionFormState::from_saved(None);
+        form.load(None, true);
+        form.choose_provider(DbDriverKind::Postgres);
+        form.show_configuration();
+        let config = form.build_config().unwrap();
+        assert_eq!(config.database, "postgres");
+        assert_eq!(config.port, 5432);
+        assert!(form.form_use_unix_socket);
+        assert!(!form.choosing_provider);
+    }
+
+    #[test]
+    fn saved_profiles_open_configuration_and_deferred_types_cannot_advance() {
+        use crate::workspace::connection_config::ConnectionRepository;
+        let (saved, _) = ConnectionRepository::load_saved_connections_from_str(
+            r#"{"connections":[{"id":"saved","driver":"Postgres","database":"fixture"}]}"#,
+        );
+        let mut form = ConnectionFormState::from_saved(None);
+        form.load(saved.first(), true);
+        assert!(!form.choosing_provider);
+        assert_eq!(form.form_database, "fixture");
+        form.show_provider_selection();
+        form.choose_provider(DbDriverKind::Oracle);
+        assert_eq!(form.selected_driver_kind, DbDriverKind::Postgres);
+        form.selected_driver_kind = DbDriverKind::Oracle;
+        form.show_configuration();
+        assert!(form.choosing_provider);
+    }
+}
+
+#[cfg(test)]
+mod settings_tab_tests {
+    use super::{ConnectionFormState, ConnectionSettingsTab, FormField};
+    use db_wire::DbDriverKind;
+
+    #[test]
+    fn main_tab_traversal_wraps_without_focusing_hidden_fields() {
+        let mut form = ConnectionFormState::from_saved(None);
+        form.show_configuration();
+        assert_eq!(form.active_field, Some(FormField::Name));
+        for expected in [
+            FormField::Host,
+            FormField::Port,
+            FormField::Database,
+            FormField::User,
+            FormField::Password,
+            FormField::Name,
+        ] {
+            form.cycle_settings_field(false);
+            assert_eq!(form.active_field, Some(expected));
+        }
+        form.cycle_settings_field(true);
+        assert_eq!(form.active_field, Some(FormField::Password));
+        form.select_preset(DbDriverKind::Sqlite);
+        form.select_settings_tab(ConnectionSettingsTab::Main);
+        form.cycle_settings_field(false);
+        assert_eq!(form.active_field, Some(FormField::Database));
+        form.cycle_settings_field(false);
+        assert_eq!(form.active_field, Some(FormField::Name));
+        assert_eq!(
+            form.settings_tabs(),
+            vec![ConnectionSettingsTab::Main, ConnectionSettingsTab::Advanced]
+        );
+        form.select_settings_tab(ConnectionSettingsTab::Ssh);
+        assert_eq!(form.settings_tab, ConnectionSettingsTab::Main);
+    }
+
+    #[test]
+    fn tabs_preserve_configuration_and_clear_hidden_focus_and_selection() {
+        let mut form = ConnectionFormState::from_saved(None);
+        form.show_configuration();
+        form.form_password = "draft-secret".into();
+        form.field_anchor = Some(1);
+        form.select_settings_tab(ConnectionSettingsTab::Ssh);
+        assert_eq!(form.active_field, None);
+        assert_eq!(form.field_anchor, None);
+        form.cycle_settings_field(false);
+        assert_eq!(form.active_field, None);
+        form.ssh.enabled = true;
+        form.cycle_settings_field(false);
+        assert_eq!(form.active_field, Some(FormField::SshHost));
+        form.cycle_settings_field(true);
+        assert_eq!(form.active_field, Some(FormField::SshSecret));
+        form.select_settings_tab(ConnectionSettingsTab::Tls);
+        assert_eq!(form.active_field, None);
+        form.form_tls_enabled = true;
+        form.cycle_settings_field(false);
+        assert_eq!(form.active_field, Some(FormField::TlsCa));
+        assert_eq!(
+            form.visible_settings_fields(),
+            vec![
+                FormField::TlsCa,
+                FormField::ClientArchive,
+                FormField::ClientArchivePassword
+            ]
+        );
+        form.select_settings_tab(ConnectionSettingsTab::Advanced);
+        assert_eq!(form.active_field, Some(FormField::ConnectionGroup));
+        form.cycle_settings_field(true);
+        assert_eq!(form.active_field, Some(FormField::ApplicationName));
+        form.show_provider_selection();
+        form.show_configuration();
+        assert_eq!(form.settings_tab, ConnectionSettingsTab::Main);
+        assert_eq!(form.form_password, "draft-secret");
+        assert!(form.ssh.enabled);
+        assert!(form.form_tls_enabled);
+        form.load(None, true);
+        assert_eq!(form.settings_tab, ConnectionSettingsTab::Main);
+    }
+}
+
+#[cfg(test)]
+mod retained_identity_tests {
+    use super::{ConnectionFormState, ConnectionSettingsTab, FormField};
+    use db_wire::DbDriverKind;
+
+    #[test]
+    fn sqlite_can_clear_tls_identity_retained_after_switching_provider() {
+        let mut form = ConnectionFormState::from_saved(None);
+        form.show_configuration();
+        form.form_tls_enabled = true;
+        form.client_archive = "/test/client.p12".into();
+        form.client_archive_password = "draft".into();
+        form.show_provider_selection();
+        form.choose_provider(DbDriverKind::Sqlite);
+        form.show_configuration();
+        assert!(form.build_config().is_err());
+        assert!(form.settings_tabs().contains(&ConnectionSettingsTab::Tls));
+        form.select_settings_tab(ConnectionSettingsTab::Tls);
+        assert_eq!(form.active_field, Some(FormField::ClientArchive));
+        form.client_archive.clear();
+        form.client_archive_password.clear();
+        assert_eq!(
+            form.visible_settings_fields(),
+            vec![FormField::ClientArchive, FormField::ClientArchivePassword]
+        );
+        assert!(form.build_config().is_ok());
+        form.select_settings_tab(ConnectionSettingsTab::Main);
+        assert!(!form.settings_tabs().contains(&ConnectionSettingsTab::Tls));
     }
 }

@@ -61,11 +61,11 @@ pub(super) fn render_field_content(
 
 pub(super) fn dbeaver_driver_icon(driver: &str, is_connected: bool) -> Div {
     let icon_path = match driver {
-        "MySql" | "mysql" => "icons/mysql.png",
+        "MySql" | "mysql" => "icons/mysql.svg",
         "MariaDb" | "mariadb" => "icons/database.svg",
         "SqlServer" | "Oracle" | "Db2" => "icons/database.svg",
-        "Sqlite" | "sqlite" => "icons/sqlite.png",
-        _ => "icons/postgresql.png",
+        "Sqlite" | "sqlite" => "icons/sqlite.svg",
+        _ => "icons/postgresql.svg",
     };
 
     div()

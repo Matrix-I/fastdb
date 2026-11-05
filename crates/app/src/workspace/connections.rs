@@ -82,7 +82,7 @@ impl Workspace {
         self.form.test_result = None;
         cx.notify();
 
-        let config = match self.form.build_config() {
+        let config = match self.form.available_config() {
             Ok(config) => config,
             Err(error) => {
                 self.form.is_connecting = false;
@@ -168,11 +168,15 @@ impl Workspace {
                 return;
             }
         };
-        let config = match self.form.build_config() {
+        let config = match self.form.available_config() {
             Ok(config) => config,
             Err(error) => {
                 self.form.is_connecting = false;
                 self.form.test_result = Some(Err(error));
+                if !self.form.show_connection_modal {
+                    self.show_connection_error_dialog();
+                }
+                cx.notify();
                 return;
             }
         };
