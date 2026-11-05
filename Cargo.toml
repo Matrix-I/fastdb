@@ -84,12 +84,16 @@ block = { path = "vendor/block" }
 proc-macro-error2 = { path = "vendor/proc-macro-error2" }
 
 # Unoptimized GPUI makes every re-render (one per key press or hover change) visibly slow,
-# so dev builds optimize dependencies fully and our own crates lightly
+# so dev builds optimize dependencies fully and our own crates lightly.
+# Debug info is the main source of target/ growth: keep only line tables for our crates
+# (backtraces still show file:line) and none for dependencies.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 [profile.release]
 opt-level = 3
