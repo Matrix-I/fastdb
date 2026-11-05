@@ -74,8 +74,6 @@ pub struct TabState {
     pub(super) file_busy: bool,
     pub(super) export: super::export::ExportState,
     pub(super) saved_params: std::collections::HashMap<String, (sql_intel::ParamType, String)>,
-    pub(super) diagnostics: Vec<sql_intel::SqlDiagnostic>,
-    pub(super) diagnostics_revision: Option<u64>,
 }
 
 /// Inactive results own their grid, pager and fetch state; switching swaps the complete
@@ -344,8 +342,6 @@ impl TabState {
             file_busy: false,
             export: Default::default(),
             saved_params: Default::default(),
-            diagnostics: Vec::new(),
-            diagnostics_revision: None,
         }
     }
 
@@ -393,6 +389,52 @@ impl TabState {
         };
         self.results.insert(old_slot, result);
         self.active_result = index;
+    }
+
+    pub(super) fn close_result(&mut self, index: usize) {
+        if index >= self.result_count() {
+            return;
+        }
+        if index != self.active_result {
+            let slot = if index < self.active_result {
+                index
+            } else {
+                index - 1
+            };
+            self.results.remove(slot);
+            if index < self.active_result {
+                self.active_result -= 1;
+            }
+            return;
+        }
+        if self.grid.changeset.is_dirty() || self.grid.editing_cell.is_some() {
+            self.last_error = Some("Save or Cancel result edits before closing results".into());
+            return;
+        }
+        if self.result_count() > 1 {
+            let neighbor = if index + 1 < self.result_count() {
+                index + 1
+            } else {
+                index - 1
+            };
+            self.select_result(neighbor);
+            self.close_result(index);
+            return;
+        }
+        self.close_record_view();
+        self.grid = VirtualDataGrid::new(None, self.editor.theme.clone());
+        let fetch_size = self.fetch.size;
+        self.fetch = FetchState::default();
+        self.fetch.size = fetch_size;
+        self.fetch.size_text = fetch_size.to_string();
+        self.script_sql = None;
+        self.last_error = None;
+        self.execution_time_ms = None;
+        self.affected_rows = None;
+        self.query_plan = None;
+        self.show_plan = false;
+        self.query_edit_driver = None;
+        self.active_result = 0;
     }
 
     pub(super) fn new_script_result(&mut self, sql: String) {
@@ -987,6 +1029,76 @@ mod script_result_tests {
             Arc::new(SchemaCache::new().unwrap()),
         )
     }
+    #[test]
+    fn closing_results_preserves_selection_and_clears_the_last_result() {
+        let mut tab = tab();
+        for n in 0..4 {
+            tab.new_script_result(format!("select {n}"));
+        }
+        tab.close_result(99);
+        assert_eq!(tab.result_count(), 4);
+        tab.close_result(1);
+        assert_eq!(tab.active_result, 2);
+        assert_eq!(tab.script_sql.as_deref(), Some("select 3"));
+        tab.select_result(0);
+        tab.close_result(2);
+        assert_eq!(tab.active_result, 0);
+        assert_eq!(tab.script_sql.as_deref(), Some("select 0"));
+        tab.close_result(0);
+        assert_eq!(tab.script_sql.as_deref(), Some("select 2"));
+        tab.close_result(0);
+        assert_eq!(tab.result_count(), 0);
+        assert_eq!(tab.active_result, 0);
+        assert!(tab.grid.pager.is_none());
+        tab.new_script_result("select 4".into());
+        assert_eq!(tab.result_count(), 1);
+        assert_eq!(tab.script_sql.as_deref(), Some("select 4"));
+    }
+
+    #[test]
+    fn closing_selected_last_result_selects_left_neighbor() {
+        let mut tab = tab();
+        tab.new_script_result("select 1".into());
+        tab.new_script_result("select 2".into());
+        tab.close_result(1);
+        assert_eq!(tab.result_count(), 1);
+        assert_eq!(tab.active_result, 0);
+        assert_eq!(tab.script_sql.as_deref(), Some("select 1"));
+        tab.grid.editing_cell = Some(ui_grid::CellEdit {
+            row: 0,
+            col: 0,
+            text: "typing".into(),
+            caret: 0,
+            anchor: None,
+        });
+        tab.close_result(0);
+        assert_eq!(tab.result_count(), 1);
+        assert_eq!(tab.grid.editing_cell.as_ref().unwrap().text, "typing");
+        assert!(
+            tab.last_error
+                .as_deref()
+                .unwrap()
+                .contains("Save or Cancel")
+        );
+    }
+
+    #[test]
+    fn closing_active_result_preserves_unsaved_edits() {
+        let mut tab = tab();
+        tab.new_script_result("select 1".into());
+        tab.grid
+            .stage(|changes| changes.set_cell(0, 0, None, Some("pending".into())));
+        tab.close_result(0);
+        assert_eq!(tab.result_count(), 1);
+        assert!(tab.grid.changeset.is_dirty());
+        assert!(
+            tab.last_error
+                .as_deref()
+                .unwrap()
+                .contains("Save or Cancel")
+        );
+    }
+
     #[test]
     fn staged_query_edits_block_result_switching_and_save_invalidates_rows() {
         let mut tab = tab();

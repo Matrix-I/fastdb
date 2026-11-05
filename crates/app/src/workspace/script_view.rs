@@ -3,7 +3,7 @@
 use gpui::prelude::FluentBuilder;
 use std::rc::Rc;
 
-use super::script_tools::tool;
+use super::script_tools::rail_tool as tool;
 use ui_editor::EditorPick;
 
 use super::*;
@@ -58,62 +58,49 @@ impl Workspace {
             .is_some_and(|driver| driver.supports_script_session());
         let toolbar = div()
             .id("script-toolbar")
-            .overflow_x_scroll()
+            .overflow_y_scroll()
             .flex()
+            .flex_col()
             .flex_none()
             .items_center()
-            .gap_2()
-            .h(px(32.0))
-            .px_2()
+            .gap_1()
+            .w(px(36.0))
+            .min_h_0()
+            .py_1()
             .bg(theme.bg_surface)
-            .border_b_1()
+            .border_r_1()
             .border_color(theme.border)
             .child(
-                div()
-                    .id("btn-script-run")
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .h(px(24.0))
-                    .px_2()
-                    .rounded_xs()
-                    .bg(if is_running_query {
-                        rgb(0xda3633)
+                tool(if is_running_query {
+                    "Cancel execution"
+                } else {
+                    "Execute"
+                })
+                .id("btn-script-run")
+                .bg(if is_running_query {
+                    rgb(0xda3633)
+                } else {
+                    rgb(0x238636)
+                })
+                .hover(move |s| {
+                    s.bg(if is_running_query {
+                        rgb(0xf85149)
                     } else {
-                        rgb(0x238636)
+                        rgb(0x2ea043)
                     })
-                    .hover(move |s| {
-                        s.bg(if is_running_query {
-                            rgb(0xf85149)
-                        } else {
-                            rgb(0x2ea043)
-                        })
-                    })
-                    .cursor_pointer()
-                    .text_size(px(11.5))
-                    .text_color(rgb(0xffffff))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        // While a query runs, the button cancels it
-                        if this.operations.is_running() {
-                            this.cancel_running_query(cx);
-                        } else {
-                            this.run_active_query(cx);
-                        }
-                        cx.notify();
-                    }))
-                    .child(if is_running_query {
-                        div().child("⏹").into_any_element()
+                })
+                .cursor_pointer()
+                .text_size(px(11.5))
+                .text_color(rgb(0xffffff))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    // While a query runs, the button cancels it
+                    if this.operations.is_running() {
+                        this.cancel_running_query(cx);
                     } else {
-                        img("icons/sql_exec.svg")
-                            .w(px(13.0))
-                            .h(px(13.0))
-                            .into_any_element()
-                    })
-                    .child(if is_running_query {
-                        "Cancel"
-                    } else {
-                        "Execute"
-                    }),
+                        this.run_active_query(cx);
+                    }
+                    cx.notify();
+                })),
             )
             .child(tool("Run script").on_click(cx.listener(|this, _, _, cx| this.run_script(cx))))
             .child(
@@ -248,19 +235,7 @@ impl Workspace {
                             cx.listener(|this, _, _, cx| this.open_script_action(true, cx)),
                         ),
                     )
-            })
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_1p5()
-                    .text_size(px(11.5))
-                    .text_color(theme.text_secondary)
-                    .child(img("icons/database.svg").w(px(13.0)).h(px(13.0)))
-                    .child(connection_name),
-            );
+            });
 
         let pick = self.script_editor_pick(tab_idx, cx);
         let tab = &mut self.tabs[tab_idx];
@@ -292,6 +267,7 @@ impl Workspace {
                     .min_w_0()
                     .min_h_0()
                     .overflow_hidden()
+                    .child(toolbar)
                     .child(
                         div().flex_1().min_w_0().min_h_0().overflow_hidden().child(
                             tab.editor
@@ -326,24 +302,19 @@ impl Workspace {
         let show_plan = tab.show_plan && has_plan;
         let tab_id = tab.id;
 
-        let current_rev = tab.editor.buffer.revision();
-        if tab.diagnostics_revision != Some(current_rev) {
-            let script_text = tab.editor.buffer.text();
-            tab.diagnostics = if !script_text.trim().is_empty() {
-                sql_intel::diagnose_sql(&script_text)
-            } else {
-                Vec::new()
-            };
-            tab.diagnostics_revision = Some(current_rev);
-        }
-        let first_diag = tab.diagnostics.first().cloned();
-
         let mut column = div()
             .flex()
             .flex_col()
             .size_full()
             .overflow_hidden()
-            .child(toolbar)
+            .child(
+                div()
+                    .flex_none()
+                    .px_2()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_secondary)
+                    .child(connection_name),
+            )
             .child(editor);
 
         if let Some(entries) = log {
@@ -384,27 +355,6 @@ impl Workspace {
                     .text_size(px(11.0))
                     .text_color(theme.text_secondary)
                     .child(message),
-            );
-        }
-        if let Some(diag) = first_diag {
-            column = column.child(
-                div()
-                    .id("script-syntax-diagnostic")
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .bg(rgb(0x381a1a))
-                    .border_b_1()
-                    .border_color(rgb(0xf85149))
-                    .text_size(px(11.5))
-                    .text_color(rgb(0xffa198))
-                    .child("⚠")
-                    .child(format!(
-                        "Line {}, Col {}: {}",
-                        diag.line, diag.column, diag.message
-                    )),
             );
         }
         if let Some(history) = history {
@@ -454,6 +404,9 @@ impl Workspace {
                 strip = strip.child(
                     div()
                         .id(("result", index))
+                        .flex()
+                        .items_center()
+                        .gap_2()
                         .px_2()
                         .py_1()
                         .cursor_pointer()
@@ -464,6 +417,28 @@ impl Workspace {
                             theme.bg_surface
                         })
                         .child(format!("Result {}", index + 1))
+                        .child(
+                            div()
+                                .id(("close-result", index))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(16.0))
+                                .h(px(16.0))
+                                .rounded_xs()
+                                .text_color(theme.text_muted)
+                                .hover(|s| {
+                                    s.text_color(theme.text_primary).bg(theme.bg_surface_hover)
+                                })
+                                .child("✕")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    if !this.operations.is_running() {
+                                        this.tabs[tab_idx].close_result(index);
+                                        cx.notify();
+                                    }
+                                })),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !this.operations.is_running() {
                                 this.tabs[tab_idx].select_result(index);

@@ -1235,6 +1235,29 @@ mod tests {
     }
 
     #[test]
+    fn execute_selection_is_exact_even_inside_a_statement() {
+        let mut ed = editor("SELECT 1;\nSELECT 2;");
+        ed.buffer.set_cursor_offset(2);
+        ed.buffer
+            .move_selection(true, |buffer| buffer.set_cursor_offset(14));
+        assert_eq!(ed.active_statement(), "LECT 1;\nSELE");
+    }
+
+    #[test]
+    fn execute_caret_keeps_the_whole_postgres_insert() {
+        let sql = "SELECT 0;\nINSERT INTO people(note) VALUES (E'O''Reilly\\nDòng hai');\nSELECT 2";
+        let mut ed = editor(sql);
+        ed.buffer.set_cursor_offset(sql.find("Reilly").unwrap());
+        assert_eq!(
+            ed.active_statement(),
+            "INSERT INTO people(note) VALUES (E'O''Reilly\\nDòng hai');"
+        );
+        let mut ed = editor("SELECT 1\nSELECT 2");
+        ed.buffer.set_cursor_line_col(1, 3);
+        assert_eq!(ed.active_statement(), "SELECT 2");
+    }
+
+    #[test]
     fn word_color_recognizes_dialects_and_parameters() {
         let theme = Theme::dark();
         // Dialect keywords

@@ -20,6 +20,14 @@ fn tokens(sql: &str) -> Result<Vec<Token<'_>>, String> {
     tokens_policy(sql, false)
 }
 fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, String> {
+    scan_tokens(sql, escaped_e_strings, false)
+}
+
+fn scan_tokens(
+    sql: &str,
+    escaped_e_strings: bool,
+    boundaries_only: bool,
+) -> Result<Vec<Token<'_>>, String> {
     let b = sql.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -30,7 +38,7 @@ fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, S
         }
         let start = i;
         let kind;
-        if b[i] == b'#' || b[i..].starts_with(b"/*!") {
+        if !boundaries_only && (b[i] == b'#' || b[i..].starts_with(b"/*!")) {
             return Err("MySQL hash comments and executable comments are not supported by script splitting/formatting".into());
         }
         if b[i..].starts_with(b"--") {
@@ -53,7 +61,7 @@ fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, S
                     i += 1;
                 }
             }
-            if depth != 0 {
+            if depth != 0 && !boundaries_only {
                 return Err("Unterminated SQL comment".into());
             }
         } else if matches!(b[i], b'\'' | b'"' | b'`' | b'[') {
@@ -67,11 +75,18 @@ fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, S
             i += 1;
             loop {
                 if i >= b.len() {
+                    if boundaries_only {
+                        break;
+                    }
                     return Err("Unterminated SQL literal or identifier".into());
                 }
                 if b[i] == b'\\' && matches!(quote, b'\'' | b'`' | b'"') {
                     if explicit_e {
                         if i + 1 >= b.len() {
+                            if boundaries_only {
+                                i = b.len();
+                                break;
+                            }
                             return Err("Unterminated E string escape".into());
                         }
                         i += 2;
@@ -79,6 +94,10 @@ fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, S
                     }
                     // Backslash quoting depends on the provider/session SQL mode. Reject rather
                     // than accidentally execute a different statement boundary.
+                    if boundaries_only {
+                        i += 1;
+                        continue;
+                    }
                     return Err("Script splitting/formatting does not support backslashes in string literals; execute the selected statement instead".into());
                 }
                 if b[i] == quote {
@@ -96,10 +115,13 @@ fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, S
             kind = Kind::Quoted;
             let tag = dollar_tag(&sql[i..]).unwrap();
             i += tag.len();
-            let end = sql[i..]
-                .find(tag)
-                .ok_or("Unterminated dollar-quoted SQL literal")?;
-            i += end + tag.len();
+            if let Some(end) = sql[i..].find(tag) {
+                i += end + tag.len();
+            } else if boundaries_only {
+                i = b.len();
+            } else {
+                return Err("Unterminated dollar-quoted SQL literal".into());
+            }
         } else if b[i].is_ascii_alphabetic() || b[i] == b'_' || b[i] >= 128 {
             kind = Kind::Word;
             i += 1;
@@ -122,6 +144,192 @@ fn tokens_policy(sql: &str, escaped_e_strings: bool) -> Result<Vec<Token<'_>>, S
         });
     }
     Ok(out)
+}
+
+/// Execute needs boundaries, not syntax validation or parser error recovery.
+/// Quoted contents and nested queries cannot start an independent statement.
+pub(crate) fn execute_statement_ranges(sql: &str) -> Vec<(usize, usize)> {
+    // Boundary mode retains incomplete tokens instead of returning syntax errors.
+    let scanned =
+        scan_tokens(sql, true, true).expect("boundary-only scanning accepts incomplete SQL");
+    let significant: Vec<_> = scanned
+        .into_iter()
+        .filter(|token| token.kind != Kind::Comment)
+        .collect();
+    let mut ranges = Vec::new();
+    let mut start = None;
+    let mut end = 0;
+    let mut state = ExecuteBoundaryState::default();
+    for (index, token) in significant.iter().enumerate() {
+        let word = if token.kind == Kind::Word {
+            token.text.to_ascii_uppercase()
+        } else {
+            String::new()
+        };
+        let next = significant.get(index + 1).map(|t| t.text).unwrap_or("");
+        let after_next = significant.get(index + 2).map(|t| t.text).unwrap_or("");
+        if token.text == ";" && state.depth == 0 && state.block_depth == 0 {
+            if let Some(begin) = start.take() {
+                ranges.push((begin, token.end));
+            }
+            state = ExecuteBoundaryState::default();
+            continue;
+        }
+        if start.is_some()
+            && state.starts_independent(&word, next, after_next, &sql[end..token.start])
+        {
+            ranges.push((start.take().unwrap(), end));
+            state = ExecuteBoundaryState::default();
+        }
+        if start.is_none() {
+            start = Some(token.start);
+            state.first = word.clone();
+        }
+        state.advance(&word, token.text, next);
+        end = token.end;
+    }
+    if let Some(begin) = start {
+        ranges.push((begin, end));
+    }
+    ranges
+}
+
+#[derive(Default)]
+struct ExecuteBoundaryState {
+    first: String,
+    previous: String,
+    main_query_seen: bool,
+    procedural: bool,
+    depth: usize,
+    block_depth: usize,
+}
+
+impl ExecuteBoundaryState {
+    fn privilege_list(&self) -> bool {
+        matches!(self.first.as_str(), "GRANT" | "REVOKE") && !self.main_query_seen
+    }
+
+    fn starts_independent(&self, word: &str, next: &str, after_next: &str, gap: &str) -> bool {
+        let query_start = is_execute_query(word);
+        let cte_main = self.first == "WITH" && !self.main_query_seen && query_start;
+        let explain_source = self.first == "EXPLAIN" && !self.main_query_seen && query_start;
+        let select_source = word == "SELECT"
+            && !self.main_query_seen
+            && (self.first == "INSERT" || (self.first == "CREATE" && self.previous == "AS"));
+        let prefixed_with = word == "WITH" && (self.first == "EXPLAIN" || self.previous == "AS");
+        let foreign_key_action = matches!(self.first.as_str(), "CREATE" | "ALTER")
+            && self.previous == "ON"
+            && matches!(word, "DELETE" | "UPDATE");
+        let time_zone = word == "WITH"
+            && next.eq_ignore_ascii_case("TIME")
+            && after_next.eq_ignore_ascii_case("ZONE");
+        self.depth == 0
+            && self.block_depth == 0
+            && !self.procedural
+            && !self.privilege_list()
+            && (query_start
+                || (is_execute_command(word) && gap.contains('\n'))
+                || (word == "WITH" && !time_zone && !prefixed_with))
+            && !cte_main
+            && !explain_source
+            && !select_source
+            && !foreign_key_action
+            && !continues_execute_statement(&self.previous, word)
+    }
+
+    fn advance(&mut self, word: &str, text: &str, next: &str) {
+        if self.first == "CREATE"
+            && matches!(word, "TRIGGER" | "PROCEDURE" | "FUNCTION" | "PACKAGE")
+        {
+            self.procedural = true;
+        }
+        if self.first == "BEGIN"
+            && word == "BEGIN"
+            && next != ";"
+            && !next.eq_ignore_ascii_case("WORK")
+            && !next.eq_ignore_ascii_case("TRANSACTION")
+        {
+            self.procedural = true;
+        }
+        if self.depth == 0 {
+            let main_query = !self.main_query_seen
+                && is_execute_query(word)
+                && matches!(self.first.as_str(), "WITH" | "EXPLAIN");
+            if (!self.privilege_list() && matches!(word, "SELECT" | "VALUES"))
+                || (self.privilege_list() && word == "ON")
+            {
+                self.main_query_seen = true;
+            }
+            if word == "WITH" && (self.first == "EXPLAIN" || self.previous == "AS") {
+                self.first = "WITH".into();
+                self.main_query_seen = false;
+            }
+            if main_query {
+                self.first = word.into();
+                self.main_query_seen = word == "SELECT";
+            }
+            if self.procedural {
+                if matches!(word, "BEGIN" | "CASE") && self.previous != "END" {
+                    self.block_depth += 1;
+                } else if word == "END"
+                    && !matches!(
+                        next.to_ascii_uppercase().as_str(),
+                        "IF" | "LOOP" | "WHILE" | "REPEAT"
+                    )
+                {
+                    self.block_depth = self.block_depth.saturating_sub(1);
+                }
+            }
+        }
+        match text {
+            "(" => self.depth += 1,
+            ")" => self.depth = self.depth.saturating_sub(1),
+            _ => {}
+        }
+        self.previous = if word.is_empty() {
+            text.into()
+        } else {
+            word.into()
+        };
+    }
+}
+
+fn is_execute_query(word: &str) -> bool {
+    matches!(word, "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE")
+}
+
+fn is_execute_command(word: &str) -> bool {
+    matches!(
+        word,
+        "CREATE"
+            | "ALTER"
+            | "DROP"
+            | "TRUNCATE"
+            | "BEGIN"
+            | "COMMIT"
+            | "ROLLBACK"
+            | "SHOW"
+            | "EXPLAIN"
+            | "GRANT"
+            | "REVOKE"
+    )
+}
+
+fn continues_execute_statement(previous: &str, word: &str) -> bool {
+    matches!(
+        previous,
+        "UNION"
+            | "INTERSECT"
+            | "EXCEPT"
+            | "ALL"
+            | "DISTINCT"
+            | "AS"
+            | "FOR"
+            | "DO"
+            | "THEN"
+            | "ELSE"
+            | "."
+    ) || (word == "UPDATE" && previous == "KEY")
 }
 
 fn dollar_tag(sql: &str) -> Option<&str> {

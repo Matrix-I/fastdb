@@ -36,6 +36,91 @@ pub(super) fn tool(label: &'static str) -> Stateful<Div> {
         .child(label)
 }
 
+struct ScriptToolTip(String);
+
+impl Render for ScriptToolTip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(rgb(0x30363d))
+            .text_color(rgb(0xffffff))
+            .text_size(px(12.0))
+            .child(self.0.clone())
+    }
+}
+
+fn rail_symbol(label: &str) -> &'static str {
+    match label {
+        "Execute" => "▶",
+        "Cancel execution" => "■",
+        "Run script" => "⇉",
+        "Execution log" => "☷",
+        label if label.starts_with("Timeout:") => "◷",
+        "Begin" => "▷",
+        "Commit" => "✓",
+        "Rollback" => "↶",
+        "Isolation…" => "◇",
+        label if label.starts_with("Autocommit") => "Ⓐ",
+        "Database…" => "▤",
+        "Schema…" => "▦",
+        "Format" => "≡",
+        "Snippets…" => "{}",
+        "Import SQL copy…" => "↥",
+        "Save SQL copy…" => "↧",
+        "Find / Replace" => "⌕",
+        "Comment / Uncomment" => "--",
+        "Indent" => "⇥",
+        "Outdent" => "⇤",
+        "History" => "↺",
+        "Explain" => "⑂",
+        "Analyze (executes SQL)" => "⚡",
+        "Rename" => "✎",
+        "Delete" => "×",
+        _ => "?",
+    }
+}
+
+pub(super) fn rail_tool(label: &'static str) -> Stateful<Div> {
+    div()
+        .id(label)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .w(px(28.0))
+        .h(px(28.0))
+        .rounded_xs()
+        .cursor_pointer()
+        .text_size(px(14.0))
+        .hover(|s| s.bg(rgb(0x30363d)))
+        .tooltip(move |_, cx| {
+            cx.new(|_| {
+                ScriptToolTip(
+                    (match label {
+                        "Execute" => {
+                            "Execute selected SQL or the statement at the caret (Cmd/Ctrl+Enter)"
+                        }
+                        "Cancel execution" => "Request cancellation of the running operation",
+                        "Run script" => "Run all statements in order (Cmd/Ctrl+Shift+Enter)",
+                        "Execution log" => "Show or hide recent statement outcomes",
+                        "Explain" => "Show the PostgreSQL query plan without executing SQL",
+                        "Analyze (executes SQL)" => {
+                            "Analyze: executes SQL, including writes, and shows actual timings"
+                        }
+                        "Delete" => "Delete script: confirm moving the file to .trash",
+                        "Format" => "Format selected SQL or the whole script (Cmd/Ctrl+Shift+F)",
+                        _ => label,
+                    })
+                    .to_owned(),
+                )
+            })
+            .into()
+        })
+        .child(rail_symbol(label))
+}
+
 impl Workspace {
     pub(super) fn edit_script_lines(
         &mut self,
@@ -327,5 +412,31 @@ impl Workspace {
             .bg(rgba(0x00000088))
             .occlude()
             .child(panel)
+    }
+}
+
+#[cfg(test)]
+mod rail_tests {
+    use super::rail_symbol;
+
+    #[test]
+    fn dynamic_controls_keep_their_icons() {
+        for label in [
+            "Timeout: off",
+            "Timeout: 5s",
+            "Timeout: 30s",
+            "Timeout: 60s",
+            "Timeout: 300s",
+        ] {
+            assert_eq!(rail_symbol(label), "◷");
+        }
+        for label in ["Autocommit…", "Autocommit: on…", "Autocommit: off…"] {
+            assert_eq!(rail_symbol(label), "Ⓐ");
+        }
+        assert_ne!(rail_symbol("Execute"), rail_symbol("Cancel execution"));
+        assert_ne!(
+            rail_symbol("Explain"),
+            rail_symbol("Analyze (executes SQL)")
+        );
     }
 }

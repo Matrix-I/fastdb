@@ -38,87 +38,14 @@ impl SqlParser {
         source: &'a str,
         offset: usize,
     ) -> Option<(usize, usize, &'a str)> {
-        let trimmed_source = source.trim();
-        if trimmed_source.is_empty() {
-            return None;
-        }
-
-        let clamped_offset = offset.min(source.len());
-        let mut statements: Vec<(usize, usize, &'a str)> = Vec::new();
-
-        if let Some(tree) = self.parser.parse(source, None) {
-            let root = tree.root_node();
-            let mut cursor = root.walk();
-
-            for child in root.children(&mut cursor) {
-                let text = &source[child.start_byte()..child.end_byte()];
-                let trimmed = text.trim();
-
-                if trimmed == ";" {
-                    // Attach semicolon to the previous statement if present
-                    if let Some(last) = statements.last_mut() {
-                        last.1 = child.end_byte();
-                        last.2 = &source[last.0..last.1];
-                    }
-                    continue;
-                }
-
-                if trimmed.starts_with("--") || trimmed.is_empty() {
-                    // Skip top-level comments and blank spaces
-                    continue;
-                }
-
-                statements.push((child.start_byte(), child.end_byte(), text));
-            }
-        }
-
-        // Fallback: if tree-sitter couldn't split any statements, fallback to semicolon splitting
-        if statements.is_empty() {
-            let mut cur_offset = 0;
-            for part in source.split(';') {
-                let part_len = part.len();
-                let trimmed = part.trim();
-                let end = cur_offset + part_len;
-                if !trimmed.is_empty() && !trimmed.starts_with("--") {
-                    statements.push((cur_offset, end, part));
-                }
-                cur_offset = end + 1;
-            }
-        }
-
-        if statements.is_empty() {
-            return Some((0, source.len(), source.trim()));
-        }
-
-        // If only 1 statement exists, return it unconditionally
-        if statements.len() == 1 {
-            let (s, e, text) = statements[0];
-            return Some((s, e, text.trim()));
-        }
-
-        // If multiple statements exist:
-        // 1. Direct hit: offset falls within [start, end]
-        for (start, end, text) in &statements {
-            if clamped_offset >= *start && clamped_offset <= *end {
-                return Some((*start, *end, text.trim()));
-            }
-        }
-
-        // 2. Cursor is in whitespace after a statement: pick the preceding statement
-        let mut best = None;
-        for (start, end, text) in &statements {
-            if clamped_offset >= *start {
-                best = Some((*start, *end, text.trim()));
-            }
-        }
-
-        if let Some(stmt) = best {
-            return Some(stmt);
-        }
-
-        // 3. Cursor is before the first statement: pick the first statement
-        let (s, e, text) = statements[0];
-        Some((s, e, text.trim()))
+        let statements = crate::script::execute_statement_ranges(source);
+        let offset = offset.min(source.len());
+        let &(start, end) = statements
+            .iter()
+            .find(|&&(start, end)| offset >= start && offset < end)
+            .or_else(|| statements.iter().rev().find(|&&(start, _)| start <= offset))
+            .or_else(|| statements.first())?;
+        Some((start, end, source[start..end].trim()))
     }
 
     /// Tokenizes the SQL code into highlighted spans
@@ -218,6 +145,113 @@ mod tests {
         let stmt4 = parser.statement_at_offset(single, 0);
         assert!(stmt4.is_some());
         assert_eq!(stmt4.unwrap().2, single);
+    }
+
+    #[test]
+    fn execute_keeps_postgres_strings_and_splits_independent_selects() {
+        let mut parser = SqlParser::new().unwrap();
+        let sql = "INSERT INTO people(note) VALUES (E'O''Reilly\\nDòng hai');\nSELECT 2";
+        assert_eq!(
+            parser.statement_at_offset(sql, 40).unwrap().2,
+            sql.split(";\n").next().unwrap().to_owned() + ";"
+        );
+        let sql = "SELECT 1\nSELECT 2";
+        assert_eq!(parser.statement_at_offset(sql, 2).unwrap().2, "SELECT 1");
+        assert_eq!(
+            parser.statement_at_offset(sql, sql.len()).unwrap().2,
+            "SELECT 2"
+        );
+    }
+
+    #[test]
+    fn execute_preserves_nested_queries_ctes_and_union() {
+        let mut parser = SqlParser::new().unwrap();
+        for statement in [
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "SELECT * FROM (SELECT 1) x UNION ALL SELECT 2",
+            "INSERT INTO t SELECT * FROM s",
+            "CREATE TABLE t AS SELECT 1",
+            "ALTER TABLE child ADD CONSTRAINT fk FOREIGN KEY (parent_id) REFERENCES parent(id) ON DELETE CASCADE ON UPDATE CASCADE;",
+            "CREATE PROCEDURE p() BEGIN IF 1 THEN SELECT 1; END IF; DELETE FROM t; END;",
+            "BEGIN SELECT 1; SELECT 2; END;",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON t TO app;",
+            "EXPLAIN WITH x AS (SELECT 1) SELECT * FROM x;",
+            "CREATE VIEW v AS WITH x AS (SELECT 1) SELECT * FROM x;",
+            "SELECT now()::timestamp(3) WITH TIME ZONE;",
+            "CREATE TRIGGER tr AFTER INSERT ON source BEGIN INSERT INTO audit VALUES (1); END;",
+            "CREATE TABLE t(id int)",
+            "CREATE TEMP TABLE t(id int) ON COMMIT DROP;",
+            "EXPLAIN UPDATE t SET x=1;",
+            "SELECT 1::timestamp WITH TIME ZONE;",
+            "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x",
+            "SELECT * FROM t FOR NO KEY UPDATE",
+            "INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET id = 2",
+            "SELECT ';SELECT' /* ; SELECT */ FROM t -- SELECT\nWHERE id = 1",
+        ] {
+            let sql = format!("{statement}\nSELECT 42");
+            for (offset, _) in statement.char_indices() {
+                assert_eq!(
+                    parser.statement_at_offset(&sql, offset).unwrap().2,
+                    statement
+                );
+            }
+            assert_eq!(
+                parser.statement_at_offset(&sql, sql.len()).unwrap().2,
+                "SELECT 42"
+            );
+        }
+    }
+
+    #[test]
+    fn execute_never_includes_other_statements_when_later_sql_is_incomplete() {
+        let mut parser = SqlParser::new().unwrap();
+        for suffix in ["SELECT 'unfinished", "SELECT $$unfinished", "/* unfinished"] {
+            let sql = format!("DELETE FROM t; SELECT 1; {suffix}");
+            assert_eq!(parser.statement_at_offset(&sql, 18).unwrap().2, "SELECT 1;");
+        }
+        let sql = "SELECT 1\nCREATE TABLE t(id int)";
+        assert_eq!(parser.statement_at_offset(sql, 2).unwrap().2, "SELECT 1");
+        assert_eq!(
+            parser.statement_at_offset(sql, sql.len()).unwrap().2,
+            "CREATE TABLE t(id int)"
+        );
+    }
+
+    #[test]
+    fn execute_inside_a_transaction_never_includes_other_commands() {
+        let mut parser = SqlParser::new().unwrap();
+        for begin in ["BEGIN", "BEGIN TRANSACTION", "BEGIN WORK"] {
+            let sql = format!("{begin}; DELETE FROM t; SELECT 1; COMMIT;");
+            let offset = sql.find("SELECT").unwrap();
+            for position in offset..offset + "SELECT 1;".len() {
+                assert_eq!(
+                    parser.statement_at_offset(&sql, position).unwrap().2,
+                    "SELECT 1;"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn execute_caret_only_applies_the_target_statement_to_sqlite() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t(id INTEGER); INSERT INTO t VALUES (1);")
+            .unwrap();
+        let sql = "DELETE FROM t;\nINSERT INTO t VALUES (2)\nSELECT * FROM t";
+        let mut parser = SqlParser::new().unwrap();
+        let statement = parser
+            .statement_at_offset(sql, sql.find("VALUES").unwrap())
+            .unwrap()
+            .2;
+        db.execute(statement, []).unwrap();
+        let ids: Vec<i64> = db
+            .prepare("SELECT id FROM t ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
     }
 
     #[test]
