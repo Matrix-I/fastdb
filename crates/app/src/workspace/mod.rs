@@ -25,6 +25,7 @@ mod ddl;
 mod diagram_gestures;
 mod diagram_model;
 mod diagram_panel;
+mod diagram_positions;
 mod execution_log;
 mod export;
 mod fetch_plan;

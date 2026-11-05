@@ -612,6 +612,15 @@ impl ConnectionRepository {
             rollback(&changed);
             return Err("Cannot save connections config; credential updates were rolled back where possible".into());
         }
+        if let Some(config) = self.path.parent() {
+            for connection in previous.iter().filter(|c| !ids.contains(&c.id)) {
+                if let Err(error) =
+                    super::diagram_positions::delete_connection(config, &connection.id)
+                {
+                    tracing::warn!(%error, "Could not remove saved diagram positions");
+                }
+            }
+        }
         for (credential_kind, id) in &cleanup {
             store(*credential_kind).delete(id)
                 .map_err(|_| "Connection config saved, but an unused password could not be deleted from credential storage. Check storage access and retry saving.".to_string())?;

@@ -1,14 +1,76 @@
-use super::diagram_model::{DiagramModel, HEADER, ROW};
+use super::diagram_model::{
+    CARD_PADDING, DiagramModel, HEADER, HEADER_FONT, NAME_FONT, ROW, single_line_label,
+};
 use super::script_tools::tool;
 use super::*;
 
 impl Workspace {
+    fn finish_diagram_drag(&mut self, id: u64, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id)
+            && tab.diagram.drag.is_some()
+        {
+            tab.diagram.move_card(pointer);
+            tab.diagram.finish_drag(pointer);
+            cx.notify();
+        }
+    }
+
     pub(super) fn render_diagram_panel(
         &mut self,
         index: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let graph = self.tab_session(index).diagram.clone();
+        let base = self.tab_session(index).diagram.clone();
+        let owner = self.tabs[index]
+            .connection_id
+            .as_deref()
+            .filter(|id| {
+                self.connections
+                    .saved_connections
+                    .iter()
+                    .any(|connection| connection.id == *id)
+            })
+            .map(str::to_owned);
+        let tab = &mut self.tabs[index];
+        let schema = tab.schema_name.as_deref().unwrap_or_default();
+        let table = tab.table_name.as_deref().unwrap_or_default();
+        tab.diagram.set_layout_path(owner.as_deref().map(|owner| {
+            super::diagram_positions::layout_path(
+                &platform_hal::paths::config_dir(),
+                owner,
+                schema,
+                table,
+            )
+        }));
+        let style = window.text_style();
+        let graph = tab.diagram.graph(
+            base,
+            tab.schema_name.as_deref().unwrap_or_default(),
+            tab.table_name.as_deref().unwrap_or_default(),
+            |text, size, bold| {
+                let mut font = style.font();
+                if bold {
+                    font.weight = FontWeight::BOLD;
+                }
+                let run = gpui::TextRun {
+                    len: text.len(),
+                    font,
+                    color: style.color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                f32::from(
+                    window
+                        .text_system()
+                        .shape_line(text.to_owned().into(), px(size), &[run], None)
+                        .width,
+                )
+            },
+        );
+        let fit_graph = graph.clone();
+        let focus_graph = graph.clone();
         let theme = self.theme.clone();
         let tab = &self.tabs[index];
         let id = tab.id;
@@ -51,10 +113,7 @@ impl Workspace {
                     },
                 )))
                 .child(tool("Fit").on_click(cx.listener(move |this, _, _, cx| {
-                    let Some(index) = this.tabs.iter().position(|t| t.id == id) else {
-                        return;
-                    };
-                    let graph = this.tab_session(index).diagram.clone();
+                    let graph = fit_graph.clone();
                     if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
                         let size = tab.diagram.scroll.bounds().size;
                         tab.diagram.zoom_to(
@@ -77,7 +136,7 @@ impl Workspace {
                         let Some(index) = this.tabs.iter().position(|t| t.id == id) else {
                             return;
                         };
-                        let graph = this.tab_session(index).diagram.clone();
+                        let graph = focus_graph.clone();
                         let tab = &mut this.tabs[index];
                         if let Some(node) = graph.nodes.iter().find(|n| {
                             Some(&n.schema) == tab.schema_name.as_ref()
@@ -109,11 +168,13 @@ impl Workspace {
                         // Layout becomes available after render; invalidate once on resize so
                         // card culling uses the actual viewport, including the initial frame.
                         let _ = viewport_owner.update(cx, |this, cx| {
-                            if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id)
-                                && tab.diagram.viewport != viewport.size
-                            {
-                                tab.diagram.viewport = viewport.size;
-                                this.notify_result(cx);
+                            if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
+                                let centered =
+                                    tab.diagram.center_initial_view(&line_graph, viewport.size);
+                                if centered || tab.diagram.viewport != viewport.size {
+                                    tab.diagram.viewport = viewport.size;
+                                    this.notify_result(cx);
+                                }
                             }
                         });
                         window.with_content_mask(
@@ -135,6 +196,30 @@ impl Workspace {
                 .absolute()
                 .size_full(),
             );
+        // Hit regions follow the same orthogonal segments as the painted links.
+        for edge in 0..graph.edges.len() {
+            for (segment, pair) in graph.route(edge).windows(2).enumerate() {
+                let (x1, y1) = pair[0];
+                let (x2, y2) = pair[1];
+                scene = scene.child(
+                    div()
+                        .id(("er-edge-segment", edge * 5 + segment))
+                        .absolute()
+                        .left(px(x1.min(x2) * zoom - 4.0))
+                        .top(px(y1.min(y2) * zoom - 4.0))
+                        .w(px((x2 - x1).abs() * zoom + 8.0))
+                        .h(px((y2 - y1).abs() * zoom + 8.0))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
+                                tab.diagram.selected_edge = Some(edge);
+                                tab.diagram.selected_column = None;
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+        }
         let offset = scroll.offset();
         let size = scroll.bounds().size;
         let viewport_w = f32::from(size.width).max(1000.0);
@@ -150,6 +235,7 @@ impl Workspace {
             ) {
                 continue;
             }
+            let (card_x, card_y) = (node.x, node.y);
             let schema = node.schema.clone();
             let table = node.table.clone();
             let owner = owner.clone();
@@ -174,12 +260,12 @@ impl Workspace {
                 .child(
                     div()
                         .h(px(HEADER * zoom))
-                        .px(px(8.0 * zoom))
+                        .px(px(CARD_PADDING * zoom))
                         .flex()
                         .items_center()
                         .bg(theme.bg_editor)
                         .font_weight(FontWeight::BOLD)
-                        .text_size(px(12.0 * zoom))
+                        .text_size(px(HEADER_FONT * zoom))
                         .text_color(theme.text_primary)
                         .overflow_hidden()
                         .cursor_pointer()
@@ -190,10 +276,17 @@ impl Workspace {
                                     && let Some(owner) = &owner
                                 {
                                     this.query_table(owner, &schema, &table, cx);
+                                } else if event.click_count == 1
+                                    && let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id)
+                                {
+                                    tab.diagram.drag = Some((i, event.position, card_x, card_y));
                                 }
                             }),
                         )
-                        .child(format!("{}.{}", node.schema, node.table)),
+                        .child(
+                            single_line_label(&format!("{}.{}", node.schema, node.table))
+                                .into_owned(),
+                        ),
                 );
             if node.columns.is_empty() {
                 card = card.child(
@@ -205,10 +298,6 @@ impl Workspace {
                 );
             }
             for (column_index, column) in node.columns.iter().enumerate() {
-                let fk = node
-                    .outgoing
-                    .iter()
-                    .any(|e| graph.edges[*e].fk.source_column == column.name);
                 card = card.child(
                     div()
                         .id(("er-column", i * 65536 + column_index))
@@ -221,68 +310,31 @@ impl Workspace {
                             cx.notify();
                         }))
                         .h(px(ROW * zoom))
-                        .px(px(8.0 * zoom))
+                        .px(px(CARD_PADDING * zoom))
                         .flex()
                         .items_center()
-                        .gap(px(4.0 * zoom))
                         .overflow_hidden()
-                        .text_size(px(11.0 * zoom))
-                        .text_color(theme.text_primary)
-                        .child(if column.is_primary_key && fk {
-                            "PK/FK"
-                        } else if column.is_primary_key {
-                            "PK"
-                        } else if fk {
-                            "FK"
+                        .text_size(px(NAME_FONT * zoom))
+                        .bg(if graph.mapped_column(selected, i, column_index) {
+                            Rgba {
+                                a: 0.3,
+                                ..theme.text_accent
+                            }
                         } else {
-                            "·"
+                            theme.bg_surface
+                        })
+                        .text_color(if graph.mapped_column(selected, i, column_index) {
+                            theme.text_accent
+                        } else {
+                            theme.text_primary
                         })
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .whitespace_nowrap()
-                                .child(column.name.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_color(theme.text_muted)
-                                .text_size(px(9.0 * zoom))
-                                .child(
-                                    column
-                                        .raw_type
-                                        .clone()
-                                        .unwrap_or_else(|| column.data_type.to_string()),
-                                ),
+                                .child(single_line_label(&column.name).into_owned()),
                         ),
-                );
-            }
-            for &edge in &node.outgoing {
-                let fk = &graph.edges[edge].fk;
-                card = card.child(
-                    div()
-                        .id(("er-link", edge))
-                        .h(px(20.0 * zoom))
-                        .px(px(8.0 * zoom))
-                        .text_size(px(9.0 * zoom))
-                        .truncate()
-                        .text_color(if selected == Some(edge) {
-                            theme.text_accent
-                        } else {
-                            theme.text_secondary
-                        })
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
-                                tab.diagram.selected_edge = Some(edge);
-                                tab.diagram.selected_column = None;
-                            }
-                            cx.notify();
-                        }))
-                        .child(format!(
-                            "{} → {}.{}.{}",
-                            fk.source_column, fk.target_schema, fk.target_table, fk.target_column
-                        )),
                 );
             }
             scene = scene.child(card);
@@ -320,6 +372,11 @@ impl Workspace {
             )
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
                 if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
+                    if event.pressed_button == Some(MouseButton::Left) && tab.diagram.drag.is_some()
+                    {
+                        tab.diagram.move_card(event.position);
+                        cx.notify();
+                    }
                     if event.pressed_button == Some(MouseButton::Middle) {
                         if let Some(previous) = tab.diagram.pan.replace(event.position) {
                             tab.diagram.scroll.set_offset(
@@ -348,12 +405,24 @@ impl Workspace {
                     }
                 }),
             )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseUpEvent, _, cx| {
+                    this.finish_diagram_drag(id, event.position, cx);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseUpEvent, _, cx| {
+                    this.finish_diagram_drag(id, event.position, cx);
+                }),
+            )
             .child(scene);
         let mut footer = selected.and_then(|i| graph.edges.get(i)).map(|e| {
             let f = &e.fk;
             format!("{}: {}.{}.{} → {}.{}.{}", f.name, f.source_schema, f.source_table,
                 f.source_column, f.target_schema, f.target_table, f.target_column)
-        }).unwrap_or_else(|| "FK arrows point to referenced columns · Scroll both axes · Cmd/Ctrl + scroll or +/− to zoom · Click a column for properties · Middle-drag to pan · Double-click a table to open".into());
+        }).unwrap_or_else(|| "FK arrows point to referenced columns · Scroll both axes · Cmd/Ctrl + scroll or +/− to zoom · Click a column for properties · Middle-drag to pan · Drag a table header to move · Double-click a table to open".into());
         if let Some((node, column)) = self.tabs[index].diagram.selected_column
             && let Some(node) = graph.nodes.get(node)
             && let Some(c) = node.columns.get(column)
@@ -392,6 +461,14 @@ impl Workspace {
                     .text_size(px(11.0))
                     .text_color(theme.text_secondary)
                     .child(notice.clone()),
+            );
+        }
+        if let Some(error) = &self.tabs[index].diagram.layout_error {
+            panel = panel.child(
+                div()
+                    .px_2()
+                    .text_color(theme.text_warning)
+                    .child(error.clone()),
             );
         }
         if graph.nodes.is_empty() {
@@ -437,38 +514,19 @@ fn paint_links(
     accent: Rgba,
     window: &mut Window,
 ) {
-    for (i, edge) in graph.edges.iter().enumerate() {
-        let source = &graph.nodes[edge.source];
-        let target = &graph.nodes[edge.target];
-        let y1 = source.y
-            + HEADER
-            + edge
-                .source_row
-                .map(|r| ROW * (r as f32 + 0.5))
-                .unwrap_or(-HEADER / 2.0);
-        let mut y2 = target.y
-            + HEADER
-            + edge
-                .target_row
-                .map(|r| ROW * (r as f32 + 0.5))
-                .unwrap_or(-HEADER / 2.0);
-        let x1 = source.x + source.width;
-        let target_left = target.x > source.x;
-        let x2 = target.x + if target_left { 0.0 } else { target.width };
-        let lane = x1.max(if target_left { x1 } else { x2 }) + 20.0 + (i % 8) as f32 * 5.0;
-        if edge.source == edge.target && (y1 - y2).abs() < 1.0 {
-            y2 += 8.0;
+    for i in 0..graph.edges.len() {
+        let route = graph.route(i);
+        let at = |(x, y)| origin + point(px(x * zoom), px(y * zoom));
+        let mut path = PathBuilder::stroke(px(if selected == Some(i) { 3.0 } else { 2.0 }));
+        path.move_to(at(route[0]));
+        for &vertex in &route[1..] {
+            path.line_to(at(vertex));
         }
-        let at = |x, y| origin + point(px(x * zoom), px(y * zoom));
-        let mut path = PathBuilder::stroke(px(if selected == Some(i) { 2.5 } else { 1.3 }));
-        path.move_to(at(x1, y1));
-        path.line_to(at(lane, y1));
-        path.line_to(at(lane, y2));
-        path.line_to(at(x2, y2));
-        let direction = if target_left { -1.0 } else { 1.0 };
-        path.move_to(at(x2 + direction * 7.0, y2 - 4.0));
-        path.line_to(at(x2, y2));
-        path.line_to(at(x2 + direction * 7.0, y2 + 4.0));
+        let (x2, y2) = route[route.len() - 1];
+        let direction = (route[route.len() - 2].0 - x2).signum();
+        path.move_to(at((x2 + direction * 10.0, y2 - 6.0)));
+        path.line_to(at((x2, y2)));
+        path.line_to(at((x2 + direction * 10.0, y2 + 6.0)));
         if let Ok(path) = path.build() {
             window.paint_path(path, if selected == Some(i) { accent } else { color });
         }
