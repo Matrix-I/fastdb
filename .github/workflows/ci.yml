@@ -28,6 +28,7 @@ jobs:
         image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: fastdb
+          MYSQL_DATABASE: fastdb_test
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -pfastdb"
