@@ -33,3 +33,5 @@ The [audited roadmap](../ROADMAP.md) separates working paths, partial features, 
 - **Provider logo desktop acceptance.** PostgreSQL, MySQL and SQLite now use SVG artwork instead of 16px PNGs. Native SVG rendering and Retina appearance in the picker/navigator await manual GUI acceptance.
 
 - **SQL action rail acceptance.** Vertical icon buttons beside the line numbers, hover explanations, independent scrolling and Execute/Cancel presentation await manual desktop acceptance.
+
+- **Result rail label and icon acceptance.** Explicit label sizing, unmirrored glyph coordinates, left/right reading directions and the grid-and-gear Panels asset have automated coverage; the user confirmed the labels and Panels icon during desktop acceptance.
