@@ -18,6 +18,7 @@ impl Workspace {
             .size_full()
             .overflow_hidden()
             .bg(theme.bg_grid)
+            .child(self.render_document_tabs(cx))
             .child({
                 if self.tabs.is_empty() || active_tab_idx >= self.tabs.len() {
                     div()

@@ -19,7 +19,8 @@ impl Workspace {
             .map_or(conn.read_only, |driver| driver.is_read_only());
         let is_this_connecting = self.form.is_connecting && is_this_active;
         // Only the active connection's tree is loaded into the navigator
-        let is_conn_exp = self.connections.navigator().nav_connection_expanded
+        let filtering = self.navigator_relation_filter_active();
+        let is_conn_exp = (filtering || self.connections.navigator().nav_connection_expanded)
             && self.connections.active().driver.is_some()
             && is_this_active;
 
@@ -145,7 +146,7 @@ impl Workspace {
 
         if is_conn_exp {
             // Level 1: "Databases" Folder
-            let is_dbs_exp = self.connections.navigator().nav_databases_expanded;
+            let is_dbs_exp = filtering || self.connections.navigator().nav_databases_expanded;
             nav_tree = nav_tree.child(
                 div()
                     .id("nav-databases-folder")
@@ -181,7 +182,7 @@ impl Workspace {
 
             if is_dbs_exp {
                 // Level 2: Target Database
-                let is_db_exp = self.connections.navigator().nav_database_expanded;
+                let is_db_exp = filtering || self.connections.navigator().nav_database_expanded;
                 nav_tree = nav_tree.child(
                     div()
                         .id("nav-database-node")
@@ -215,14 +216,15 @@ impl Workspace {
                                     div()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(theme.text_accent)
-                                        .child(self.form.form_database.clone()),
+                                        .child(conn.database.clone()),
                                 ),
                         ),
                 );
 
                 if is_db_exp {
                     // Level 3: "Schemas" Folder
-                    let is_schemas_exp = self.connections.navigator().nav_schemas_expanded;
+                    let is_schemas_exp =
+                        filtering || self.connections.navigator().nav_schemas_expanded;
                     nav_tree = nav_tree.child(
                         div()
                             .id("nav-schemas-folder")
@@ -274,6 +276,13 @@ impl Workspace {
                         }
 
                         for (schema_name, s_tables) in schema_map.iter() {
+                            if filtering
+                                && !s_tables.iter().any(|table| {
+                                    self.navigator_relation_matches(schema_name, &table.name)
+                                })
+                            {
+                                continue;
+                            }
                             nav_tree = self.append_schema_node(nav_tree, schema_name, s_tables, cx);
                         }
                     }

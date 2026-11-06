@@ -4,7 +4,7 @@ use gpui::prelude::FluentBuilder;
 const TITLE_BAR_HEIGHT: f32 = 34.0;
 const TOOLBAR_HEIGHT: f32 = 32.0;
 const TAB_BAR_HEIGHT: f32 = 30.0;
-pub(super) const TOP_BAR_HEIGHT: f32 = TITLE_BAR_HEIGHT + TOOLBAR_HEIGHT + TAB_BAR_HEIGHT;
+pub(super) const TOP_BAR_HEIGHT: f32 = TITLE_BAR_HEIGHT + TOOLBAR_HEIGHT;
 
 fn workspace_title(connection: &str, document: &str) -> String {
     match (connection.is_empty(), document.is_empty()) {
@@ -78,7 +78,22 @@ impl Workspace {
                     .child(title),
             );
         let toolbar = self.render_workspace_toolbar(cx);
-        let tabs = div()
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(title_bar)
+            .child(toolbar)
+    }
+
+    pub(super) fn render_document_tabs(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let active_tab_idx = self.active_tab;
+        let theme = self.theme.clone();
+        let theme = &theme;
+        div()
             .id("workspace-tab-row")
             .flex()
             .flex_none()
@@ -88,44 +103,6 @@ impl Workspace {
             .bg(theme.bg_surface)
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_2()
-                    .w(px(if self.layout.focus_data {
-                        0.0
-                    } else {
-                        self.layout.navigator_width
-                    }))
-                    .h_full()
-                    .px_2()
-                    .when(self.layout.focus_data, |header| header.hidden())
-                    .overflow_hidden()
-                    .child(img("icons/database_navigator.svg").w(px(14.0)).h(px(14.0)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.0))
-                            .text_color(theme.text_secondary)
-                            .child("Connections"),
-                    )
-                    .child(
-                        div()
-                            .id("btn-open-connect-dialog")
-                            .flex_none()
-                            .px_1()
-                            .rounded_xs()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_surface_hover))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_new_connection_dialog();
-                                cx.notify();
-                            }))
-                            .child(img("icons/connect.svg").w(px(14.0)).h(px(14.0))),
-                    ),
-            )
             // Open table and script tabs, the first one flush with the navigator edge
             .child({
                 let mut tabs_bar = div()
@@ -189,15 +166,9 @@ impl Workspace {
                                     cx.notify();
                                 }),
                             )
-                            .child(
-                                img(if tab.is_script() {
-                                    "icons/sql_script.svg"
-                                } else {
-                                    "icons/table.svg"
-                                })
-                                .w(px(13.0))
-                                .h(px(13.0)),
-                            )
+                            .when(!tab.is_script(), |tab| {
+                                tab.child(img("icons/table.svg").w(px(13.0)).h(px(13.0)))
+                            })
                             .child(tab.title.clone())
                             .child(
                                 div()
@@ -223,28 +194,7 @@ impl Workspace {
                             ),
                     );
                 }
-                tabs_bar.child(
-                    div()
-                        .id("btn-new-sql-script")
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .text_size(px(11.0))
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.bg(theme.bg_surface_hover).text_color(theme.text_primary))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.open_sql_script(None, cx);
-                            cx.notify();
-                        }))
-                        .child(img("icons/sql_script.svg").w(px(12.0)).h(px(12.0)))
-                        .child("+ SQL"),
-                )
+                tabs_bar
             })
             // Update notification badge shown when a new release is available
             .when_some(self.updates.read(cx).pending(), |el, info| {
@@ -277,14 +227,7 @@ impl Workspace {
                         .child(div().child("⚡"))
                         .child(format!("Update ({})", tag)),
                 )
-            });
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .child(title_bar)
-            .child(toolbar)
-            .child(tabs)
+            })
     }
 
     fn header_connection_name(&self) -> String {

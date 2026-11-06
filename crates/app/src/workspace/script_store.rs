@@ -25,6 +25,7 @@ pub struct ScriptStore {
 }
 
 const PREFIX: &str = "Script-";
+const SEARCH_RESULT_LIMIT: usize = 100;
 
 impl ScriptStore {
     pub fn new(root: PathBuf) -> Self {
@@ -112,6 +113,72 @@ impl ScriptStore {
                 .then_with(|| b.name.cmp(&a.name))
         });
         out
+    }
+
+    /// Search saved script names without reading their contents, keeping only the newest matches.
+    pub fn search_files(&self, query: &str, limit: usize) -> Vec<ScriptFile> {
+        let query = query.trim().to_lowercase();
+        let limit = limit.min(SEARCH_RESULT_LIMIT);
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let mut matches = Vec::with_capacity(limit);
+        let Ok(connections) = std::fs::read_dir(&self.root) else {
+            return matches;
+        };
+        for connection in connections.flatten().filter(|entry| entry.path().is_dir()) {
+            let Some(connection_id) = connection.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(entries) = std::fs::read_dir(connection.path()) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if !file_name.ends_with(".sql")
+                    || file_name.starts_with('.')
+                    || !entry.file_type().is_ok_and(|file_type| file_type.is_file())
+                {
+                    continue;
+                }
+                let name = file_name.trim_end_matches(".sql").to_owned();
+                if !query.is_empty() && !name.to_lowercase().contains(&query) {
+                    continue;
+                }
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                let candidate = ScriptFile {
+                    path,
+                    connection_id: connection_id.clone(),
+                    name,
+                    modified,
+                    preview: String::new(),
+                };
+                if matches.len() < limit {
+                    matches.push(candidate);
+                } else if let Some(oldest) = matches
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, file)| file.modified)
+                    .map(|(index, _)| index)
+                    && candidate.modified > matches[oldest].modified
+                {
+                    matches[oldest] = candidate;
+                }
+            }
+        }
+        matches.sort_by(|a, b| {
+            b.modified
+                .cmp(&a.modified)
+                .then_with(|| b.name.cmp(&a.name))
+        });
+        matches
     }
 
     pub fn most_recent(&self, connection_id: &str) -> Option<ScriptFile> {
@@ -248,6 +315,31 @@ mod tests {
         assert_eq!(store.list(None).len(), 3);
         assert_eq!(store.read(&pg[1]).unwrap(), "\n  SELECT 1;\nSELECT 2;");
         assert!(store.most_recent("sqlite").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_files_matches_names_and_caps_results_without_reading_contents() {
+        let root = temp_root("search");
+        let store = ScriptStore::new(root.clone());
+        let scripts = root.join("pg");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("QueryAlpha.sql"), "SELECT 1;").unwrap();
+        std::fs::write(scripts.join("QueryBeta.sql"), "SELECT 2;").unwrap();
+        std::fs::write(scripts.join("Other.sql"), "SELECT 3;").unwrap();
+        std::fs::write(scripts.join(".hidden.sql"), "SELECT 4;").unwrap();
+        std::fs::write(scripts.join("notes.sql.bak"), "SELECT 5;").unwrap();
+
+        let matches = store.search_files(" query ", 100);
+        assert_eq!(matches.len(), 2);
+        assert!(
+            matches
+                .iter()
+                .all(|script| script.name.starts_with("Query"))
+        );
+        assert!(matches.iter().all(|script| script.preview.is_empty()));
+        assert_eq!(store.search_files("", 1).len(), 1);
+        assert!(store.search_files("", 0).is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 

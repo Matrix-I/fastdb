@@ -37,7 +37,7 @@ impl Workspace {
         let Some((owner, relation)) = self.active_reveal_target() else {
             return;
         };
-        if !self.activate_live_connection(&owner) {
+        if !self.activate_live_connection(&owner, cx) {
             return;
         }
         reveal_relation(self.connections.navigator_mut(), &relation);

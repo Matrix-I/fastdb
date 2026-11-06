@@ -4,6 +4,8 @@
 
 - **Workspace header acceptance.** Separate title/toolbar/tab rows, always-visible transaction controls (Commit/Rollback disabled in Auto-Commit) and button-anchored menus are implemented; native dragging/zoom, narrow-window scrolling and popup placement await manual GUI acceptance. Smart commit remains unavailable.
 
+- **Navigator search acceptance.** The single search field, mode menu, tooltips and mode-specific results are implemented; manual acceptance of connection, schema/object, saved-file filtering and selection remains pending.
+
 - **Record presentation acceptance.** Record now combines with Grid/Text in both table and SQL results; transposed grid/text layout, switching and scrolling await manual GUI acceptance.
 
 - **Plain-text result acceptance.** Table tabs and SQL query results share a monospace text table; visual alignment and horizontal scrolling await manual GUI acceptance.

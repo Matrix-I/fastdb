@@ -72,6 +72,10 @@ impl Workspace {
             return;
         }
 
+        if self.navigator_filter_key(&event.keystroke, cx) {
+            return;
+        }
+
         if self.show_about_dialog {
             if self
                 .column_pending

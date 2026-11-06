@@ -132,6 +132,7 @@ mod tests {
         assert!(source.load("icons/edit.svg").unwrap().is_some());
         assert!(source.load("icons/delete.svg").unwrap().is_some());
         assert!(source.load("icons/refresh.svg").unwrap().is_some());
+        assert!(source.load("icons/filter.svg").unwrap().is_some());
         assert!(source.load("icons/sql_exec.svg").unwrap().is_some());
         assert!(source.load("icons/sql_script.svg").unwrap().is_some());
         assert!(source.load("icons/grid.svg").unwrap().is_some());
