@@ -1,4 +1,5 @@
 //! Bounded UTF-8 SQL file I/O, executed on the background executor.
+#![allow(dead_code)]
 use super::*;
 use std::io::{Read, Write};
 use std::path::Path;

@@ -32,210 +32,80 @@ impl Workspace {
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
-        let timeout_label = match self.tabs[tab_idx].timeout_index {
-            1 => "Timeout: 5s",
-            2 => "Timeout: 30s",
-            3 => "Timeout: 60s",
-            4 => "Timeout: 300s",
-            _ => "Timeout: off",
-        };
         let supports_plan = self.tab_provider(tab_idx) == DbDriverKind::Postgres;
-        let script_tab_id = self.tabs[tab_idx].id;
-        let autocommit_label =
-            if super::transaction_mode::client_managed(self.tab_provider(tab_idx)) {
-                if self.tabs[tab_idx].manual_transactions {
-                    "Autocommit: off…"
-                } else {
-                    "Autocommit: on…"
-                }
-            } else {
-                "Autocommit…"
-            };
         let supports_transactions = self
             .tab_session(tab_idx)
             .driver
             .as_ref()
             .is_some_and(|driver| driver.supports_script_session());
-        let toolbar = div()
-            .id("script-toolbar")
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .items_center()
-            .gap_1()
-            .w(px(36.0))
-            .min_h_0()
-            .py_1()
-            .bg(theme.bg_surface)
-            .border_r_1()
-            .border_color(theme.border)
-            .child(
-                tool(if is_running_query {
-                    "Cancel execution"
-                } else {
-                    "Execute"
-                })
-                .id("btn-script-run")
-                .bg(if is_running_query {
-                    rgb(0xda3633)
-                } else {
-                    rgb(0x238636)
-                })
-                .hover(move |s| {
-                    s.bg(if is_running_query {
-                        rgb(0xf85149)
+        let rail_separator = || div().w(px(20.0)).h(px(1.0)).my(px(2.0)).bg(theme.border);
+        let is_manual = self.tabs[tab_idx].manual_transactions;
+        let toolbar =
+            div()
+                .id("script-toolbar")
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .items_center()
+                .gap_1()
+                .w(px(36.0))
+                .min_h_0()
+                .py_1()
+                .bg(theme.bg_surface)
+                .border_r_1()
+                .border_color(theme.border)
+                .cursor_default()
+                .child(
+                    tool(if is_running_query {
+                        "Cancel execution"
                     } else {
-                        rgb(0x2ea043)
+                        "Execute"
                     })
-                })
-                .cursor_pointer()
-                .text_size(px(11.5))
-                .text_color(rgb(0xffffff))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    // While a query runs, the button cancels it
-                    if this.operations.is_running() {
-                        this.cancel_running_query(cx);
-                    } else {
-                        this.run_active_query(cx);
-                    }
-                    cx.notify();
-                })),
-            )
-            .child(tool("Run script").on_click(cx.listener(|this, _, _, cx| this.run_script(cx))))
-            .child(
-                tool("Execution log")
-                    .id("toggle-execution-log")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.tabs[tab_idx].show_execution_log =
-                            !this.tabs[tab_idx].show_execution_log;
+                    .id("btn-script-run")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        // While a query runs, the button cancels it
+                        if this.operations.is_running() {
+                            this.cancel_running_query(cx);
+                        } else {
+                            this.run_active_query(cx);
+                        }
                         cx.notify();
                     })),
-            )
-            .child(
-                tool(timeout_label)
-                    .id("statement-timeout")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.execution_busy(cx) {
-                            let tab = &mut this.tabs[tab_idx];
-                            tab.timeout_index = (tab.timeout_index + 1)
-                                % super::execution_log::TIMEOUT_SECONDS.len();
-                            cx.notify();
-                        }
-                    })),
-            )
-            .when(supports_transactions && !is_running_query, |toolbar| {
-                toolbar
-                    .child(tool("Begin").on_click(
-                        cx.listener(|this, _, _, cx| this.transaction_command("BEGIN", cx)),
-                    ))
-                    .child(tool("Commit").on_click(
-                        cx.listener(|this, _, _, cx| this.transaction_command("COMMIT", cx)),
-                    ))
-                    .child(tool("Rollback").on_click(
-                        cx.listener(|this, _, _, cx| this.transaction_command("ROLLBACK", cx)),
-                    ))
-                    .child(
-                        tool("Isolation…").on_click(cx.listener(move |this, _, window, cx| {
-                            this.choose_session_isolation(script_tab_id, window, cx)
-                        })),
-                    )
-            })
-            .when(
-                supports_transactions
-                    && !is_running_query
-                    && matches!(
-                        self.tab_provider(tab_idx),
-                        DbDriverKind::Postgres
-                            | DbDriverKind::Sqlite
-                            | DbDriverKind::MySql
-                            | DbDriverKind::MariaDb
-                            | DbDriverKind::SqlServer
-                            | DbDriverKind::Oracle
-                            | DbDriverKind::Db2
-                    ),
-                |toolbar| {
-                    toolbar.child(tool(autocommit_label).on_click(cx.listener(
-                        move |this, _, window, cx| {
-                            this.choose_session_autocommit(script_tab_id, window, cx)
-                        },
-                    )))
-                },
-            )
-            .when(supports_transactions && !is_running_query, |toolbar| {
-                toolbar
-                    .child(
-                        tool("Database…").on_click(cx.listener(move |this, _, window, cx| {
-                            this.choose_sql_context(
-                                script_tab_id,
-                                db_wire::session_context::ContextKind::Database,
-                                window,
-                                cx,
-                            )
-                        })),
-                    )
-                    .child(
-                        tool("Schema…").on_click(cx.listener(move |this, _, window, cx| {
-                            this.choose_sql_context(
-                                script_tab_id,
-                                db_wire::session_context::ContextKind::Schema,
-                                window,
-                                cx,
-                            )
-                        })),
-                    )
-            })
-            .child(tool("Format").on_click(cx.listener(|this, _, _, cx| this.format_script(cx))))
-            .child(
-                tool("Snippets…")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_snippet_modal(cx))),
-            )
-            .child(
-                tool("Import SQL copy…")
-                    .on_click(cx.listener(|this, _, _, cx| this.import_script_file(cx))),
-            )
-            .child(
-                tool("Save SQL copy…")
-                    .on_click(cx.listener(|this, _, _, cx| this.save_script_copy(cx))),
-            )
-            .child(
-                tool("Find / Replace")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_script_search(cx))),
-            )
-            .child(
-                tool("Comment / Uncomment").on_click(cx.listener(|this, _, _, cx| {
-                    this.edit_script_lines(super::script_lines::LineCommand::Comment, cx)
-                })),
-            )
-            .child(tool("Indent").on_click(cx.listener(|this, _, _, cx| {
-                this.edit_script_lines(super::script_lines::LineCommand::Indent, cx)
-            })))
-            .child(tool("Outdent").on_click(cx.listener(|this, _, _, cx| {
-                this.edit_script_lines(super::script_lines::LineCommand::Outdent, cx)
-            })))
-            .child(tool("History").on_click(cx.listener(|this, _, _, cx| this.toggle_history(cx))))
-            .when(supports_plan && !is_running_query, |toolbar| {
-                toolbar
-                    .child(tool("Explain").id("btn-explain").on_click(
+                )
+                .when(supports_plan && !is_running_query, |toolbar| {
+                    toolbar.child(tool("Explain").id("btn-explain").on_click(
                         cx.listener(|this, _, _, cx| this.explain_active_statement(false, cx)),
                     ))
-                    .child(tool("Analyze (executes SQL)").id("btn-analyze").on_click(
-                        cx.listener(|this, _, _, cx| this.explain_active_statement(true, cx)),
-                    ))
-            })
-            .when(self.tabs[tab_idx].script_path.is_some(), |toolbar| {
-                toolbar
-                    .child(
-                        tool("Rename").on_click(
-                            cx.listener(|this, _, _, cx| this.open_script_action(false, cx)),
-                        ),
-                    )
-                    .child(
-                        tool("Delete").on_click(
-                            cx.listener(|this, _, _, cx| this.open_script_action(true, cx)),
-                        ),
-                    )
-            });
+                })
+                .when(supports_transactions && !is_running_query, |toolbar| {
+                    toolbar
+                        .child(rail_separator())
+                        .when(is_manual, |toolbar| {
+                            toolbar
+                                .child(tool("Commit").id("btn-commit").on_click(cx.listener(
+                                    |this, _, _, cx| this.transaction_command("COMMIT", cx),
+                                )))
+                                .child(tool("Rollback").id("btn-rollback").on_click(cx.listener(
+                                    |this, _, _, cx| this.transaction_command("ROLLBACK", cx),
+                                )))
+                        })
+                        .child(
+                            tool(if is_manual {
+                                "Transaction: Manual"
+                            } else {
+                                "Transaction: Auto"
+                            })
+                            .id("btn-transaction-menu")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    this.open_transaction_menu(tab_idx, event.position);
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                });
 
         let pick = self.script_editor_pick(tab_idx, cx);
         let tab = &mut self.tabs[tab_idx];
@@ -308,15 +178,26 @@ impl Workspace {
         let show_plan = tab.show_plan && has_plan;
         let tab_id = tab.id;
 
-        let shell = div().flex().flex_col().size_full().overflow_hidden().child(
-            div()
-                .flex_none()
-                .px_2()
-                .text_size(px(11.0))
-                .text_color(theme.text_secondary)
-                .child(connection_name),
-        );
+        let mut shell = div().flex().flex_col().size_full().overflow_hidden();
 
+        if !connection_name.is_empty() {
+            shell = shell.child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1p5()
+                    .h(px(22.0))
+                    .px_2()
+                    .bg(theme.bg_surface)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .text_size(px(11.0))
+                    .text_color(theme.text_secondary)
+                    .child(img("icons/database.svg").w(px(12.0)).h(px(12.0)))
+                    .child(connection_name),
+            );
+        }
         let mut body = div()
             .id("script-split")
             .relative()

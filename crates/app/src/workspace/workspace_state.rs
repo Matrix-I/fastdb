@@ -24,4 +24,5 @@ pub(super) struct WorkspaceMenus {
     pub tab_context_menu: Option<TabContextMenu>,
     pub column_menu: Option<ColumnMenu>,
     pub grid_context_menu: Option<super::grid_clipboard::GridContextMenu>,
+    pub tx_menu: Option<super::TransactionMenu>,
 }

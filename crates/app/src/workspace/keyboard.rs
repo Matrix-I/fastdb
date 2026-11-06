@@ -291,6 +291,14 @@ impl Workspace {
             return;
         }
 
+        if self.menus.tx_menu.is_some() {
+            if event.keystroke.key == "escape" {
+                self.menus.tx_menu = None;
+                cx.notify();
+            }
+            return;
+        }
+
         if self.menus.column_menu.is_some() {
             if event.keystroke.key == "escape" {
                 self.menus.column_menu = None;

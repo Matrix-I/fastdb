@@ -1,4 +1,5 @@
 //! Line operations on local SQL text; these commands never execute SQL.
+#![allow(dead_code)]
 use ui_editor::buffer::RopeyBuffer;
 
 #[derive(Clone, Copy)]

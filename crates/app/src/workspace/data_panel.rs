@@ -426,67 +426,7 @@ impl Workspace {
             data_row = data_row.child(self.render_value_panel(active_tab_idx, cx));
         }
 
-        let tab_id = self.tabs[active_tab_idx].id;
-        let finder = super::script_tools::tool("Find in result…");
-        let finder = if self.tabs[active_tab_idx].grid.pager.is_some() {
-            finder.on_click(cx.listener(move |this, _, _, cx| this.open_result_search(tab_id, cx)))
-        } else {
-            finder.opacity(0.4)
-        };
-        let record = super::script_tools::tool("Record");
-        let record = if self.tabs[active_tab_idx].grid.row_count() > 0 {
-            record.on_click(cx.listener(move |this, _, _, cx| this.open_record_view(tab_id, cx)))
-        } else {
-            record.opacity(0.4)
-        };
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .px_2()
-                    .py_1()
-                    .bg(theme.bg_surface)
-                    .child(finder)
-                    .child(record)
-                    .child(
-                        super::script_tools::tool("Value editor")
-                            .on_click(cx.listener(|this, _, _, cx| this.open_value_editor(cx))),
-                    )
-                    .children(
-                        (self.tabs[active_tab_idx].is_script()
-                            && self.tab_provider(active_tab_idx) == DbDriverKind::Postgres)
-                            .then(|| {
-                                super::script_tools::tool("Load editable result").on_click(
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.load_editable_result(tab_id, cx)
-                                    }),
-                                )
-                            }),
-                    )
-                    .children(
-                        (self.tabs[active_tab_idx].is_script()
-                            && (self.editable_query_result(active_tab_idx)
-                                || self.tabs[active_tab_idx].grid.changeset.is_dirty()
-                                || self.tabs[active_tab_idx].grid.editing_cell.is_some()))
-                        .then(|| self.render_edit_toolbar(cx)),
-                    )
-                    .children(
-                        self.tabs[active_tab_idx]
-                            .reference_picker
-                            .is_some()
-                            .then(|| {
-                                super::script_tools::tool("Use selected key").on_click(
-                                    cx.listener(|this, _, _, cx| this.accept_grid_reference(cx)),
-                                )
-                            }),
-                    ),
-            )
-            .child(data_row)
+        div().flex().flex_col().flex_1().min_h_0().child(data_row)
     }
 }
 

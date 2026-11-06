@@ -1,4 +1,5 @@
 //! Literal search and replacement of local script text.
+#![allow(dead_code)]
 use super::script_tools::tool;
 use super::*;
 

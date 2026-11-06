@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IsolationLevel {
+pub(super) enum IsolationLevel {
     ReadUncommitted,
     ReadCommitted,
     RepeatableRead,
@@ -9,13 +9,13 @@ enum IsolationLevel {
 }
 
 #[derive(Clone, Copy)]
-enum SessionSetting {
+pub(super) enum SessionSetting {
     Isolation(IsolationLevel),
     AutoCommit(bool),
 }
 
 impl IsolationLevel {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::ReadUncommitted => "Read uncommitted",
             Self::ReadCommitted => "Read committed",
@@ -25,7 +25,7 @@ impl IsolationLevel {
     }
 }
 
-fn isolation_levels(provider: DbDriverKind) -> &'static [IsolationLevel] {
+pub(super) fn isolation_levels(provider: DbDriverKind) -> &'static [IsolationLevel] {
     use IsolationLevel::*;
     match provider {
         DbDriverKind::Postgres => &[ReadCommitted, RepeatableRead, Serializable],
@@ -157,7 +157,7 @@ fn setting_statements(
 }
 
 impl Workspace {
-    fn apply_session_setting(
+    pub(super) fn apply_session_setting(
         &mut self,
         tab_id: u64,
         provider: DbDriverKind,
@@ -172,6 +172,12 @@ impl Workspace {
         else {
             return;
         };
+        if let SessionSetting::Isolation(level) = setting {
+            self.tabs[index].session_isolation = Some(level);
+        }
+        if let SessionSetting::AutoCommit(enabled) = setting {
+            self.tabs[index].manual_transactions = !enabled;
+        }
         // A prompt can outlive a disconnect or connection replacement.
         let same_driver = self
             .tab_session(index)
@@ -208,6 +214,7 @@ impl Workspace {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn choose_session_isolation(
         &mut self,
         tab_id: u64,
@@ -299,6 +306,7 @@ impl Workspace {
         .detach();
     }
 
+    #[allow(dead_code)]
     pub(super) fn choose_session_autocommit(
         &mut self,
         tab_id: u64,

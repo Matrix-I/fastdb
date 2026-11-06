@@ -55,6 +55,7 @@ pub struct TabState {
     pub editor_focused: bool,
     /// File a script tab is saved to
     pub script_path: Option<PathBuf>,
+    #[allow(dead_code)]
     pub script_file_dialog_busy: bool,
     /// Saved connection a script tab runs on
     pub connection_id: Option<String>,
@@ -68,6 +69,7 @@ pub struct TabState {
     pub(super) context_session: Option<ConnectionSession>,
     pub(super) transaction_state: String,
     pub(super) manual_transactions: bool,
+    pub(super) session_isolation: Option<super::session_controls::IsolationLevel>,
     pub(super) script_status: Option<String>,
     pub(super) pending_statements: std::collections::VecDeque<String>,
     pub(super) show_history: bool,
@@ -244,6 +246,7 @@ impl TabState {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn database_script(
         id: u64,
         connection_id: String,
@@ -338,6 +341,7 @@ impl TabState {
             context_session: None,
             transaction_state: "Idle".into(),
             manual_transactions: false,
+            session_isolation: None,
             script_status: None,
             show_history: false,
             query_history: Arc::new(Vec::new()),

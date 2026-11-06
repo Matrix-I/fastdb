@@ -2,6 +2,7 @@
 //!
 //! Provides searchable standard SQL templates that can be inserted into the editor buffer
 //! at the current cursor offset or replacing selected text, with complete Undo support.
+#![allow(dead_code)]
 
 use super::script_tools::tool;
 use super::*;
