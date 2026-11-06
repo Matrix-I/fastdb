@@ -4,6 +4,8 @@
 
 ## Database navigator
 
+The Connections heading and new-connection button share the document-tab row, below the workspace toolbar. The navigator tree and its search/catalog actions start below that header.
+
 - **Browse catalog objects** pages through PostgreSQL sequences, functions/procedures, user triggers and user-defined types, with on-demand read-only metadata/source (256 KiB limit). Other providers show unsupported status. Favorites persist by connection, schema, kind, name and signature, with explicit missing-object and save-error feedback.
 
 - **Reveal active object** expands and scrolls to the active relation tab in its owning live connection, including views and column tabs. Objects absent from loaded metadata cannot be revealed.
@@ -30,7 +32,13 @@
 
   - Virtualized rows, auto-fit column widths, drag-to-resize, and double-click to auto-fit. The vertical scrollbar follows the actual grid bounds and reaches the bottom with the last row.
   - Cell/range selection by dragging the left mouse button across cells or using Shift-click, with `Cmd/Ctrl + C` for TSV. Releasing the mouse keeps the selected rectangle; double-click still edits a cell. Right-click a data cell for **Copy (TSV)**, **Copy as CSV** or **Copy as SQL INSERT**, in both table and script results. Right-click inside a selected rectangle to keep it; outside selects the clicked cell. Copies use displayed values, including staged edits and inserted rows. CSV has no header and writes NULL as an empty field; SQL includes only selected columns, uses provider-specific identifier/literal quoting and emits one INSERT per selected row. Table targets retain schema/name; script results use `query_result` (rename before executing). As with export, SQL uses text representations rather than a schema/binary backup. Menu copies run in the background with footer status and a 16 MiB output limit; failures leave the clipboard unchanged. Larger selections can use file export after saving/cancelling staged edits.
-  - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Save generates SQL and applies the changes in one transaction.
+  - Inline cell edits, row insertion, duplication and deletion, with Save / Cancel and undo / redo. Table tabs own dedicated physical sessions on supported drivers:
+    - In **Auto-Commit** mode, Save generates SQL and atomically executes and commits all changes.
+    - In **Manual** mode, Save sends staged changes to the database without committing, reloading the table within the same session so uncommitted writes are visible (read-your-writes).
+    - **Commit** applies any pending cell/row edits and commits the open tab transaction.
+    - **Rollback** discards staged cell/row edits, rolls back any writes previously sent by Save, and reloads the table from the database.
+    - Failed batches roll back to their savepoint without affecting earlier uncommitted writes.
+    - Disconnecting or closing the tab closes the dedicated session and rolls back uncommitted writes.
   - **Export CSV / Export SQL** in the result footer saves all currently loaded rows from table or script results through a native save dialog. Fetch more rows before exporting if needed. Save or cancel staged edits first. Export runs in the background with status/errors in the footer; an existing destination is replaced only after the complete file is ready. CSV includes column headers, with NULL written as an empty field. SQL writes one INSERT per row with provider-specific quoting, using the table's schema/name or `query_result` for script results (rename that target before importing). Values use the result's text representation; this is a data export, not a schema or binary-type backup.
   - **Full-source Export (All CSV / All SQL)**: **Export All (CSV)** and **Export All (SQL)** in the result toolbar stream all matching rows directly from the source table (respecting filter criteria without pagination limits) or script query, writing to an atomic temporary file before replacing the destination file upon successful completion.
   - **CSV Data Import**: **Import CSV…** in the table toolbar and **Import CSV Data…** in the navigator table context menu open the interactive CSV import modal wizard. Supports delimiter selection (comma, semicolon, tab, pipe), header detection, commit policy (Single atomic transaction with rollback vs Commit per batch with partial durability), target column auto-mapping, sample data preview table, and asynchronous background execution with live progress reporting and cancellation. Destructive changes are protected by transactional isolation and destination table validation.

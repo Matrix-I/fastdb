@@ -1,5 +1,9 @@
 # Not built yet
 
+- **Table transactions acceptance.** Table tabs own dedicated physical sessions with Auto-Commit and Manual modes, Save/Commit/Rollback transaction boundaries, read-your-writes, and batch savepoint recovery; manual GUI verification is pending.
+
+- **Workspace header acceptance.** Separate title/toolbar/tab rows, always-visible transaction controls (Commit/Rollback disabled in Auto-Commit) and button-anchored menus are implemented; native dragging/zoom, narrow-window scrolling and popup placement await manual GUI acceptance. Smart commit remains unavailable.
+
 - **Record presentation acceptance.** Record now combines with Grid/Text in both table and SQL results; transposed grid/text layout, switching and scrolling await manual GUI acceptance.
 
 - **Plain-text result acceptance.** Table tabs and SQL query results share a monospace text table; visual alignment and horizontal scrolling await manual GUI acceptance.
