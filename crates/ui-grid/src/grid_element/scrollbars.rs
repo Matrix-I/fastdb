@@ -50,11 +50,14 @@ impl VirtualDataGrid {
         let v_handle = self.vertical_scroll_handle.clone();
         let fetch_wheel = self.auto_fetch_paused.clone();
         let wheel_router = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |bounds, hitbox, window, _| {
                 let view = window.current_view();
                 window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Capture || !bounds.contains(&event.position) {
+                    if phase != DispatchPhase::Capture
+                        || !hitbox.should_handle_scroll(window)
+                        || !bounds.contains(&event.position)
+                    {
                         return;
                     }
                     let delta = event.delta.pixel_delta(window.line_height());
