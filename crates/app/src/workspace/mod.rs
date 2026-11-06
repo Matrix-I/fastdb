@@ -78,6 +78,8 @@ mod session_controls;
 mod software_update;
 mod sql_script;
 mod tab_context_menu;
+mod table_session;
+mod table_transaction;
 mod table_view;
 mod text_input;
 mod top_bar;
@@ -575,7 +577,7 @@ impl Render for Workspace {
             root = root.child(self.render_grid_context_menu(menu, cx));
         }
         if let Some(menu) = self.menus.tx_menu.clone() {
-            root = root.child(self.render_transaction_menu(menu, cx));
+            root = root.child(self.render_transaction_menu(menu, window, cx));
         }
 
         // 4. Modal Dialog: Database Connection Setup

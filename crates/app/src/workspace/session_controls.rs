@@ -165,19 +165,11 @@ impl Workspace {
         setting: SessionSetting,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.id == tab_id && tab.is_script() && !tab.file_busy)
-        else {
+        let Some(index) = self.tabs.iter().position(|tab| {
+            tab.id == tab_id && (tab.is_script() || tab.table_name.is_some()) && !tab.file_busy
+        }) else {
             return;
         };
-        if let SessionSetting::Isolation(level) = setting {
-            self.tabs[index].session_isolation = Some(level);
-        }
-        if let SessionSetting::AutoCommit(enabled) = setting {
-            self.tabs[index].manual_transactions = !enabled;
-        }
         // A prompt can outlive a disconnect or connection replacement.
         let same_driver = self
             .tab_session(index)
@@ -205,7 +197,17 @@ impl Workspace {
         }
         match setting_statements(provider, setting, &self.tabs[index].transaction_state) {
             Ok(statements) => {
-                self.start_pinned_session_settings(index, driver.clone(), statements, cx)
+                if self.tabs[index].table_name.is_some() {
+                    self.apply_table_setting(index, driver.clone(), setting, statements, cx);
+                } else {
+                    self.start_pinned_session_settings(
+                        index,
+                        driver.clone(),
+                        statements,
+                        setting,
+                        cx,
+                    );
+                }
             }
             Err(error) => {
                 self.tabs[index].last_error = Some(error);

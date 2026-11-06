@@ -26,7 +26,7 @@ impl Render for Pane {
         let kind = self.kind;
         self.workspace
             .update(cx, |workspace, cx| match kind {
-                PaneKind::TopBar => workspace.render_top_bar(cx).into_any_element(),
+                PaneKind::TopBar => workspace.render_top_bar(window, cx).into_any_element(),
                 PaneKind::Navigator => workspace.render_navigator(cx).into_any_element(),
                 PaneKind::TableView => workspace.render_table_view(window, cx).into_any_element(),
             })

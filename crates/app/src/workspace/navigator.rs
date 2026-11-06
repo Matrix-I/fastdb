@@ -18,55 +18,6 @@ impl Workspace {
             .border_color(theme.border)
             .p_2()
             .gap_2()
-            // Sidebar Header
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.text_secondary)
-                            .child(img("icons/database_navigator.svg").w(px(14.0)).h(px(14.0)))
-                            .child("DATABASE NAVIGATOR"),
-                    )
-                    .child(
-                        div().flex().items_center().gap_1().child(
-                            div()
-                                .id("btn-open-connect-dialog")
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .px_1p5()
-                                .py_0p5()
-                                .rounded_sm()
-                                .bg(theme.bg_surface)
-                                .hover(|s| s.bg(theme.bg_surface_hover))
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_new_connection_dialog();
-                                    cx.notify();
-                                }))
-                                .child(
-                                    div()
-                                        .text_size(px(13.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(theme.text_accent)
-                                        .child("+"),
-                                )
-                                .child(img("icons/connect.svg").w(px(12.0)).h(px(12.0))),
-                        ),
-                    ),
-            )
             .when(self.connections.active().driver.is_some(), |panel| {
                 panel.child(script_tools::tool("Search objects…").on_click(cx.listener(
                     |this, _, window, cx| {

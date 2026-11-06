@@ -268,6 +268,10 @@ impl Workspace {
             return;
         }
 
+        if self.tabs[index].table_name.is_some() && driver.supports_script_session() {
+            self.start_table_query(index, driver, sql, paged, append, cx);
+            return;
+        }
         let tab = &mut self.tabs[index];
         if tab.is_script()
             && !append
