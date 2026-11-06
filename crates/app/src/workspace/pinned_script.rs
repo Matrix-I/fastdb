@@ -5,7 +5,7 @@ use db_wire::script::{ScriptControl, ScriptEvent, ScriptOutcome};
 enum ExecutionKind {
     Script,
     Plan,
-    Settings,
+    Settings(super::session_controls::SessionSetting),
     Schema(String),
 }
 
@@ -36,6 +36,7 @@ impl Workspace {
         index: usize,
         driver: Arc<dyn DatabaseDriver>,
         statements: Vec<String>,
+        setting: super::session_controls::SessionSetting,
         cx: &mut Context<Self>,
     ) {
         const SETTINGS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -43,7 +44,7 @@ impl Workspace {
             index,
             driver,
             statements,
-            ExecutionKind::Settings,
+            ExecutionKind::Settings(setting),
             Some(SETTINGS_TIMEOUT),
             cx,
         );
@@ -121,7 +122,7 @@ impl Workspace {
         }
         let control = Arc::new(super::transaction_mode::script_control(
             self.tab_provider(index),
-            !matches!(kind, ExecutionKind::Settings | ExecutionKind::Schema(_))
+            !matches!(kind, ExecutionKind::Settings(_) | ExecutionKind::Schema(_))
                 && self.tabs[index].manual_transactions,
             timeout,
         ));
@@ -192,6 +193,19 @@ impl Workspace {
             return;
         }
         let index = self.active_tab;
+        if self
+            .tabs
+            .get(index)
+            .is_some_and(|tab| tab.table_name.is_some())
+        {
+            let boundary = match sql {
+                "COMMIT" => super::table_session::Boundary::Commit,
+                "ROLLBACK" => super::table_session::Boundary::Rollback,
+                _ => return,
+            };
+            self.apply_table_transaction(boundary, cx);
+            return;
+        }
         if let Some(driver) = self.tab_session(index).driver.clone()
             && driver.supports_script_session()
         {
@@ -260,6 +274,20 @@ impl Workspace {
                     Some("Closing script session and rolling back any open transaction…".into());
             }
             ScriptEvent::Finished(mut outcome) => {
+                if let ExecutionKind::Settings(setting) = kind
+                    && outcome.error.is_none()
+                    && outcome.cleanup_error.is_none()
+                    && !outcome.cancelled
+                {
+                    match setting {
+                        super::session_controls::SessionSetting::AutoCommit(enabled) => {
+                            tab.manual_transactions = !enabled
+                        }
+                        super::session_controls::SessionSetting::Isolation(level) => {
+                            tab.session_isolation = Some(*level)
+                        }
+                    }
+                }
                 if let ExecutionKind::Schema(expected) = kind
                     && outcome.error.is_none()
                     && !outcome.cancelled

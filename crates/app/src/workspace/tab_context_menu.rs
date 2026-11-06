@@ -82,6 +82,11 @@ impl Workspace {
         {
             self.cancel_running_query(cx);
         }
+        for tab in &mut self.tabs {
+            if ids.contains(&tab.id) {
+                tab.tab_session.close();
+            }
+        }
         let active_id = self.tabs.get(self.active_tab).map(|t| t.id);
         let new_index =
             active_after_close(self.tabs.len(), self.active_tab, self.active_tab, |i| {

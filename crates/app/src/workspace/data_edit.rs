@@ -471,52 +471,24 @@ impl Workspace {
         tab.grid.step_staged_edits(redo);
     }
 
-    /// Writes the staged edits of the active tab to the database in one transaction,
-    /// then reloads the rows (Save button / Cmd+S)
-    pub(super) fn save_pending_edits(&mut self, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get_mut(self.active_tab)
-            && tab.schema_stale
-        {
-            tab.last_error =
-                Some("Schema changed; cancel staged row edits and reload before saving".into());
-            cx.notify();
-            return;
-        }
-        self.commit_cell_edit();
-        if self
-            .tabs
-            .get(self.active_tab)
-            .is_some_and(TabState::is_script)
-        {
-            self.save_query_result_edits(cx);
-            return;
-        }
-        let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
-            return;
-        };
-        let Some(tab) = self.tabs.get(self.active_tab) else {
-            return;
-        };
+    pub(super) fn table_edit_statements(&self, index: usize) -> Result<Vec<String>, String> {
+        let tab = self.tabs.get(index).ok_or("Table tab is unavailable")?;
         if !tab.grid.changeset.is_dirty() {
-            return;
-        }
-        if self.operations.is_running() {
-            cx.notify();
-            return;
+            return Ok(Vec::new());
         }
         let (Some(schema), Some(table), Some(pager)) = (
             tab.schema_name.clone(),
             tab.table_name.clone(),
             tab.grid.pager.clone(),
         ) else {
-            return;
+            return Err("Table result is unavailable".into());
         };
 
-        let dialect = SqlDialect(self.tab_provider(self.active_tab));
+        let dialect = SqlDialect(self.tab_provider(index));
         let target = dialect.qualified_table(&schema, &table);
         // Rows are found by their primary key when the result has every key column
         let pk_names: Vec<&str> = self
-            .tab_session(self.active_tab)
+            .tab_session(index)
             .table_columns
             .get(&(schema.clone(), table.clone()))
             .map(|cols| {
@@ -561,10 +533,57 @@ impl Workspace {
                 .collect(),
             deleted_rows: changes.deleted_rows.clone(),
         };
-        let statements = match request.plan_sql(&target, &pager, &key_cols, dialect) {
+        request
+            .plan_sql(&target, &pager, &key_cols, dialect)
+            .map_err(|error| format!("{error:#}"))
+    }
+
+    /// Writes the staged edits of the active tab to the database in one transaction,
+    /// then reloads the rows (Save button / Cmd+S)
+    pub(super) fn save_pending_edits(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab)
+            && tab.schema_stale
+        {
+            tab.last_error =
+                Some("Schema changed; cancel staged row edits and reload before saving".into());
+            cx.notify();
+            return;
+        }
+        self.commit_cell_edit();
+        if self
+            .tabs
+            .get(self.active_tab)
+            .is_some_and(TabState::is_script)
+        {
+            self.save_query_result_edits(cx);
+            return;
+        }
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        if !tab.grid.changeset.is_dirty() {
+            return;
+        }
+        let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
+            return;
+        };
+        if driver.supports_script_session() {
+            let boundary = if self.tabs[self.active_tab].manual_transactions {
+                super::table_session::Boundary::Save
+            } else {
+                super::table_session::Boundary::Commit
+            };
+            self.apply_table_transaction(boundary, cx);
+            return;
+        }
+        if self.operations.is_running() {
+            cx.notify();
+            return;
+        }
+        let statements = match self.table_edit_statements(self.active_tab) {
             Ok(statements) => statements,
             Err(error) => {
-                self.tabs[self.active_tab].last_error = Some(format!("{error:#}"));
+                self.tabs[self.active_tab].last_error = Some(error);
                 cx.notify();
                 return;
             }

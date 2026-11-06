@@ -20,92 +20,44 @@ impl Workspace {
         let theme = &theme;
         let is_running_query = self.operations.is_running();
         let caret_visible = self.input.cursor_visible;
-        let connection_name = self.tabs[tab_idx]
-            .connection_id
-            .as_deref()
-            .and_then(|id| {
-                self.connections
-                    .saved_connections
-                    .iter()
-                    .find(|c| c.id == id)
-            })
-            .map(|c| c.name.clone())
-            .unwrap_or_default();
-
         let supports_plan = self.tab_provider(tab_idx) == DbDriverKind::Postgres;
-        let supports_transactions = self
-            .tab_session(tab_idx)
-            .driver
-            .as_ref()
-            .is_some_and(|driver| driver.supports_script_session());
-        let rail_separator = || div().w(px(20.0)).h(px(1.0)).my(px(2.0)).bg(theme.border);
-        let is_manual = self.tabs[tab_idx].manual_transactions;
-        let toolbar =
-            div()
-                .id("script-toolbar")
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .flex_none()
-                .items_center()
-                .gap_1()
-                .w(px(36.0))
-                .min_h_0()
-                .py_1()
-                .bg(theme.bg_surface)
-                .border_r_1()
-                .border_color(theme.border)
-                .cursor_default()
-                .child(
-                    tool(if is_running_query {
-                        "Cancel execution"
-                    } else {
-                        "Execute"
-                    })
-                    .id("btn-script-run")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        // While a query runs, the button cancels it
-                        if this.operations.is_running() {
-                            this.cancel_running_query(cx);
-                        } else {
-                            this.run_active_query(cx);
-                        }
-                        cx.notify();
-                    })),
-                )
-                .when(supports_plan && !is_running_query, |toolbar| {
-                    toolbar.child(tool("Explain").id("btn-explain").on_click(
-                        cx.listener(|this, _, _, cx| this.explain_active_statement(false, cx)),
-                    ))
+        let toolbar = div()
+            .id("script-toolbar")
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .w(px(36.0))
+            .min_h_0()
+            .py_1()
+            .bg(theme.bg_surface)
+            .border_r_1()
+            .border_color(theme.border)
+            .cursor_default()
+            .child(
+                tool(if is_running_query {
+                    "Cancel execution"
+                } else {
+                    "Execute"
                 })
-                .when(supports_transactions && !is_running_query, |toolbar| {
-                    toolbar
-                        .child(rail_separator())
-                        .when(is_manual, |toolbar| {
-                            toolbar
-                                .child(tool("Commit").id("btn-commit").on_click(cx.listener(
-                                    |this, _, _, cx| this.transaction_command("COMMIT", cx),
-                                )))
-                                .child(tool("Rollback").id("btn-rollback").on_click(cx.listener(
-                                    |this, _, _, cx| this.transaction_command("ROLLBACK", cx),
-                                )))
-                        })
-                        .child(
-                            tool(if is_manual {
-                                "Transaction: Manual"
-                            } else {
-                                "Transaction: Auto"
-                            })
-                            .id("btn-transaction-menu")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                    this.open_transaction_menu(tab_idx, event.position);
-                                    cx.notify();
-                                }),
-                            ),
-                        )
-                });
+                .id("btn-script-run")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    // While a query runs, the button cancels it
+                    if this.operations.is_running() {
+                        this.cancel_running_query(cx);
+                    } else {
+                        this.run_active_query(cx);
+                    }
+                    cx.notify();
+                })),
+            )
+            .when(supports_plan && !is_running_query, |toolbar| {
+                toolbar.child(tool("Explain").id("btn-explain").on_click(
+                    cx.listener(|this, _, _, cx| this.explain_active_statement(false, cx)),
+                ))
+            });
 
         let pick = self.script_editor_pick(tab_idx, cx);
         let tab = &mut self.tabs[tab_idx];
@@ -178,26 +130,8 @@ impl Workspace {
         let show_plan = tab.show_plan && has_plan;
         let tab_id = tab.id;
 
-        let mut shell = div().flex().flex_col().size_full().overflow_hidden();
+        let shell = div().flex().flex_col().size_full().overflow_hidden();
 
-        if !connection_name.is_empty() {
-            shell = shell.child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_1p5()
-                    .h(px(22.0))
-                    .px_2()
-                    .bg(theme.bg_surface)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .text_size(px(11.0))
-                    .text_color(theme.text_secondary)
-                    .child(img("icons/database.svg").w(px(12.0)).h(px(12.0)))
-                    .child(connection_name),
-            );
-        }
         let mut body = div()
             .id("script-split")
             .relative()
