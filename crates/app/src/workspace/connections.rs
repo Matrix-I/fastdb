@@ -349,6 +349,11 @@ impl Workspace {
                                 tab.editor.schema_cache = Some(cache.clone());
                             }
                         }
+                        if this.navigator_filter.mode
+                            == super::navigator_filter::NavigatorFilterMode::TablesAndObjects
+                        {
+                            this.refresh_navigator_relations(cx);
+                        }
                     }
                     Err(e) => {
                         this.form.test_result = Some(Err(e.clone()));
@@ -390,12 +395,21 @@ impl Workspace {
             .is_some_and(|s| s.driver.is_some())
     }
 
-    pub(super) fn activate_live_connection(&mut self, conn_id: &str) -> bool {
+    pub(super) fn activate_live_connection(
+        &mut self,
+        conn_id: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.is_connection_live(conn_id) {
             return false;
         }
         self.connections.active_connection_id = Some(conn_id.to_owned());
         self.save_config();
+        if self.navigator_filter.mode
+            == super::navigator_filter::NavigatorFilterMode::TablesAndObjects
+        {
+            self.refresh_navigator_relations(cx);
+        }
         true
     }
 
@@ -496,7 +510,15 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok(metadata)=>this.apply_schema_metadata_for(&owner,metadata),
+                    Ok(metadata)=>{
+                        this.apply_schema_metadata_for(&owner,metadata);
+                        if this.connections.active_connection_id.as_deref() == Some(&owner)
+                            && this.navigator_filter.mode
+                                == super::navigator_filter::NavigatorFilterMode::TablesAndObjects
+                        {
+                            this.refresh_navigator_relations(cx);
+                        }
+                    },
                     Err(error)=>{
                         for tab in &mut this.tabs {
                             if tab.connection_id.as_deref()==Some(&owner) {
@@ -682,7 +704,7 @@ impl Workspace {
             self.connections.navigator_mut().nav_connection_expanded = true;
             return;
         }
-        if self.activate_live_connection(conn_id) {
+        if self.activate_live_connection(conn_id, cx) {
             return;
         }
         if !self.load_connection_form(conn_id) {

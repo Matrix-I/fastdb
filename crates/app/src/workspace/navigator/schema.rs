@@ -9,11 +9,13 @@ impl Workspace {
     ) -> Stateful<Div> {
         let theme = &self.theme;
 
-        let is_schema_exp = self
-            .connections
-            .navigator()
-            .nav_schema_expanded
-            .contains(schema_name);
+        let filtering = self.navigator_relation_filter_active();
+        let is_schema_exp = filtering
+            || self
+                .connections
+                .navigator()
+                .nav_schema_expanded
+                .contains(schema_name);
         let s_name_clone = schema_name.clone();
         let schema_id = format!("nav-schema-{}", schema_name);
 
@@ -60,11 +62,17 @@ impl Workspace {
         if is_schema_exp {
             for group in RelationGroup::ALL {
                 let key = group.expansion_key(schema_name);
-                let expanded = self
-                    .connections
-                    .navigator()
-                    .nav_tables_expanded
-                    .contains(&key);
+                let expanded = (filtering
+                    && s_tables.iter().any(|table| {
+                        RelationGroup::from_type(&table.table_type) == group
+                            && self.navigator_relation_matches(schema_name, &table.name)
+                    }))
+                    || (!filtering
+                        && self
+                            .connections
+                            .navigator()
+                            .nav_tables_expanded
+                            .contains(&key));
                 let toggle = key.clone();
                 let conn_id = self
                     .connections
@@ -132,10 +140,19 @@ impl Workspace {
                     ),
                 );
                 if expanded {
+                    if filtering {
+                        nav_tree = nav_tree.child(
+                            div()
+                                .pl(px(78.0))
+                                .text_color(theme.text_muted)
+                                .child("Filtered by search"),
+                        );
+                    }
                     let mut found = false;
                     for table in s_tables
                         .iter()
                         .filter(|t| RelationGroup::from_type(&t.table_type) == group)
+                        .filter(|t| self.navigator_relation_matches(schema_name, &t.name))
                     {
                         found = true;
                         nav_tree = self.append_table_node(nav_tree, table, cx);

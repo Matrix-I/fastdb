@@ -7,6 +7,7 @@ impl Workspace {
         let theme = self.theme.clone();
         let theme = &theme;
         div()
+            .id("navigator-panel")
             .flex()
             .flex_col()
             .relative()
@@ -18,25 +19,27 @@ impl Workspace {
             .border_color(theme.border)
             .p_2()
             .gap_2()
-            .when(self.connections.active().driver.is_some(), |panel| {
-                panel.child(script_tools::tool("Search objects…").on_click(cx.listener(
-                    |this, _, window, cx| {
-                        this.open_object_search(cx);
-                        window.focus(&this.focus_handle);
-                    },
-                )))
-            })
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_2()
+                    .h(px(22.0))
+                    .child(img("icons/database_navigator.svg").w(px(14.0)).h(px(14.0)))
+                    .child("Connections"),
+            )
+            .child(self.render_navigator_filter(cx))
             .when(self.active_reveal_target().is_some(), |panel| {
                 panel.child(script_tools::tool("Reveal active object").on_click(
                     cx.listener(|this, _, window, cx| this.reveal_active_object(window, cx)),
                 ))
             })
-            .when(self.connections.active().driver.is_some(), |panel| {
-                panel.child(
-                    script_tools::tool("Browse catalog objects…")
-                        .on_click(cx.listener(|this, _, _, cx| this.open_object_browser(cx))),
-                )
-            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.navigator_filter.menu_open = false;
+                this.navigator_filter.field_focused = false;
+                cx.notify();
+            }))
             // Tree View Container with vertical scroll
             .child({
                 let mut nav_tree = div()
@@ -48,7 +51,10 @@ impl Workspace {
                     .track_scroll(&self.navigator_scroll)
                     .gap_0p5();
 
-                if self.connections.saved_connections.is_empty()
+                let filter = &self.navigator_filter;
+                if !filter.query.trim().is_empty() && !self.navigator_relation_filter_active() {
+                    nav_tree = nav_tree.child(self.render_navigator_filter_results(cx));
+                } else if self.connections.saved_connections.is_empty()
                     && !self.connections.active().driver.is_some()
                 {
                     nav_tree = nav_tree.child(
@@ -84,6 +90,10 @@ impl Workspace {
                             ),
                     );
                 } else {
+                    if let Some(status) = self.navigator_relation_search_status() {
+                        nav_tree =
+                            nav_tree.child(div().p_2().text_color(theme.text_muted).child(status));
+                    }
                     let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
                     for conn in &self.connections.saved_connections {
                         groups

@@ -85,19 +85,19 @@ pub(super) struct ObjectSearch {
 }
 
 impl Workspace {
-    pub(super) fn open_object_search(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_object_search(&mut self, query: &str, cx: &mut Context<Self>) {
         let Some(owner) = self.connections.active_connection_id.clone() else {
             return;
         };
         self.object_search = Some(ObjectSearch {
             owner,
             tree: self.connections.active().schema_tree.clone(),
-            text: String::new(),
-            caret: 0,
+            text: query.to_owned(),
+            caret: query.chars().count(),
             anchor: None,
             history: LineHistory::new(),
             hits: Vec::new(),
-            message: "Enter a schema, relation or column name.".into(),
+            message: "Press Enter to search loaded relations and columns.".into(),
             task: None,
         });
         cx.notify();

@@ -40,6 +40,7 @@ mod import_modal;
 mod keyboard;
 mod nav_context_menu;
 mod navigator;
+mod navigator_filter;
 mod navigator_reveal;
 mod object_browser;
 mod object_favorites;
@@ -192,6 +193,7 @@ pub struct Workspace {
     pub next_tab_id: u64,
     /// Saved SQL scripts, one folder per connection
     pub script_store: ScriptStore,
+    navigator_filter: navigator_filter::NavigatorFilter,
     save_queue: SaveQueue,
     query_history: query_history::QueryHistory,
     script_action: Option<script_tools::ScriptAction>,
@@ -278,6 +280,7 @@ impl Workspace {
             column_pick: None,
             next_tab_id: 1,
             script_store: ScriptStore::new(ScriptStore::default_root()),
+            navigator_filter: navigator_filter::NavigatorFilter::default(),
             query_history: query_history::QueryHistory::new(
                 platform_hal::paths::config_dir().join("query-history"),
             ),
