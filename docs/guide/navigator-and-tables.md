@@ -1,5 +1,7 @@
 # Navigator and table tabs
 
+- **Plain-text results**: table data and SQL query results share the same non-wrapping monospace table component, with aligned headers, separators and padded values. Copy preserves the formatted text. The preview shows at most 2,000 loaded rows and 255 characters per column; NULL is shown as `[NULL]`.
+
 ## Database navigator
 
 - **Browse catalog objects** pages through PostgreSQL sequences, functions/procedures, user triggers and user-defined types, with on-demand read-only metadata/source (256 KiB limit). Other providers show unsupported status. Favorites persist by connection, schema, kind, name and signature, with explicit missing-object and save-error feedback.

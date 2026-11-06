@@ -1,5 +1,7 @@
 # Not built yet
 
+- **Plain-text result acceptance.** Table tabs and SQL query results share a monospace text table; visual alignment and horizontal scrolling await manual GUI acceptance.
+
 The [audited roadmap](../ROADMAP.md) separates working paths, partial features, UI-only controls and missing workflows. Major gaps include:
 
 - **Title bar zoom acceptance.** Double-clicking the title or empty top bar toggles window maximize/restore; manual desktop acceptance, including tab and button click isolation, remains pending.
