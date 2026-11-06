@@ -16,6 +16,7 @@ impl Workspace {
             .id("about-backdrop")
             .absolute()
             .inset_0()
+            .occlude()
             .bg(rgba(0x00000088))
             .flex()
             .items_center()

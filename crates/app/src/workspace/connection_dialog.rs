@@ -960,8 +960,18 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let theme = self.theme.clone();
         let choosing = self.form.choosing_provider;
-        div().absolute().inset_0().bg(rgba(0x00000088))
-            .flex().items_center().justify_center()
+        div()
+            .id("connection-dialog-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(rgba(0x00000088))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .child(div().id("connection-dialog").w(px(840.0)).h(px(600.0))
                 .max_w(relative(0.96)).max_h(relative(0.94))
                 .flex().flex_col().overflow_hidden()

@@ -46,8 +46,10 @@ impl Workspace {
 
         if let Some(idx) = table_tab_index(&self.tabs, connection_id, schema, table) {
             self.active_tab = idx;
+            self.tabs[idx].active_subtab = TableSubTab::Data;
             self.tab_scroll.scroll_to_item(idx);
             self.input.is_filter_focused = false;
+            self.run_active_query(cx);
             cx.notify();
             return;
         }
@@ -250,8 +252,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(driver) = self.tab_session(index).driver.clone() else {
-            let owner = self.tabs.get(index).and_then(|t| t.connection_id.clone());
-            self.edit_saved_connection(owner.as_deref());
+            if !self.form.is_connecting {
+                let owner = self.tabs.get(index).and_then(|t| t.connection_id.clone());
+                self.edit_saved_connection(owner.as_deref());
+            }
             cx.notify();
             return;
         };
@@ -464,5 +468,18 @@ mod table_tab_tests {
         }
         assert_eq!(table_tab_index(&tabs, "c", "public", "users"), None);
         assert_eq!(table_tab_index(&tabs, "a", "public", "orders"), None);
+    }
+
+    #[test]
+    fn table_tab_subtab_switches_to_data() {
+        let cache = Arc::new(SchemaCache::new().unwrap());
+        let mut tab = TabState::table(1, "public", "users", Theme::dark(), cache);
+        tab.connection_id = Some("conn_1".into());
+        tab.active_subtab = crate::workspace::TableSubTab::Properties;
+        let mut tabs = vec![tab];
+
+        let idx = table_tab_index(&tabs, "conn_1", "public", "users").unwrap();
+        tabs[idx].active_subtab = crate::workspace::TableSubTab::Data;
+        assert_eq!(tabs[idx].active_subtab, crate::workspace::TableSubTab::Data);
     }
 }
