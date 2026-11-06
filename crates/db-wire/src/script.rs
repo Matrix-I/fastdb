@@ -270,7 +270,11 @@ async fn run_script_inner(
             }
         });
         let executed = {
-            let execution = session.execute_streaming(&sql, row_tx);
+            let session_id = format!("session#{:x}", Arc::as_ptr(&session) as *const () as usize);
+            let execution = crate::sql_observer::with_session(
+                session_id,
+                session.execute_streaming(&sql, row_tx),
+            );
             tokio::pin!(execution);
             tokio::select! {
                 biased;

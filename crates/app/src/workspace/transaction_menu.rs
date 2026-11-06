@@ -37,6 +37,36 @@ fn transaction_actions_enabled(manual: bool, available: bool, busy: bool) -> boo
     manual && available && !busy
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransactionControlTarget {
+    ModeIcon,
+    ModeLabel,
+    MenuArrow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransactionControlAction {
+    OpenModeMenu,
+    OpenTransactionLog,
+    Disabled,
+}
+
+fn route_transaction_control(
+    target: TransactionControlTarget,
+    menu_enabled: bool,
+) -> TransactionControlAction {
+    match target {
+        TransactionControlTarget::ModeLabel => TransactionControlAction::OpenTransactionLog,
+        TransactionControlTarget::ModeIcon | TransactionControlTarget::MenuArrow => {
+            if menu_enabled {
+                TransactionControlAction::OpenModeMenu
+            } else {
+                TransactionControlAction::Disabled
+            }
+        }
+    }
+}
+
 impl Workspace {
     pub(super) fn render_transaction_controls(
         &self,
@@ -90,47 +120,98 @@ impl Workspace {
             }
         };
         let bounds = ScrollHandle::new();
-        let selector = div()
-            .id("btn-transaction-menu")
+        let control_bg = if manual {
+            theme.bg_surface_selected
+        } else {
+            theme.bg_editor
+        };
+        let bind_target =
+            |id: &'static str, target: TransactionControlTarget, trigger: gpui::Div| {
+                let trigger = trigger.id(id);
+                match route_transaction_control(target, enabled) {
+                    TransactionControlAction::OpenModeMenu => {
+                        let bounds = bounds.clone();
+                        trigger
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_surface_hover))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_transaction_menu(
+                                        tab_idx,
+                                        bounds.bounds(),
+                                        window.viewport_size(),
+                                    );
+                                    cx.notify();
+                                }),
+                            )
+                    }
+                    TransactionControlAction::OpenTransactionLog => trigger
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_surface_hover))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.open_transaction_log(cx);
+                            }),
+                        ),
+                    TransactionControlAction::Disabled => trigger.opacity(0.4),
+                }
+            };
+        let mode_menu_button = div()
+            .id("transaction-mode-button")
             .flex()
             .flex_none()
             .items_center()
-            .gap_2()
             .h(px(26.0))
-            .px_2()
-            .min_w(px(112.0))
             .border_1()
             .border_color(theme.border)
             .rounded_xs()
-            .bg(if manual {
-                theme.bg_surface_selected
-            } else {
-                theme.bg_editor
-            })
+            .bg(control_bg)
             .track_scroll(&bounds)
-            .child(img(transaction_mode_icon(manual)).w(px(16.0)).h(px(16.0)))
-            .child(transaction_mode_label(manual))
-            .child(div().flex_1())
-            .child("▾");
-        let selector = if enabled {
-            selector
-                .cursor_pointer()
-                .hover(|s| s.bg(theme.bg_surface_hover))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.open_transaction_menu(
-                            tab_idx,
-                            bounds.bounds(),
-                            window.viewport_size(),
-                        );
-                        cx.notify();
-                    }),
-                )
-        } else {
-            selector.opacity(0.4)
-        };
+            .child(bind_target(
+                "btn-transaction-menu",
+                TransactionControlTarget::ModeIcon,
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h_full()
+                    .pl_2()
+                    .pr_1()
+                    .child(img(transaction_mode_icon(manual)).w(px(16.0)).h(px(16.0))),
+            ))
+            .child(bind_target(
+                "btn-transaction-menu-arrow",
+                TransactionControlTarget::MenuArrow,
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h_full()
+                    .pl_0p5()
+                    .pr_2()
+                    .child("▾"),
+            ));
+        let log_button = bind_target(
+            "btn-transaction-log",
+            TransactionControlTarget::ModeLabel,
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .h(px(26.0))
+                .px_2p5()
+                .min_w(px(58.0))
+                .border_1()
+                .border_color(theme.border)
+                .rounded_xs()
+                .bg(control_bg)
+                .child(transaction_mode_label(manual)),
+        );
         div()
             .flex()
             .flex_none()
@@ -151,7 +232,8 @@ impl Workspace {
                 "ROLLBACK",
                 cx,
             ))
-            .child(selector)
+            .child(mode_menu_button)
+            .child(log_button)
     }
 
     pub(super) fn open_transaction_menu(
@@ -425,5 +507,37 @@ mod tests {
                 point(px(x), px(y + height))
             );
         }
+    }
+
+    #[test]
+    fn toolbar_splits_mode_menu_and_transaction_log_hit_targets() {
+        use super::{
+            TransactionControlAction as Action, TransactionControlTarget as Target,
+            route_transaction_control,
+        };
+        assert_eq!(
+            route_transaction_control(Target::ModeIcon, true),
+            Action::OpenModeMenu
+        );
+        assert_eq!(
+            route_transaction_control(Target::MenuArrow, true),
+            Action::OpenModeMenu
+        );
+        assert_eq!(
+            route_transaction_control(Target::ModeIcon, false),
+            Action::Disabled
+        );
+        assert_eq!(
+            route_transaction_control(Target::MenuArrow, false),
+            Action::Disabled
+        );
+        assert_eq!(
+            route_transaction_control(Target::ModeLabel, true),
+            Action::OpenTransactionLog
+        );
+        assert_eq!(
+            route_transaction_control(Target::ModeLabel, false),
+            Action::OpenTransactionLog
+        );
     }
 }

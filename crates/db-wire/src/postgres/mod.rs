@@ -431,13 +431,21 @@ impl DatabaseDriver for PostgresDriver {
         anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
         let (client, task) = Self::connect_with_task(self.config.clone()).await?;
         let _guard = SocketGuard(task);
-        client
-            .batch_execute("SET statement_timeout='15s'; SET lock_timeout='5s'")
-            .await?;
-        client
-            .batch_execute(sql)
-            .await
-            .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))
+        async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                "SET statement_timeout='15s'; SET lock_timeout='5s'",
+                |query| client.batch_execute(query).await
+            )
+        }
+        .await?;
+        async {
+            crate::sql_observer::observe!("PostgreSQL", sql, |query| client
+                .batch_execute(query)
+                .await)
+        }
+        .await
+        .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))
     }
 
     async fn load_catalog_section(
@@ -479,7 +487,12 @@ impl DatabaseDriver for PostgresDriver {
 
     async fn ping(&self) -> Result<()> {
         let client = self.get_or_connect().await?;
-        client.simple_query("SELECT 1;").await?;
+        async {
+            crate::sql_observer::observe!("PostgreSQL", "SELECT 1;", |query| client
+                .simple_query(query)
+                .await)
+        }
+        .await?;
         Ok(())
     }
 
@@ -550,27 +563,48 @@ impl DatabaseDriver for PostgresDriver {
     async fn apply_row_changes(&self, statements: &[String]) -> Result<u64> {
         anyhow::ensure!(!self.is_read_only(), "{}", read_only::DENIED);
         let client = self.get_or_connect().await?;
-        client
-            .batch_execute("BEGIN")
-            .await
-            .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+        async {
+            crate::sql_observer::observe!("PostgreSQL", "BEGIN", |query| client
+                .batch_execute(query)
+                .await)
+        }
+        .await
+        .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
         for sql in statements {
-            let outcome = match client.execute(sql.as_str(), &[]).await {
+            let outcome = match async {
+                crate::sql_observer::observe!(
+                    "PostgreSQL",
+                    sql.as_str(),
+                    |query| client.execute(query, &[]).await,
+                    |rows| Some(*rows)
+                )
+            }
+            .await
+            {
                 Ok(1) => Ok(()),
                 Ok(n) => Err(row_count_error(sql, n)),
                 Err(e) => Err(anyhow::anyhow!(pg_error_message(&e))),
             };
             if let Err(e) = outcome {
-                if let Err(rb) = client.batch_execute("ROLLBACK").await {
+                if let Err(rb) = async {
+                    crate::sql_observer::observe!("PostgreSQL", "ROLLBACK", |query| client
+                        .batch_execute(query)
+                        .await)
+                }
+                .await
+                {
                     warn!("PostgreSQL rollback failed: {}", rb);
                 }
                 return Err(e);
             }
         }
-        client
-            .batch_execute("COMMIT")
-            .await
-            .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+        async {
+            crate::sql_observer::observe!("PostgreSQL", "COMMIT", |query| client
+                .batch_execute(query)
+                .await)
+        }
+        .await
+        .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
         Ok(statements.len() as u64)
     }
 
@@ -595,7 +629,15 @@ impl DatabaseDriver for PostgresDriver {
             ORDER BY t.table_schema, t.table_name;
         "#;
 
-        let rows = client.query(sql, &[]).await?;
+        let rows = async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                sql,
+                |query| client.query(query, &[]).await,
+                |rows| Some(rows.len() as u64)
+            )
+        }
+        .await?;
         let tables = rows
             .into_iter()
             .map(|r| {
@@ -629,8 +671,9 @@ impl DatabaseDriver for PostgresDriver {
 
     async fn list_foreign_keys(&self) -> Result<Option<Vec<crate::ForeignKey>>> {
         let client = self.get_or_connect().await?;
-        let rows = client
-            .query(
+        let rows = async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
                 "SELECT c.conname, ns.nspname, src.relname, sa.attname,
                     nt.nspname, dst.relname, ta.attname
              FROM pg_constraint c
@@ -645,9 +688,11 @@ impl DatabaseDriver for PostgresDriver {
              JOIN pg_attribute ta ON ta.attrelid = dst.oid AND ta.attnum = k.t
              WHERE c.contype = 'f' AND ns.nspname NOT IN ('pg_catalog','information_schema')
              ORDER BY ns.nspname, src.relname, c.conname, k.n",
-                &[],
+                |query| client.query(query, &[],).await,
+                |rows| Some(rows.len() as u64)
             )
-            .await?;
+        }
+        .await?;
         Ok(Some(
             rows.into_iter()
                 .map(|r| crate::ForeignKey {
@@ -671,7 +716,15 @@ impl DatabaseDriver for PostgresDriver {
             WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
             ORDER BY table_schema, table_name, constraint_name;
         "#;
-        let rows = client.query(sql, &[]).await?;
+        let rows = async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                sql,
+                |query| client.query(query, &[]).await,
+                |rows| Some(rows.len() as u64)
+            )
+        }
+        .await?;
         Ok(rows
             .into_iter()
             .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
@@ -686,7 +739,15 @@ impl DatabaseDriver for PostgresDriver {
             WHERE schemaname NOT IN ('information_schema', 'pg_catalog')
             ORDER BY schemaname, tablename, indexname;
         "#;
-        let rows = client.query(sql, &[]).await?;
+        let rows = async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                sql,
+                |query| client.query(query, &[]).await,
+                |rows| Some(rows.len() as u64)
+            )
+        }
+        .await?;
         Ok(rows
             .into_iter()
             .map(|r| (r.get(0), r.get(1), r.get(2)))
@@ -707,70 +768,84 @@ async fn stream_client(
     control: Option<&crate::execution::ExecutionControl>,
     editable: bool,
 ) -> Result<()> {
-    struct NoticeGuard(NoticeTarget);
-    impl Drop for NoticeGuard {
-        fn drop(&mut self) {
-            self.0.lock().take();
+    let mut observation = crate::sql_observer::Statement::start("PostgreSQL", sql);
+    let mut observed_rows = None;
+    let outcome = async {
+        struct NoticeGuard(NoticeTarget);
+        impl Drop for NoticeGuard {
+            fn drop(&mut self) {
+                self.0.lock().take();
+            }
         }
-    }
-    *notices.lock() = Some(crate::stream::NoticeForwarder::new(event_tx.clone()));
-    let _notices = NoticeGuard(notices.clone());
-    let statement = client.prepare(sql).await.map_err(|e| {
-        let reported = report_error(
-            &event_tx,
-            format!("SQL Preparation Error: {}", pg_error_message(&e)),
+        *notices.lock() = Some(crate::stream::NoticeForwarder::new(event_tx.clone()));
+        let _notices = NoticeGuard(notices.clone());
+        let statement = client.prepare(sql).await.map_err(|e| {
+            let reported = report_error(
+                &event_tx,
+                format!("SQL Preparation Error: {}", pg_error_message(&e)),
+            );
+            anyhow::Error::new(e).context(reported.to_string())
+        })?;
+
+        let columns: Vec<ColumnMeta> = statement
+            .columns()
+            .iter()
+            .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
+            .collect();
+        let has_columns = !columns.is_empty();
+        let origin = if editable {
+            query_edit::origin(client, sql, &statement).await
+        } else {
+            None
+        };
+        let mut sink = RowSink::start_with_origin(columns, event_tx.clone(), start_time, origin)?;
+
+        if let Some(control) = control {
+            control.check()?;
+        }
+        let row_stream = client
+            .query_raw(&statement, std::iter::empty::<i32>())
+            .await
+            .map_err(|e| {
+                let reported =
+                    sink.fail(format!("Query execution error: {}", pg_error_message(&e)));
+                anyhow::Error::new(e).context(reported.to_string())
+            })?;
+        futures::pin_mut!(row_stream);
+
+        while let Some(row_res) = row_stream.next().await {
+            let row = row_res.map_err(|e| {
+                let reported = sink.fail(format!("Row stream error: {}", pg_error_message(&e)));
+                anyhow::Error::new(e).context(reported.to_string())
+            })?;
+            for (col_idx, cell) in sink.cells_mut().iter_mut().enumerate() {
+                *cell = decode_pg_cell(&row, col_idx);
+            }
+            sink.commit_row()?;
+        }
+
+        if !has_columns {
+            let _ = event_tx.send(StreamEvent::CommandComplete {
+                affected_rows: row_stream.rows_affected(),
+            });
+        }
+        let affected = row_stream.rows_affected();
+        let total_rows = sink.finish();
+        observed_rows = if has_columns {
+            Some(total_rows)
+        } else {
+            affected
+        };
+        debug!(
+            "Postgres query streaming completed: {} rows in {}ms",
+            total_rows,
+            start_time.elapsed().as_millis()
         );
-        anyhow::Error::new(e).context(reported.to_string())
-    })?;
-
-    let columns: Vec<ColumnMeta> = statement
-        .columns()
-        .iter()
-        .map(|c| ColumnMeta::new(c.name(), pg_type_to_data_type(c.type_())))
-        .collect();
-    let has_columns = !columns.is_empty();
-    let origin = if editable {
-        query_edit::origin(client, sql, &statement).await
-    } else {
-        None
-    };
-    let mut sink = RowSink::start_with_origin(columns, event_tx.clone(), start_time, origin)?;
-
-    if let Some(control) = control {
-        control.check()?;
+        Ok(())
     }
-    let row_stream = client
-        .query_raw(&statement, std::iter::empty::<i32>())
-        .await
-        .map_err(|e| {
-            let reported = sink.fail(format!("Query execution error: {}", pg_error_message(&e)));
-            anyhow::Error::new(e).context(reported.to_string())
-        })?;
-    futures::pin_mut!(row_stream);
-
-    while let Some(row_res) = row_stream.next().await {
-        let row = row_res.map_err(|e| {
-            let reported = sink.fail(format!("Row stream error: {}", pg_error_message(&e)));
-            anyhow::Error::new(e).context(reported.to_string())
-        })?;
-        for (col_idx, cell) in sink.cells_mut().iter_mut().enumerate() {
-            *cell = decode_pg_cell(&row, col_idx);
-        }
-        sink.commit_row()?;
-    }
-
-    if !has_columns {
-        let _ = event_tx.send(StreamEvent::CommandComplete {
-            affected_rows: row_stream.rows_affected(),
-        });
-    }
-    let total_rows = sink.finish();
-    debug!(
-        "Postgres query streaming completed: {} rows in {}ms",
-        total_rows,
-        start_time.elapsed().as_millis()
-    );
-    Ok(())
+    .await;
+    observation.finish(&outcome, observed_rows);
+    outcome
 }
 
 #[cfg(test)]

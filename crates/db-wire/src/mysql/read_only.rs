@@ -122,7 +122,12 @@ pub(super) async fn prepare<'a>(
     sql: &'a str,
 ) -> Result<(Cow<'a, str>, bool)> {
     let sql = statement(sql)?;
-    connection.query_drop(NATIVE_MODE).await?;
+    async {
+        crate::sql_observer::observe!("MySQL", NATIVE_MODE, |query| connection
+            .query_drop(query)
+            .await)
+    }
+    .await?;
     Ok(sql)
 }
 

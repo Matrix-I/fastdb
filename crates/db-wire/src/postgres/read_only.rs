@@ -60,9 +60,14 @@ pub(super) async fn prepare<'a>(client: &Client, sql: &'a str) -> Result<&'a str
         Command::Query => {
             // SELECT can change the default through set_config(). Restore it
             // before each user query. Any open transaction began READ ONLY.
-            client
-                .batch_execute("SET SESSION default_transaction_read_only = on")
-                .await?;
+            async {
+                crate::sql_observer::observe!(
+                    "PostgreSQL",
+                    "SET SESSION default_transaction_read_only = on",
+                    |query| client.batch_execute(query).await
+                )
+            }
+            .await?;
             Ok(sql)
         }
     }

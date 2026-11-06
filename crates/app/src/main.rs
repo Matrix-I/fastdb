@@ -4,6 +4,7 @@ use tracing::info;
 
 mod assets;
 mod benchmark;
+mod sql_log;
 pub mod updater;
 mod workspace;
 use assets::FastDbAssetSource;
@@ -154,9 +155,18 @@ fn main() -> Result<()> {
         tracing::warn!("Spill cleanup warning: {}", e);
     }
 
+    let sql_log = sql_log::SqlLog::new()?;
+    sql_log.install()?;
+    let run_log = sql_log.clone();
     let app = Application::new().with_assets(FastDbAssetSource);
 
-    app.run(|cx: &mut App| {
+    app.run(move |cx: &mut App| {
+        let shutdown_log = run_log.clone();
+        cx.on_app_quit(move |_| {
+            shutdown_log.shutdown();
+            async {}
+        })
+        .detach();
         cx.activate(true);
         cx.on_action(quit);
         cx.on_action(about);
@@ -230,7 +240,7 @@ fn main() -> Result<()> {
         };
 
         cx.open_window(window_options, |window, cx| {
-            let workspace = cx.new(Workspace::new);
+            let workspace = cx.new(|cx| Workspace::new(cx, run_log.clone()));
             let weak = workspace.downgrade();
             window.on_window_should_close(cx, move |_, cx| {
                 if benchmark::enabled() {
@@ -254,5 +264,6 @@ fn main() -> Result<()> {
         .expect("Failed to open FastDB main window");
     });
 
+    sql_log.shutdown();
     Ok(())
 }

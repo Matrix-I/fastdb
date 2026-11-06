@@ -123,71 +123,84 @@ impl SqliteDriver {
         event_tx: &flume::Sender<StreamEvent>,
         control: Option<&crate::execution::ExecutionControl>,
     ) -> Result<()> {
-        let start_time = Instant::now();
-        let conn = conn.lock();
-        if let Some(control) = control {
-            control.check()?;
-        }
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| report_error(event_tx, format!("SQLite prepare error: {e}")))?;
-
-        let columns: Vec<ColumnMeta> = stmt
-            .columns()
-            .iter()
-            .map(|c| {
-                ColumnMeta::new(
-                    c.name(),
-                    c.decl_type()
-                        .map(sqlite_decl_data_type)
-                        .unwrap_or(DataType::Text),
-                )
-            })
-            .collect();
-        let has_columns = !columns.is_empty();
-        let changes_before = conn.total_changes();
-        let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
-
-        if let Some(control) = control {
-            control.check()?;
-        }
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?;
-
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?
-        {
-            for i in 0..sink.cells_mut().len() {
-                let value = row
-                    .get_ref(i)
-                    .map_err(|e| sink.fail(format!("SQLite read error: {e}")))?;
-                sink.cells_mut()[i] = match value {
-                    ValueRef::Null => None,
-                    ValueRef::Integer(v) => Some(v.to_string().into_bytes()),
-                    ValueRef::Real(v) => Some(v.to_string().into_bytes()),
-                    ValueRef::Text(v) => Some(v.to_vec()),
-                    ValueRef::Blob(v) => Some(v.to_vec()),
-                };
+        let mut observation = crate::sql_observer::Statement::start("SQLite", sql);
+        let mut observed_rows = None;
+        let outcome = (|| -> Result<()> {
+            let start_time = Instant::now();
+            let conn = conn.lock();
+            if let Some(control) = control {
+                control.check()?;
             }
-            sink.commit_row()?;
-        }
+            let mut stmt = conn
+                .prepare(sql)
+                .map_err(|e| report_error(event_tx, format!("SQLite prepare error: {e}")))?;
 
-        drop(rows);
-        drop(stmt);
-        if !has_columns {
-            let affected_rows = if conn.total_changes() == changes_before {
+            let columns: Vec<ColumnMeta> = stmt
+                .columns()
+                .iter()
+                .map(|c| {
+                    ColumnMeta::new(
+                        c.name(),
+                        c.decl_type()
+                            .map(sqlite_decl_data_type)
+                            .unwrap_or(DataType::Text),
+                    )
+                })
+                .collect();
+            let has_columns = !columns.is_empty();
+            let changes_before = conn.total_changes();
+            let mut sink = RowSink::start(columns, event_tx.clone(), start_time)?;
+
+            if let Some(control) = control {
+                control.check()?;
+            }
+            let mut rows = stmt
+                .query([])
+                .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?;
+
+            while let Some(row) = rows
+                .next()
+                .map_err(|e| sink.fail(format!("SQLite query error: {e}")))?
+            {
+                for i in 0..sink.cells_mut().len() {
+                    let value = row
+                        .get_ref(i)
+                        .map_err(|e| sink.fail(format!("SQLite read error: {e}")))?;
+                    sink.cells_mut()[i] = match value {
+                        ValueRef::Null => None,
+                        ValueRef::Integer(v) => Some(v.to_string().into_bytes()),
+                        ValueRef::Real(v) => Some(v.to_string().into_bytes()),
+                        ValueRef::Text(v) => Some(v.to_vec()),
+                        ValueRef::Blob(v) => Some(v.to_vec()),
+                    };
+                }
+                sink.commit_row()?;
+            }
+
+            drop(rows);
+            drop(stmt);
+            if !has_columns {
+                let affected_rows = if conn.total_changes() == changes_before {
+                    0
+                } else {
+                    conn.changes()
+                };
+                let _ = event_tx.send(StreamEvent::CommandComplete {
+                    affected_rows: Some(affected_rows),
+                });
+            }
+            observed_rows = Some(if has_columns {
+                sink.total_rows()
+            } else if conn.total_changes() == changes_before {
                 0
             } else {
                 conn.changes()
-            };
-            let _ = event_tx.send(StreamEvent::CommandComplete {
-                affected_rows: Some(affected_rows),
             });
-        }
-        sink.finish();
-        Ok(())
+            sink.finish();
+            Ok(())
+        })();
+        observation.finish(&outcome, observed_rows);
+        outcome
     }
 }
 
@@ -246,7 +259,12 @@ impl DatabaseDriver for SqliteDriver {
     async fn ping(&self) -> Result<()> {
         let conn = self.conn.lock();
         // `execute` rejects statements that return rows, so read the row instead
-        conn.query_row("SELECT 1;", [], |_| Ok(()))?;
+        crate::sql_observer::observe!(
+            "SQLite",
+            "SELECT 1;",
+            |query| conn.query_row(query, [], |_| Ok(())),
+            |_row| Some(1)
+        )?;
         Ok(())
     }
 
@@ -287,14 +305,20 @@ impl DatabaseDriver for SqliteDriver {
             .spawn_blocking(move || {
                 let mut conn = conn.lock();
                 // Dropping the transaction without commit rolls it back
-                let tx = conn.transaction()?;
+                let tx = crate::sql_observer::observe!("SQLite", "BEGIN DEFERRED", |_query| conn
+                    .transaction())?;
                 for sql in &statements {
-                    let affected = tx.execute(sql, [])? as u64;
+                    let affected = crate::sql_observer::observe!(
+                        "SQLite",
+                        sql,
+                        |query| tx.execute(query, []),
+                        |rows| Some(*rows as u64)
+                    )? as u64;
                     if affected != 1 {
                         return Err(row_count_error(sql, affected));
                     }
                 }
-                tx.commit()?;
+                crate::sql_observer::observe!("SQLite", "COMMIT", |_query| tx.commit())?;
                 Ok(statements.len() as u64)
             })
             .await
@@ -307,93 +331,121 @@ impl DatabaseDriver for SqliteDriver {
     }
 
     async fn list_tables(&self) -> Result<Vec<TableSummary>> {
-        let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT 'main', name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name;"
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok(TableSummary {
-                schema: row.get(0)?,
-                name: row.get(1)?,
-                table_type: row.get(2)?,
-                estimated_rows: None,
-            })
-        })?;
-
-        let mut tables = Vec::new();
-        for r in rows {
-            tables.push(r?);
-        }
-        Ok(tables)
+        crate::sql_observer::observe!(
+            "SQLite",
+            "SELECT 'main', name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name;",
+            |query| {
+                let conn = self.conn.lock();
+                let mut stmt = conn.prepare(query)?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(TableSummary {
+                        schema: row.get(0)?,
+                        name: row.get(1)?,
+                        table_type: row.get(2)?,
+                        estimated_rows: None,
+                    })
+                })?;
+                let mut tables = Vec::new();
+                for r in rows {
+                    tables.push(r?);
+                }
+                Ok(tables)
+            },
+            |rows| Some(rows.len() as u64)
+        )
     }
 
     async fn list_columns(&self, _schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
-        let conn = self.conn.lock();
-        let mut stmt = conn.prepare("SELECT * FROM pragma_table_info(?1)")?;
+        crate::sql_observer::observe!(
+            "SQLite",
+            "SELECT * FROM pragma_table_info(?1)",
+            |_query| async {
+                let conn = self.conn.lock();
+                let mut stmt = conn.prepare("SELECT * FROM pragma_table_info(?1)")?;
 
-        let rows = stmt.query_map([table], |row| {
-            let name: String = row.get(1)?;
-            let dtype_str: String = row.get(2)?;
-            let notnull: i32 = row.get(3)?;
-            let pk: i32 = row.get(5)?;
+                let rows = stmt.query_map([table], |row| {
+                    let name: String = row.get(1)?;
+                    let dtype_str: String = row.get(2)?;
+                    let notnull: i32 = row.get(3)?;
+                    let pk: i32 = row.get(5)?;
 
-            Ok(ColumnMeta::new(name, sqlite_decl_data_type(&dtype_str))
-                .with_nullable(notnull == 0)
-                .with_pk(pk > 0))
-        })?;
+                    Ok(ColumnMeta::new(name, sqlite_decl_data_type(&dtype_str))
+                        .with_nullable(notnull == 0)
+                        .with_pk(pk > 0))
+                })?;
 
-        let mut cols = Vec::new();
-        for r in rows {
-            cols.push(r?);
-        }
-        Ok(cols)
+                let mut cols = Vec::new();
+                for r in rows {
+                    cols.push(r?);
+                }
+                Ok(cols)
+            }
+            .await,
+            |rows| Some(rows.len() as u64)
+        )
     }
 
     async fn list_foreign_keys(&self) -> Result<Option<Vec<crate::ForeignKey>>> {
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-            let mut stmt = conn.prepare(
-                r#"SELECT m.name, f.id, f."from", f."table",
+        crate::sql_observer::observe!(
+            "SQLite",
+            r#"SELECT m.name, f.id, f."from", f."table",
                         COALESCE(f."to", (SELECT p.name FROM pragma_table_info(f."table") p
                             WHERE p.pk = f.seq + 1), 'PRIMARY KEY')
                  FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
                  WHERE m.type = 'table' ORDER BY m.name, f.id, f.seq"#,
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok(crate::ForeignKey {
-                    name: format!("fk_{}", r.get::<_, i64>(1)?),
-                    source_schema: "main".into(),
-                    source_table: r.get(0)?,
-                    source_column: r.get(2)?,
-                    target_schema: "main".into(),
-                    target_table: r.get(3)?,
-                    target_column: r.get(4)?,
+            |_query| async {
+                let conn = self.conn.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = conn.lock();
+                    let mut stmt = conn.prepare(
+                        r#"SELECT m.name, f.id, f."from", f."table",
+                        COALESCE(f."to", (SELECT p.name FROM pragma_table_info(f."table") p
+                            WHERE p.pk = f.seq + 1), 'PRIMARY KEY')
+                 FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
+                 WHERE m.type = 'table' ORDER BY m.name, f.id, f.seq"#,
+                    )?;
+                    let rows = stmt.query_map([], |r| {
+                        Ok(crate::ForeignKey {
+                            name: format!("fk_{}", r.get::<_, i64>(1)?),
+                            source_schema: "main".into(),
+                            source_table: r.get(0)?,
+                            source_column: r.get(2)?,
+                            target_schema: "main".into(),
+                            target_table: r.get(3)?,
+                            target_column: r.get(4)?,
+                        })
+                    })?;
+                    Ok(Some(rows.collect::<rusqlite::Result<Vec<_>>>()?))
                 })
-            })?;
-            Ok(Some(rows.collect::<rusqlite::Result<Vec<_>>>()?))
-        })
-        .await?
+                .await?
+            }
+            .await,
+            |rows| rows.as_ref().map(|rows| rows.len() as u64)
+        )
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
-        let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT 'main', tbl_name, name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name;"
-        )?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+        crate::sql_observer::observe!(
+            "SQLite",
+            "SELECT 'main', tbl_name, name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name;",
+            |query| {
+                let conn = self.conn.lock();
+                let mut stmt = conn.prepare(query)?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                let mut res = Vec::new();
+                for r in rows {
+                    res.push(r?);
+                }
+                Ok(res)
+            },
+            |rows| Some(rows.len() as u64)
+        )
     }
 
     async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
         anyhow::ensure!(!self.is_read_only(), "This SQLite connection is read-only");
         let conn = self.conn.lock();
-        conn.execute_batch(sql)?;
+        crate::sql_observer::observe!("SQLite", sql, |query| conn.execute_batch(query))?;
         Ok(())
     }
 }

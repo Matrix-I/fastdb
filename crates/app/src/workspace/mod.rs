@@ -84,6 +84,7 @@ mod table_transaction;
 mod table_view;
 mod text_input;
 mod top_bar;
+mod transaction_log;
 mod transaction_menu;
 mod transaction_mode;
 use software_update::UpdateController;
@@ -196,6 +197,8 @@ pub struct Workspace {
     navigator_filter: navigator_filter::NavigatorFilter,
     save_queue: SaveQueue,
     query_history: query_history::QueryHistory,
+    sql_log: Arc<crate::sql_log::SqlLog>,
+    transaction_log: Option<transaction_log::Panel>,
     script_action: Option<script_tools::ScriptAction>,
     script_search: Option<script_search::Search>,
     result_search: Option<result_search::Search>,
@@ -226,7 +229,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>, sql_log: Arc<crate::sql_log::SqlLog>) -> Self {
         let config_dir = platform_hal::paths::config_dir();
         let preferences = preferences::load_preferences(&config_dir);
         let theme = preferences.theme.to_theme();
@@ -284,6 +287,8 @@ impl Workspace {
             query_history: query_history::QueryHistory::new(
                 platform_hal::paths::config_dir().join("query-history"),
             ),
+            sql_log,
+            transaction_log: None,
             save_queue,
             updates,
             _diagram_gestures: diagram_gestures::install(cx),
@@ -378,6 +383,7 @@ impl Workspace {
                         }
                         let has_cursor = this.form.show_connection_modal
                             || this.script_chooser.is_some()
+                            || this.transaction_log.is_some()
                             || this.input.is_filter_focused
                             || this.input.is_fetch_size_focused
                             || this.tabs.get(this.active_tab).is_some_and(|tab| {
@@ -388,7 +394,10 @@ impl Workspace {
                             return;
                         }
                         this.input.cursor_visible = !this.input.cursor_visible;
-                        if this.form.show_connection_modal || this.script_chooser.is_some() {
+                        if this.form.show_connection_modal
+                            || this.script_chooser.is_some()
+                            || this.transaction_log.is_some()
+                        {
                             cx.notify();
                         } else if let Some(panes) = &this.panes {
                             panes.notify_table(cx);
@@ -411,7 +420,7 @@ impl Render for Workspace {
         let theme = &self.theme;
         let panes = self.panes.get_or_insert_with(|| Panes::new(cx)).clone();
 
-        if self.form.show_connection_modal {
+        if self.form.show_connection_modal || self.transaction_log.is_some() {
             window.focus(&self.focus_handle);
         }
 
@@ -632,6 +641,9 @@ impl Render for Workspace {
         }
         if self.show_about_dialog {
             root = root.child(self.render_about_dialog(cx));
+        }
+        if self.transaction_log.is_some() {
+            root = root.child(self.render_transaction_log(cx));
         }
         if self.value_editor.is_some() {
             root = root.child(self.render_value_editor(window, cx));

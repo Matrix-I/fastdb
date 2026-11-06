@@ -39,22 +39,29 @@ impl ScriptSession for PostgresScriptSession {
         anyhow::ensure!(!self.read_only, "{}", read_only::DENIED);
         let guard = self.client.lock().await;
         let client = guard.as_ref().context("Script session is closed")?;
-        client
-            .batch_execute(
+        async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
                 "BEGIN; SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '30s'",
+                |query| client.batch_execute(query,).await
             )
-            .await?;
+        }
+        .await?;
         let target =
             crate::sql::SqlDialect(crate::DbDriverKind::Postgres).qualified_table(schema, table);
-        client
-            .batch_execute(&format!("LOCK TABLE ONLY {target} IN ROW EXCLUSIVE MODE"))
-            .await?;
+        async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                &format!("LOCK TABLE ONLY {target} IN ROW EXCLUSIVE MODE"),
+                |query| client.batch_execute(query).await
+            )
+        }
+        .await?;
         let expected_object_id =
             expected_object_id.context("PostgreSQL import requires a captured table identity")?;
-        let ordinary: bool = client.query_one(
-            "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND c.oid::text = $3 AND c.relkind = 'r' AND NOT c.relispartition AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid) AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid))",
+        let ordinary: bool = async { crate::sql_observer::observe!("PostgreSQL", "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND c.oid::text = $3 AND c.relkind = 'r' AND NOT c.relispartition AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid) AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid))", |query| client.query_one(query,
             &[&schema, &table, &expected_object_id],
-        ).await?.get(0);
+        ).await, |_row| Some(1)) }.await?.get(0);
         anyhow::ensure!(
             ordinary,
             "PostgreSQL destination identity changed or is not an ordinary table without inheritance"
@@ -120,7 +127,13 @@ impl ScriptSession for PostgresScriptSession {
     async fn finish(&self) -> Result<()> {
         let client = self.client.lock().await.take();
         let result = match client {
-            Some(client) => match client.batch_execute("ROLLBACK").await {
+            Some(client) => match async {
+                crate::sql_observer::observe!("PostgreSQL", "ROLLBACK", |query| client
+                    .batch_execute(query)
+                    .await)
+            }
+            .await
+            {
                 Ok(()) => Ok(()),
                 Err(error)
                     if error.is_closed()
