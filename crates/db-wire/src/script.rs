@@ -332,7 +332,17 @@ async fn run_script_inner(
     send(&tx, &control, ScriptEvent::CleaningUp);
     let cleanup = match tokio::time::timeout(CLEANUP_TIMEOUT, session.finish()).await {
         Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(format!("Session cleanup failed: {error:#}")),
+        Ok(Err(error)) => {
+            if control.is_cancelled()
+                && (error.to_string().contains("canceling statement")
+                    || error.to_string().contains("query was cancelled")
+                    || error.to_string().contains("57014"))
+            {
+                None
+            } else {
+                Some(format!("Session cleanup failed: {error:#}"))
+            }
+        }
         Err(_) => Some("Session cleanup timed out; connection discarded".into()),
     };
     if let Some(error) = cleanup {
@@ -364,6 +374,7 @@ mod tests {
         cancelling: tokio::sync::watch::Sender<bool>,
         cancel_gate: tokio::sync::Semaphore,
         fail_cleanup: bool,
+        cleanup_error: Option<String>,
         aborted: AtomicBool,
         cancel_after: Option<Arc<ScriptControl>>,
     }
@@ -375,6 +386,7 @@ mod tests {
                 cancelling: tokio::sync::watch::channel(false).0,
                 cancel_gate: tokio::sync::Semaphore::new(0),
                 fail_cleanup,
+                cleanup_error: None,
                 aborted: AtomicBool::new(false),
                 cancel_after,
             })
@@ -415,6 +427,9 @@ mod tests {
         }
         async fn finish(&self) -> Result<()> {
             self.calls.lock().unwrap().push("finish".into());
+            if let Some(error) = &self.cleanup_error {
+                anyhow::bail!("{error}");
+            }
             if self.fail_cleanup {
                 anyhow::bail!("rollback failed");
             }
@@ -690,6 +705,43 @@ mod tests {
             assert!(task.await.unwrap_err().is_cancelled());
             assert!(session.aborted.load(Ordering::SeqCst));
             control.wait_finished().await;
+        });
+    }
+
+    #[test]
+    fn cancel_ignores_statement_cancellation_during_finish() {
+        crate::get_runtime().block_on(async {
+            let session = Arc::new(FakeSession {
+                calls: Mutex::new(vec![]),
+                started: tokio::sync::watch::channel(false).0,
+                cancelling: tokio::sync::watch::channel(false).0,
+                cancel_gate: tokio::sync::Semaphore::new(0),
+                fail_cleanup: false,
+                cleanup_error: Some("canceling statement due to user request".into()),
+                aborted: AtomicBool::new(false),
+                cancel_after: None,
+            });
+            let control = Arc::new(ScriptControl::default());
+            let (tx, rx) = flume::unbounded();
+            let task = tokio::spawn(run_script(
+                fake_driver(session.clone()),
+                vec!["wait".into()],
+                control.clone(),
+                tx,
+            ));
+            session.started.subscribe().wait_for(|v| *v).await.unwrap();
+            control.request_cancel();
+            session
+                .cancelling
+                .subscribe()
+                .wait_for(|v| *v)
+                .await
+                .unwrap();
+            session.cancel_gate.add_permits(1);
+            task.await.unwrap();
+            let result = outcome(&rx);
+            assert!(result.cancelled);
+            assert!(result.cleanup_error.is_none(), "{result:?}");
         });
     }
 }
