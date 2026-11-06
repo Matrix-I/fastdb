@@ -1,5 +1,7 @@
 # Not built yet
 
+- **Record presentation acceptance.** Record now combines with Grid/Text in both table and SQL results; transposed grid/text layout, switching and scrolling await manual GUI acceptance.
+
 - **Plain-text result acceptance.** Table tabs and SQL query results share a monospace text table; visual alignment and horizontal scrolling await manual GUI acceptance.
 
 The [audited roadmap](../ROADMAP.md) separates working paths, partial features, UI-only controls and missing workflows. Major gaps include:
