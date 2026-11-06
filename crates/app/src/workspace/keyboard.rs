@@ -474,11 +474,16 @@ impl Workspace {
                 }
                 self.input.cursor_visible = true;
                 cx.notify();
-            } else if tab.view_mode == DataViewMode::Record {
+            } else if tab.record_view.is_some() {
                 // The read-only view does not route shortcuts to the hidden grid.
                 if event.keystroke.key == "escape" {
-                    tab.close_record_view();
+                    tab.leave_record_view();
                     cx.notify();
+                } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
+                    && event.keystroke.key.eq_ignore_ascii_case("c")
+                    && let Some(text) = tab.record_text()
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                 && event.keystroke.key.eq_ignore_ascii_case("v")

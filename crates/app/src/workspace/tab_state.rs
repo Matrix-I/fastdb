@@ -355,10 +355,12 @@ impl TabState {
         self.results.len() + usize::from(self.script_sql.is_some())
     }
 
+    pub(super) fn show_record(&mut self, view: super::record_view::RecordView) {
+        self.editor_focused = false;
+        self.record_view = Some(view);
+    }
+
     pub(super) fn close_record_view(&mut self) {
-        if self.view_mode == DataViewMode::Record {
-            self.view_mode = DataViewMode::Grid;
-        }
         self.record_view = None;
     }
 

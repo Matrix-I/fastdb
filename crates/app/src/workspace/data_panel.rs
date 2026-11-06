@@ -7,7 +7,7 @@ fn strip_label(path: &'static str, height: f32) -> gpui::Svg {
 type StripAction = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>) + 'static>;
 
 impl Workspace {
-    /// Data sub-tab: result grid or text view, with the optional record side panel
+    /// Shared table/SQL results, with independent presentation and single-record selection.
     pub(super) fn render_data_panel(
         &mut self,
         active_tab_idx: usize,
@@ -18,9 +18,9 @@ impl Workspace {
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
         let view_mode = tab.view_mode;
-        let show_right_panels = self.layout.show_right_panels
-            && !self.layout.focus_data
-            && view_mode != DataViewMode::Record;
+        let record_mode = tab.record_view.is_some();
+        let show_right_panels =
+            self.layout.show_right_panels && !self.layout.focus_data && !record_mode;
         let mut data_row = div().flex().flex_row().flex_1().w_full().overflow_hidden();
 
         let tab_id = tab.id;
@@ -90,7 +90,6 @@ impl Workspace {
                     Box::new(|this, _| {
                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
                             t.view_mode = DataViewMode::Grid;
-                            t.record_view = None;
                         }
                     }),
                     cx,
@@ -104,28 +103,23 @@ impl Workspace {
                     Box::new(|this, _| {
                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
                             t.view_mode = DataViewMode::Text;
-                            t.record_view = None;
                         }
                     }),
                     cx,
                 ))
+                .child(div().flex_1())
                 .child(strip_item(
                     "toolstrip-record",
                     "icons/columns.svg",
                     "icons/label_record.svg",
                     37.0,
-                    view_mode == DataViewMode::Record,
+                    record_mode,
                     Box::new(move |this, cx| {
-                        if let Some(t) = this.tabs.get(this.active_tab) {
-                            if t.view_mode == DataViewMode::Record {
-                                if let Some(t) = this.tabs.get_mut(this.active_tab) {
-                                    t.view_mode = DataViewMode::Grid;
-                                    t.record_view = None;
-                                }
-                            } else if t.grid.row_count() > 0 && t.grid.pager.is_some() {
+                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                            if t.record_view.is_some() {
+                                t.leave_record_view();
+                            } else {
                                 this.open_record_view(tab_id, cx);
-                            } else if let Some(t) = this.tabs.get_mut(this.active_tab) {
-                                t.view_mode = DataViewMode::Record;
                             }
                         }
                     }),
@@ -148,7 +142,9 @@ impl Workspace {
                     cx.notify();
                 }))
                 .child({
-                    match view_mode {
+                    if record_mode {
+                        self.render_record_view(active_tab_idx, cx).into_any_element()
+                    } else { match view_mode {
                         DataViewMode::Grid => {
                             let sidebar_w = self.layout.navigator_width;
                             let panels_w = if show_right_panels { self.layout.value_panel_width } else { 0.0 };
@@ -279,7 +275,6 @@ impl Workspace {
                                     .into_any_element()
                             }).into_any_element()
                         }
-                        DataViewMode::Record => self.render_record_view(active_tab_idx, cx).into_any_element(),
                         DataViewMode::Text => {
                             let tab = &self.tabs[active_tab_idx];
                             let text_lines = if let Some(ref pager) = tab.grid.pager {
@@ -372,6 +367,7 @@ impl Workspace {
                                 )
                                 .into_any_element()
                         }
+                    }
                     }
                 })
         );
@@ -501,7 +497,7 @@ const MONO_FONT: &str = "Menlo";
 const MONO_FONT: &str = "DejaVu Sans Mono";
 
 /// Shared by table tabs and SQL result panels through `render_data_panel`.
-fn text_table_body(text: String, width: f32) -> gpui::Div {
+pub(super) fn text_table_body(text: String, width: f32) -> gpui::Div {
     div()
         .flex()
         .flex_col()
@@ -539,99 +535,76 @@ pub(super) fn format_text_presentation(
 
     let num_rows = row_count.min(2000);
 
-    // Initial width based on column header name
-    let mut col_widths: Vec<usize> = columns
+    let headers: Vec<&str> = columns
         .iter()
         .map(|&c| {
             pager
                 .columns
                 .get(c)
-                .map(|col| col.name.chars().count().max(1))
-                .unwrap_or(1)
+                .map_or("", |column| column.name.as_str())
         })
         .collect();
+    let rows: Vec<Vec<String>> = (0..num_rows)
+        .map(|row| {
+            columns
+                .iter()
+                .map(|&column| {
+                    ui_grid::resolve_cell(pager, changeset, row as u64, column)
+                        .map_or_else(|| "[NULL]".into(), |text| sanitize_text_cell(&text))
+                })
+                .collect()
+        })
+        .collect();
+    format_text_table(&headers, &rows)
+}
 
-    // 1. First pass: sanitize cell values and calculate column widths
-    let mut formatted_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
-    for r in 0..num_rows {
-        let mut row_vals = Vec::with_capacity(columns.len());
-        for (i, &c) in columns.iter().enumerate() {
-            let cell = ui_grid::resolve_cell(pager, changeset, r as u64, c);
-            let val_str = match cell {
-                Some(s) => sanitize_text_cell(&s),
-                None => "[NULL]".to_string(),
-            };
-            col_widths[i] = col_widths[i].max(val_str.chars().count());
-            row_vals.push(val_str);
+/// Aligned text table shared by full results and transposed records.
+pub(super) fn format_text_table(headers: &[&str], rows: &[Vec<String>]) -> Vec<String> {
+    if headers.is_empty() {
+        return Vec::new();
+    }
+    let widths: Vec<usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(column, header)| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|value| value.chars().count())
+                .chain(std::iter::once(header.chars().count()))
+                .max()
+                .unwrap_or(1)
+                .clamp(1, MAX_TEXT_COLUMN_WIDTH)
+        })
+        .collect();
+    let format_row = |values: &[&str]| {
+        let mut line = String::new();
+        for (column, &width) in widths.iter().enumerate() {
+            let text: String = values
+                .get(column)
+                .copied()
+                .unwrap_or("")
+                .chars()
+                .take(width)
+                .collect();
+            let padding = width - text.chars().count();
+            line.push_str(&text);
+            line.extend(std::iter::repeat_n(' ', padding));
+            line.push('|');
         }
-        formatted_rows.push(row_vals);
+        line
+    };
+    let mut lines = Vec::with_capacity(rows.len() + 2);
+    lines.push(format_row(headers));
+    lines.push(
+        widths
+            .iter()
+            .map(|width| format!("{}+", "-".repeat(*width)))
+            .collect(),
+    );
+    for row in rows {
+        let values: Vec<&str> = row.iter().map(String::as_str).collect();
+        lines.push(format_row(&values));
     }
-
-    // Cap column widths at MAX_TEXT_COLUMN_WIDTH (255),
-    // while keeping at least the column header width (or capped if header itself > 255).
-    for (i, &c) in columns.iter().enumerate() {
-        let header_len = pager
-            .columns
-            .get(c)
-            .map(|col| col.name.chars().count())
-            .unwrap_or(1);
-        col_widths[i] = col_widths[i]
-            .min(MAX_TEXT_COLUMN_WIDTH)
-            .max(header_len.min(MAX_TEXT_COLUMN_WIDTH))
-            .max(1);
-    }
-
-    let mut lines = Vec::with_capacity(num_rows + 2);
-
-    // 2. Format header line
-    let mut header_line = String::new();
-    for (i, &c) in columns.iter().enumerate() {
-        let col_name = pager
-            .columns
-            .get(c)
-            .map(|col| col.name.as_str())
-            .unwrap_or("");
-        let width = col_widths[i];
-        let name_chars: Vec<char> = col_name.chars().collect();
-        let take_len = name_chars.len().min(width);
-        let name_str: String = name_chars[..take_len].iter().collect();
-        header_line.push_str(&name_str);
-        let pad = width.saturating_sub(take_len);
-        for _ in 0..pad {
-            header_line.push(' ');
-        }
-        header_line.push('|');
-    }
-    lines.push(header_line);
-
-    // 3. Format divider line
-    let mut divider_line = String::new();
-    for &width in &col_widths {
-        for _ in 0..width {
-            divider_line.push('-');
-        }
-        divider_line.push('+');
-    }
-    lines.push(divider_line);
-
-    // 4. Format data rows
-    for row in formatted_rows {
-        let mut row_line = String::new();
-        for (i, val) in row.into_iter().enumerate() {
-            let width = col_widths[i];
-            let val_chars: Vec<char> = val.chars().collect();
-            let take_len = val_chars.len().min(width);
-            let val_str: String = val_chars[..take_len].iter().collect();
-            row_line.push_str(&val_str);
-            let pad = width.saturating_sub(take_len);
-            for _ in 0..pad {
-                row_line.push(' ');
-            }
-            row_line.push('|');
-        }
-        lines.push(row_line);
-    }
-
     lines
 }
 
