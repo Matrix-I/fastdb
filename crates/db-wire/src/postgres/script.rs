@@ -120,10 +120,18 @@ impl ScriptSession for PostgresScriptSession {
     async fn finish(&self) -> Result<()> {
         let client = self.client.lock().await.take();
         let result = match client {
-            Some(client) => client
-                .batch_execute("ROLLBACK")
-                .await
-                .map_err(|e| anyhow::anyhow!(pg_error_message(&e))),
+            Some(client) => match client.batch_execute("ROLLBACK").await {
+                Ok(()) => Ok(()),
+                Err(error)
+                    if error.is_closed()
+                        || error.code()
+                            == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED)
+                        || pg_error_message(&error).contains("canceling statement") =>
+                {
+                    Ok(())
+                }
+                Err(error) => Err(anyhow::anyhow!(pg_error_message(&error))),
+            },
             None => Ok(()),
         };
         self.abort();
