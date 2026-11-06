@@ -36,6 +36,7 @@ pub struct TabState {
     pub(super) record_view: Option<super::record_view::RecordView>,
     pub show_sql_dialog: bool,
     pub editor: SqlEditorView,
+    pub(super) result_split: super::script_split::ScriptSplit,
     pub grid: VirtualDataGrid,
     pub execution_time_ms: Option<u64>,
     pub(super) affected_rows: Option<Option<u64>>,
@@ -310,6 +311,7 @@ impl TabState {
             record_view: None,
             show_sql_dialog: false,
             editor: SqlEditorView::new("", Theme::dark(), None),
+            result_split: Default::default(),
             grid: VirtualDataGrid::new(None, Theme::dark()),
             execution_time_ms: None,
             affected_rows: None,
@@ -343,6 +345,10 @@ impl TabState {
             export: Default::default(),
             saved_params: Default::default(),
         }
+    }
+
+    pub(super) fn shows_script_results(&self) -> bool {
+        self.result_count() > 0
     }
 
     pub(super) fn result_count(&self) -> usize {
@@ -746,6 +752,65 @@ mod relocated_tests {
 
         tab.script_sql = None;
         assert_eq!(script_fetch_query(&tab, 0), (String::new(), false));
+    }
+
+    #[test]
+    fn script_result_panel_follows_execution_and_close_lifecycle() {
+        let mut tab = super::TabState::blank(70);
+        assert!(
+            !tab.shows_script_results(),
+            "unexecuted SQL must not show a result panel"
+        );
+        tab.new_script_result("SELECT 1 WHERE FALSE".into());
+        assert!(
+            tab.shows_script_results(),
+            "a running or empty result must remain visible"
+        );
+        tab.new_script_result("DELETE FROM users WHERE FALSE".into());
+        tab.close_result(1);
+        assert!(
+            tab.shows_script_results(),
+            "retained results keep the panel visible"
+        );
+        tab.close_result(0);
+        assert!(
+            !tab.shows_script_results(),
+            "closing the last result restores the full editor"
+        );
+    }
+
+    #[test]
+    fn script_results_remain_visible_for_empty_commands_errors_and_plans() {
+        let mut tab = super::TabState::blank(71);
+        tab.new_script_result("SELECT 1 WHERE FALSE".into());
+        tab.apply_stream_event(db_wire::StreamEvent::SchemaReady(std::sync::Arc::new(
+            db_wire::QueryResultPager::new(vec![db_wire::ColumnMeta::new(
+                "id",
+                db_wire::DataType::Int4,
+            )])
+            .unwrap(),
+        )));
+        assert_eq!(tab.grid.row_count(), 0);
+        assert!(tab.shows_script_results());
+        tab.new_script_result("DELETE FROM users WHERE FALSE".into());
+        tab.apply_stream_event(db_wire::StreamEvent::CommandComplete {
+            affected_rows: Some(0),
+        });
+        assert!(tab.shows_script_results());
+        tab.apply_stream_event(db_wire::StreamEvent::Error("statement failed".into()));
+        assert!(tab.shows_script_results());
+        tab.new_script_result("EXPLAIN SELECT 1".into());
+        tab.query_plan = Some(
+            db_wire::query_plan::QueryPlan::parse(
+                br#"[{"Plan":{"Node Type":"Result","Plan Rows":1}}]"#,
+            )
+            .unwrap(),
+        );
+        tab.show_plan = true;
+        assert!(tab.shows_script_results());
+        tab.result_split.editor_fraction = 0.65;
+        tab.select_result(0);
+        assert_eq!(tab.result_split.editor_fraction, 0.65);
     }
 
     #[test]

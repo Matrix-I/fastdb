@@ -71,6 +71,7 @@ mod script_chooser;
 mod script_saves;
 mod script_store;
 use script_saves::{AfterSave, SaveQueue};
+mod script_split;
 mod script_view;
 mod session_context;
 mod session_controls;

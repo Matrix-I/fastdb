@@ -239,6 +239,10 @@ impl Workspace {
 
         let pick = self.script_editor_pick(tab_idx, cx);
         let tab = &mut self.tabs[tab_idx];
+        let show_results = tab.shows_script_results();
+        let editor_fraction = tab.result_split.editor_fraction;
+        let split_bounds = tab.result_split.bounds.clone();
+        let split_dragging = tab.result_split.is_dragging();
         let editor_focused = tab.editor_focused;
         let editor_scroll = tab.editor.scroll_handle.clone();
         let editor = div()
@@ -247,8 +251,10 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .flex_none()
-            .h(relative(0.45))
+            .when(show_results, |editor| {
+                editor.flex_none().h(relative(editor_fraction))
+            })
+            .when(!show_results, |editor| editor.flex_1())
             .w_full()
             .border_b_1()
             .border_color(theme.border)
@@ -302,20 +308,66 @@ impl Workspace {
         let show_plan = tab.show_plan && has_plan;
         let tab_id = tab.id;
 
+        let shell = div().flex().flex_col().size_full().overflow_hidden().child(
+            div()
+                .flex_none()
+                .px_2()
+                .text_size(px(11.0))
+                .text_color(theme.text_secondary)
+                .child(connection_name),
+        );
+
+        let mut body = div()
+            .id("script-split")
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .track_scroll(&split_bounds)
+            .when(split_dragging, |body| body.cursor_row_resize())
+            .child(editor);
+        if split_dragging {
+            body = body.child(self.render_script_split_drag(tab_id, cx));
+        }
+        if show_results {
+            body = body.child(
+                div()
+                    .id("script-result-splitter")
+                    .flex_none()
+                    .h(px(super::script_split::SPLITTER_HEIGHT))
+                    .w_full()
+                    .cursor_row_resize()
+                    .bg(if split_dragging {
+                        theme.border_focused
+                    } else {
+                        theme.border
+                    })
+                    .hover(|style| style.bg(theme.border_focused))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                                let height =
+                                    f32::from(tab.result_split.bounds.bounds().size.height);
+                                tab.result_split
+                                    .begin_drag(f32::from(event.position.y), height);
+                                this.input.grid_drag = None;
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }),
+                    ),
+            );
+        }
         let mut column = div()
             .flex()
             .flex_col()
-            .size_full()
+            .min_h_0()
             .overflow_hidden()
-            .child(
-                div()
-                    .flex_none()
-                    .px_2()
-                    .text_size(px(11.0))
-                    .text_color(theme.text_secondary)
-                    .child(connection_name),
-            )
-            .child(editor);
+            .when(show_results, |column| column.flex_1())
+            .when(!show_results, |column| column.flex_none());
 
         if let Some(entries) = log {
             let mut list = div()
@@ -475,6 +527,10 @@ impl Workspace {
                     })),
             );
         }
+        if !show_results {
+            return shell.child(body.child(column));
+        }
+
         let mut result = div()
             .flex()
             .flex_col()
@@ -518,9 +574,57 @@ impl Workspace {
             result.child(self.render_data_panel(tab_idx, window, cx))
         };
 
-        column
-            .child(result)
-            .child(self.render_result_footer(tab_idx, cx))
+        shell.child(
+            body.child(
+                column
+                    .child(result)
+                    .child(self.render_result_footer(tab_idx, cx)),
+            ),
+        )
+    }
+
+    fn render_script_split_drag(
+        &self,
+        tab_id: u64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let on_move = cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+            if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id)
+                && tab
+                    .result_split
+                    .handle_mouse_move(event, DispatchPhase::Capture)
+            {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
+        let on_up = cx.listener(move |this, event: &MouseUpEvent, _, cx| {
+            if event.button == MouseButton::Left
+                && let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id)
+                && tab.result_split.end_drag()
+            {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
+        // Window capture listeners keep resizing over editor text and outside the panel.
+        gpui::canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        on_move(event, window, cx);
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        on_up(event, window, cx);
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
     }
 
     /// Gives the keyboard to the active script tab's editor (`true`) or to its result grid
@@ -544,6 +648,13 @@ impl Workspace {
         let workspace = cx.entity().downgrade();
         Rc::new(move |line, col, kind, window, cx| {
             let _ = workspace.update(cx, |this, cx| {
+                if this
+                    .tabs
+                    .get(tab_idx)
+                    .is_some_and(|tab| tab.result_split.is_dragging())
+                {
+                    return;
+                }
                 this.focus_script_editor(true);
                 if let Some(tab) = this.tabs.get_mut(tab_idx) {
                     tab.editor.pick(line, col, kind);
