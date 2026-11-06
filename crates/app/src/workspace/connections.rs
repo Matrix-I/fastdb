@@ -349,6 +349,14 @@ impl Workspace {
                                 tab.editor.schema_cache = Some(cache.clone());
                             }
                         }
+                        if let Some(tab) = this.tabs.get(this.active_tab)
+                            && tab.connection_id == this.connections.active_connection_id
+                            && tab.table_name.is_some()
+                            && tab.active_subtab == TableSubTab::Data
+                            && tab.grid.pager.is_none()
+                        {
+                            this.run_active_query(cx);
+                        }
                         if this.navigator_filter.mode
                             == super::navigator_filter::NavigatorFilterMode::TablesAndObjects
                         {

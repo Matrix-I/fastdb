@@ -22,10 +22,14 @@ impl UpdateController {
             .id("update-dialog-backdrop")
             .absolute()
             .inset_0()
+            .occlude()
             .bg(rgba(0x00000088))
             .flex()
             .items_center()
             .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| {
                 // Clicking outside closes only when not downloading
                 let is_downloading = matches!(

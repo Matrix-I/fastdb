@@ -136,11 +136,16 @@ impl Workspace {
                                         .font_weight(if is_data { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
                                         .cursor_pointer()
                                         .hover(|s| s.bg(theme.bg_surface_hover))
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                            let mut needs_load = false;
                                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
                                                 t.active_subtab = TableSubTab::Data;
-                                                cx.notify();
+                                                needs_load = t.grid.pager.is_none() || event.click_count() >= 2;
                                             }
+                                            if needs_load {
+                                                this.run_active_query(cx);
+                                            }
+                                            cx.notify();
                                         }))
                                         .child(img("icons/grid.svg").w(px(13.0)).h(px(13.0)))
                                         .child("Data")
