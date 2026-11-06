@@ -99,7 +99,7 @@ impl Workspace {
         };
         tab.grid.auto_fetch_paused.set(true);
         tab.view_mode = DataViewMode::Grid;
-        tab.record_view = None;
+        tab.close_record_view();
         self.close_result_search();
         self.result_search = Some(Search {
             tab: tab_id,

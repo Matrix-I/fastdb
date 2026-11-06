@@ -205,6 +205,7 @@ impl Workspace {
         };
         let tab = &mut self.tabs[self.active_tab];
         if tab.view_mode != DataViewMode::Grid
+            || tab.record_view.is_some()
             || tab.grid.editing_cell.is_some()
             || tab.schema_stale
         {
@@ -264,6 +265,7 @@ impl Workspace {
                 let tab = &mut this.tabs[index];
                 if !writable
                     || tab.view_mode != DataViewMode::Grid
+                    || tab.record_view.is_some()
                     || tab.schema_stale
                     || tab.grid.editing_cell.is_some()
                     || tab.grid.changeset_revision() != revision

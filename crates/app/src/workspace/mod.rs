@@ -142,7 +142,6 @@ pub enum PropertySection {
 pub enum DataViewMode {
     Grid,
     Text,
-    Record,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
