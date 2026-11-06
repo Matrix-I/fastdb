@@ -16,8 +16,8 @@ impl PostgresDriver {
     ) -> Result<Option<Vec<CatalogRow>>> {
         let (client, task) = Self::connect_with_task(self.config.clone()).await?;
         let _guard = SocketGuard(task);
-        client.batch_execute("SET search_path=pg_catalog; SET statement_timeout='10s'; BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ").await?;
-        let row=client.query_opt("SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p','v','m','f')",&[&schema,&table]).await?
+        async { crate::sql_observer::observe!("PostgreSQL", "SET search_path=pg_catalog; SET statement_timeout='10s'; BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ", |query| client.batch_execute(query).await) }.await?;
+        let row=async { crate::sql_observer::observe!("PostgreSQL", "SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p','v','m','f')", |query| client.query_opt(query,&[&schema,&table]).await, |row| Some(u64::from(row.is_some()))) }.await?
             .ok_or_else(||anyhow::anyhow!("Table/view no longer exists; refresh the connection catalog"))?;
         let oid: u32 = row.get(0);
         let sql = match section {
@@ -143,7 +143,16 @@ pub(super) async fn query_catalog_rows(
     sql: &str,
     oid: u32,
 ) -> Result<Vec<tokio_postgres::Row>> {
-    client.query(sql, &[&oid]).await.map_err(|e| {
+    async {
+        crate::sql_observer::observe!(
+            "PostgreSQL",
+            sql,
+            |query| client.query(query, &[&oid]).await,
+            |rows| Some(rows.len() as u64)
+        )
+    }
+    .await
+    .map_err(|e| {
         let message = pg_error_message(&e);
         anyhow::Error::new(e).context(message)
     })

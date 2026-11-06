@@ -29,7 +29,7 @@ impl PostgresDriver {
     async fn object_client(&self) -> Result<(Client, SocketGuard)> {
         let (client, task) = Self::connect_with_task(self.config.clone()).await?;
         let guard = SocketGuard(task);
-        client.batch_execute("SET search_path=pg_catalog; SET statement_timeout='10s'; BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ").await?;
+        async { crate::sql_observer::observe!("PostgreSQL", "SET search_path=pg_catalog; SET statement_timeout='10s'; BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ", |query| client.batch_execute(query).await) }.await?;
         Ok((client, guard))
     }
 
@@ -39,7 +39,15 @@ impl PostgresDriver {
             "{} AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.oid>$1 ORDER BY c.oid LIMIT 101",
             discovery(kind)
         );
-        let rows = client.query(&sql, &[&after]).await?;
+        let rows = async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                &sql,
+                |query| client.query(query, &[&after]).await,
+                |rows| Some(rows.len() as u64)
+            )
+        }
+        .await?;
         let more = rows.len() > OBJECT_PAGE_SIZE;
         let objects: Vec<_> = rows
             .into_iter()
@@ -62,10 +70,16 @@ impl PostgresDriver {
     ) -> Result<String> {
         let (client, _guard) = self.object_client().await?;
         let sql = format!("{} AND c.oid=$1", discovery(kind));
-        let row = client
-            .query_opt(&sql, &[&object.id])
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Object no longer exists; refresh the catalog"))?;
+        let row = async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                &sql,
+                |query| client.query_opt(query, &[&object.id]).await,
+                |row| Some(u64::from(row.is_some()))
+            )
+        }
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Object no longer exists; refresh the catalog"))?;
         let current = ObjectSummary {
             id: row.get(0),
             schema: row.get(1),
@@ -86,10 +100,16 @@ impl PostgresDriver {
         let bounded = format!(
             "SELECT CASE WHEN octet_length(source)<=262144 THEN source END FROM ({sql}) AS definition(source)"
         );
-        let row = client
-            .query_opt(&bounded, &[&object.id])
-            .await?
-            .and_then(|r| r.get::<_, Option<String>>(0));
+        let row = async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                &bounded,
+                |query| client.query_opt(query, &[&object.id]).await,
+                |row| Some(u64::from(row.is_some()))
+            )
+        }
+        .await?
+        .and_then(|r| r.get::<_, Option<String>>(0));
         row.ok_or_else(|| {
             anyhow::anyhow!("Object source exceeds the 256 KiB viewer limit or is unavailable")
         })

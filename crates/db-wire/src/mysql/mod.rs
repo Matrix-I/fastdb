@@ -195,7 +195,10 @@ impl MySqlDriver {
         let pool = self.get_pool().await?;
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
-            Ok(conn.exec(sql, params).await?)
+            Ok(async {
+                crate::sql_observer::observe!("MySQL", sql, |query| conn.exec(query, params).await)
+            }
+            .await?)
         })
         .await
     }
@@ -242,65 +245,78 @@ impl MySqlDriver {
         start_time: Instant,
         read_only: bool,
     ) -> Result<()> {
-        if let Some(control) = &control {
-            control.check()?;
-        }
-        let (sql, prepared) = if read_only {
-            read_only::prepare(conn, &sql)
-                .await
-                .map_err(|error| report_error(&event_tx, format!("{error:#}")))?
-        } else {
-            (std::borrow::Cow::Borrowed(sql.as_str()), false)
-        };
-        if let Some(control) = &control {
-            control.check()?;
-        }
-        let report =
-            |error| report_error(&event_tx, format!("MySQL query execution error: {error}"));
-        let (sink, warnings, info) = if prepared {
-            // The server parses exactly one statement under the connection's SQL mode.
-            let result = conn
-                .exec_iter(sql.as_ref(), Params::Empty)
-                .await
-                .map_err(report)?;
-            Self::stream_result(result, &event_tx, start_time).await?
-        } else {
-            let result = conn.query_iter(sql.as_ref()).await.map_err(report)?;
-            Self::stream_result(result, &event_tx, start_time).await?
-        };
-        if !info.is_empty() {
-            let _ = event_tx.send(StreamEvent::Notice(info));
-        }
-        if warnings > 0 {
-            let _ = event_tx.send(StreamEvent::Notice(format!(
-                "MySQL: {warnings} server warning(s); showing up to 20"
-            )));
-            let messages = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                conn.query::<(String, u16, String), _>("SHOW WARNINGS LIMIT 20"),
-            )
-            .await;
-            match messages {
-                Ok(Ok(messages)) => {
-                    for (level, code, text) in messages {
-                        let _ =
-                            event_tx.send(StreamEvent::Notice(format!("{level} {code}: {text}")));
+        let mut observation = crate::sql_observer::Statement::start("MySQL", &sql);
+        let mut observed_rows = None;
+        let outcome = async {
+            if let Some(control) = &control {
+                control.check()?;
+            }
+            let (sql, prepared) = if read_only {
+                read_only::prepare(conn, &sql)
+                    .await
+                    .map_err(|error| report_error(&event_tx, format!("{error:#}")))?
+            } else {
+                (std::borrow::Cow::Borrowed(sql.as_str()), false)
+            };
+            if let Some(control) = &control {
+                control.check()?;
+            }
+            let report =
+                |error| report_error(&event_tx, format!("MySQL query execution error: {error}"));
+            let (sink, warnings, info) = if prepared {
+                // The server parses exactly one statement under the connection's SQL mode.
+                let result = conn
+                    .exec_iter(sql.as_ref(), Params::Empty)
+                    .await
+                    .map_err(report)?;
+                Self::stream_result(result, &event_tx, start_time).await?
+            } else {
+                let result = conn.query_iter(sql.as_ref()).await.map_err(report)?;
+                Self::stream_result(result, &event_tx, start_time).await?
+            };
+            if !info.is_empty() {
+                let _ = event_tx.send(StreamEvent::Notice(info));
+            }
+            if warnings > 0 {
+                let _ = event_tx.send(StreamEvent::Notice(format!(
+                    "MySQL: {warnings} server warning(s); showing up to 20"
+                )));
+                let messages = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    crate::sql_observer::observe!("MySQL", "SHOW WARNINGS LIMIT 20", |query| conn
+                        .query::<(String, u16, String), _>(query)
+                        .await)
+                })
+                .await;
+                match messages {
+                    Ok(Ok(messages)) => {
+                        for (level, code, text) in messages {
+                            let _ = event_tx
+                                .send(StreamEvent::Notice(format!("{level} {code}: {text}")));
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        let _ = event_tx.send(StreamEvent::Notice(format!(
+                            "Cannot load warning details: {error}"
+                        )));
+                    }
+                    Err(_) => {
+                        let _ = event_tx.send(StreamEvent::Notice(
+                            "Loading warning details timed out".into(),
+                        ));
                     }
                 }
-                Ok(Err(error)) => {
-                    let _ = event_tx.send(StreamEvent::Notice(format!(
-                        "Cannot load warning details: {error}"
-                    )));
-                }
-                Err(_) => {
-                    let _ = event_tx.send(StreamEvent::Notice(
-                        "Loading warning details timed out".into(),
-                    ));
-                }
             }
+            observed_rows = Some(if sink.num_columns() == 0 {
+                conn.affected_rows()
+            } else {
+                sink.total_rows()
+            });
+            sink.finish();
+            Ok(())
         }
-        sink.finish();
-        Ok(())
+        .await;
+        observation.finish(&outcome, observed_rows);
+        outcome
     }
     async fn stream_result<P: mysql_async::prelude::Protocol + Unpin>(
         mut query_result: mysql_async::QueryResult<'_, '_, P>,
@@ -523,7 +539,12 @@ impl DatabaseDriver for MySqlDriver {
         let pool = self.get_pool().await?;
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
-            conn.query_drop("SELECT 1;").await?;
+            async {
+                crate::sql_observer::observe!("MySQL", "SELECT 1;", |query| conn
+                    .query_drop(query)
+                    .await)
+            }
+            .await?;
             Ok(())
         })
         .await
@@ -535,7 +556,10 @@ impl DatabaseDriver for MySqlDriver {
         let sql = sql.to_string();
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
-            conn.query_drop(&sql).await?;
+            async {
+                crate::sql_observer::observe!("MySQL", &sql, |query| conn.query_drop(query).await)
+            }
+            .await?;
             Ok(())
         })
         .await
@@ -577,19 +601,33 @@ impl DatabaseDriver for MySqlDriver {
         let statements = statements.to_vec();
         crate::run_on_shared_runtime(async move {
             let mut conn = pool.get_conn().await?;
-            let mut tx = conn.start_transaction(TxOpts::default()).await?;
+            let mut tx =
+                crate::sql_observer::observe!("MySQL", "START TRANSACTION", |_query| conn
+                    .start_transaction(TxOpts::default())
+                    .await)?;
             for sql in &statements {
-                let outcome = match tx.query_drop(sql.as_str()).await {
+                let outcome = match async {
+                    crate::sql_observer::observe!(
+                        "MySQL",
+                        sql.as_str(),
+                        |query| tx.query_drop(query).await,
+                        |_result| Some(tx.affected_rows())
+                    )
+                }
+                .await
+                {
                     Ok(()) if tx.affected_rows() == 1 => Ok(()),
                     Ok(()) => Err(row_count_error(sql, tx.affected_rows())),
                     Err(e) => Err(anyhow::anyhow!("MySQL error: {e}")),
                 };
                 if let Err(e) = outcome {
-                    tx.rollback().await?;
+                    crate::sql_observer::observe!("MySQL", "ROLLBACK", |_query| tx
+                        .rollback()
+                        .await)?;
                     return Err(e);
                 }
             }
-            tx.commit().await?;
+            crate::sql_observer::observe!("MySQL", "COMMIT", |_query| tx.commit().await)?;
             Ok(statements.len() as u64)
         })
         .await
@@ -604,7 +642,12 @@ impl DatabaseDriver for MySqlDriver {
             // opened the running connection when issuing its cancellation.
             let mut conn = active.pool.get_conn().await?;
             let conn_id = active.id;
-            conn.query_drop(format!("KILL QUERY {conn_id}")).await?;
+            async {
+                crate::sql_observer::observe!("MySQL", format!("KILL QUERY {conn_id}"), |query| {
+                    conn.query_drop(query).await
+                })
+            }
+            .await?;
             Ok(())
         })
         .await

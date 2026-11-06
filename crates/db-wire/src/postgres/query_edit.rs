@@ -42,8 +42,7 @@ async fn inspect(
     client: &impl tokio_postgres::GenericClient,
     oid: u32,
 ) -> Result<Option<QueryEditOrigin>> {
-    let rows = client.query(
-        "SELECT pg_catalog.current_database()::text, current_user::text, n.nspname::text, c.relname::text,
+    let rows = async { crate::sql_observer::observe!("PostgreSQL", "SELECT pg_catalog.current_database()::text, current_user::text, n.nspname::text, c.relname::text,
                 a.attnum, a.attname::text, a.atttypid, a.attgenerated = '' AND a.attidentity = '',
                 COALESCE(a.attnum = ANY(i.indkey[0:i.indnkeyatts-1]), false)
            FROM pg_catalog.pg_class c
@@ -55,9 +54,9 @@ async fn inspect(
             AND NOT EXISTS (SELECT FROM pg_catalog.pg_rewrite r WHERE r.ev_class = c.oid)
             AND current_user = session_user AND a.attnum > 0 AND NOT a.attisdropped
             AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits h WHERE h.inhparent = c.oid OR h.inhrelid = c.oid)
-          ORDER BY a.attnum",
+          ORDER BY a.attnum", |query| client.query(query,
         &[&oid],
-    ).await?;
+    ).await, |rows| Some(rows.len() as u64)) }.await?;
     let Some(first) = rows.first() else {
         return Ok(None);
     };
@@ -136,9 +135,12 @@ pub(super) async fn load(config: ConnectionConfig, sql: String) -> Result<Arc<Qu
     tokio::time::timeout(WRITE_TIMEOUT, async move {
         let (client, task) = PostgresDriver::connect_with_task(config).await?;
         let _socket = SocketGuard(task);
-        client
-            .batch_execute("SET statement_timeout = '10s'")
-            .await?;
+        async {
+            crate::sql_observer::observe!("PostgreSQL", "SET statement_timeout = '10s'", |query| {
+                client.batch_execute(query).await
+            })
+        }
+        .await?;
         let (tx, rx) = flume::unbounded();
         stream_client(
             &client,
@@ -189,11 +191,16 @@ pub(super) async fn save(
         let origin = pager.query_edit_origin.as_ref().context("Missing native result origin")?;
         let (mut client, task) = PostgresDriver::connect_with_task(config).await?;
         let _socket = SocketGuard(task);
-        let transaction = client.transaction().await?;
-        transaction.batch_execute("SET LOCAL lock_timeout = '3s'; SET LOCAL statement_timeout = '10s'; SET LOCAL search_path TO pg_catalog").await?;
+        let transaction = async {
+            crate::sql_observer::observe!("PostgreSQL", "BEGIN", |_query| client
+                .transaction()
+                .await)
+        }
+        .await?;
+        async { crate::sql_observer::observe!("PostgreSQL", "SET LOCAL lock_timeout = '3s'; SET LOCAL statement_timeout = '10s'; SET LOCAL search_path TO pg_catalog", |query| transaction.batch_execute(query).await) }.await?;
         let dialect = crate::sql::SqlDialect(crate::DbDriverKind::Postgres);
         let table = dialect.qualified_table(&origin.schema, &origin.table);
-        transaction.batch_execute(&format!("LOCK TABLE ONLY {table} IN ROW EXCLUSIVE MODE")).await?;
+        async { crate::sql_observer::observe!("PostgreSQL", &format!("LOCK TABLE ONLY {table} IN ROW EXCLUSIVE MODE"), |query| transaction.batch_execute(query).await) }.await?;
         anyhow::ensure!(inspect(&transaction, origin.oid).await?.as_ref() == Some(origin),
             "Query result source or primary key changed; rerun the query");
         anyhow::ensure!(!edits.is_empty() && edits.len() <= 1024, "Save supports 1–1,024 edited cells");
@@ -232,10 +239,16 @@ pub(super) async fn save(
             anyhow::ensure!(bytes <= 1024 * 1024, "Edited values and keys exceed 1 MiB");
             let sql = format!("UPDATE ONLY {table} SET {name} = {} WHERE {}", parameter(1, column.type_oid)?, predicates.join(" AND "));
             let args: Vec<&(dyn ToSql + Sync)> = values.iter().map(|value| value as _).collect();
-            anyhow::ensure!(transaction.execute(&sql, &args).await.map_err(|error| anyhow::anyhow!(pg_error_message(&error)))? == 1,
+            anyhow::ensure!(async { crate::sql_observer::observe!("PostgreSQL", &sql, |query| transaction.execute(query, &args).await, |rows| Some(*rows)) }.await.map_err(|error| anyhow::anyhow!(pg_error_message(&error)))? == 1,
                 "Original row changed or is no longer writable; no edits were saved");
         }
-        transaction.commit().await.context("Commit was not acknowledged; verify stored values before retrying")
+        async {
+            crate::sql_observer::observe!("PostgreSQL", "COMMIT", |_query| transaction
+                .commit()
+                .await)
+        }
+        .await
+        .context("Commit was not acknowledged; verify stored values before retrying")
     }).await.context("Query edit deadline expired; verify stored values before retrying")?
 }
 

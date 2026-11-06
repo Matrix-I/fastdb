@@ -185,7 +185,11 @@ impl OdbcDriver {
             )
             .context("ODBC connection failed")?;
         if self.config.driver == DbDriverKind::SqlServer {
-            drop(connection.execute("SET QUOTED_IDENTIFIER ON", (), None)?);
+            drop(crate::sql_observer::observe!(
+                "ODBC",
+                "SET QUOTED_IDENTIFIER ON",
+                |query| connection.execute(query, (), None)
+            )?);
         }
         Ok(connection)
     }
@@ -196,19 +200,22 @@ impl OdbcDriver {
         F: FnOnce(&Connection<'static>, &Self) -> Result<T> + Send + 'static,
     {
         let this = self.clone();
+        let session = crate::sql_observer::current_session(self.config.driver.name());
         crate::run_on_shared_runtime(async move {
             tokio::task::spawn_blocking(move || {
-                let mut connection = this.connection.lock();
-                if this.closed.load(Ordering::Acquire) {
-                    bail!("ODBC session is closed");
-                }
-                if connection.is_none() {
-                    if this.dedicated {
-                        bail!("ODBC session has no connection");
+                crate::sql_observer::with_thread_session(session, || {
+                    let mut connection = this.connection.lock();
+                    if this.closed.load(Ordering::Acquire) {
+                        bail!("ODBC session is closed");
                     }
-                    *connection = Some(this.connect()?);
-                }
-                operation(connection.as_ref().unwrap(), &this)
+                    if connection.is_none() {
+                        if this.dedicated {
+                            bail!("ODBC session has no connection");
+                        }
+                        *connection = Some(this.connect()?);
+                    }
+                    operation(connection.as_ref().unwrap(), &this)
+                })
             })
             .await
             .context("ODBC worker failed")?
@@ -218,23 +225,30 @@ impl OdbcDriver {
 
     async fn metadata(&self, sql: String) -> Result<Vec<Vec<Option<String>>>> {
         self.with_connection(move |conn, _| {
-            let mut rows = Vec::new();
-            if let Some(mut cursor) = conn.execute(&sql, (), None)? {
-                let count = cursor.num_result_cols()? as u16;
-                while let Some(mut row) = cursor.next_row()? {
-                    let mut values = Vec::new();
-                    for col in 1..=count {
-                        let mut text = Vec::new();
-                        values.push(if row.get_wide_text(col, &mut text)? {
-                            Some(String::from_utf16(&text)?)
-                        } else {
-                            None
-                        });
+            crate::sql_observer::observe!(
+                "ODBC",
+                &sql,
+                |_query| (|| -> Result<_> {
+                    let mut rows = Vec::new();
+                    if let Some(mut cursor) = conn.execute(&sql, (), None)? {
+                        let count = cursor.num_result_cols()? as u16;
+                        while let Some(mut row) = cursor.next_row()? {
+                            let mut values = Vec::new();
+                            for col in 1..=count {
+                                let mut text = Vec::new();
+                                values.push(if row.get_wide_text(col, &mut text)? {
+                                    Some(String::from_utf16(&text)?)
+                                } else {
+                                    None
+                                });
+                            }
+                            rows.push(values);
+                        }
                     }
-                    rows.push(values);
-                }
-            }
-            Ok(rows)
+                    Ok(rows)
+                })(),
+                |rows| Some(rows.len() as u64)
+            )
         })
         .await
     }
@@ -347,7 +361,7 @@ impl DatabaseDriver for OdbcDriver {
         let sql = executable_sql(self.config.driver, sql);
         self.with_connection(move |conn, _| {
             let mut statement = conn.preallocate()?;
-            statement.execute(&sql, ())?;
+            crate::sql_observer::observe!("ODBC", &sql, |query| statement.execute(query, ()))?;
             Ok(())
         })
         .await
@@ -376,99 +390,109 @@ impl DatabaseDriver for OdbcDriver {
         }
         let result = self
             .with_connection(move |conn, this| {
-                let started = Instant::now();
-                let mut statement = conn.preallocate()?;
-                if this.dedicated {
-                    statement.set_query_timeout_sec(script::QUERY_TIMEOUT_SECONDS)?;
-                }
-                *this.active_statement.lock() = Some(statement.as_stmt_ref().as_sys().0 as usize);
-                let _active = ActiveStatement(this.active_statement.clone());
-                if this.cancelled.load(Ordering::SeqCst) {
-                    bail!("Query cancelled");
-                }
-                control.check()?;
-                let no_rows = match statement.execute(&sql, ())? {
-                    Some(mut cursor) => {
-                        let count = cursor.num_result_cols()? as u16;
-                        let mut columns = Vec::new();
-                        let mut binary = Vec::new();
-                        for col in 1..=count {
-                            let mut description = odbc_api::ColumnDescription::default();
-                            cursor.describe_col(col, &mut description)?;
-                            let kind = engine_type(description.data_type);
-                            binary.push(kind == DataType::Bytea);
-                            columns.push(
-                                ColumnMeta::new(description.name_to_string()?, kind)
-                                    .with_nullable(description.could_be_nullable()),
-                            );
-                        }
-                        let mut sink = RowSink::start(columns, event_tx.clone(), started)?;
-                        while let Some(mut row) = cursor.next_row()? {
-                            if this.cancelled.load(Ordering::SeqCst) {
-                                bail!("Query cancelled");
-                            }
+                let mut observation = crate::sql_observer::Statement::start("ODBC", &sql);
+                let mut observed_rows = None;
+                let outcome = (|| -> Result<()> {
+                    let started = Instant::now();
+                    let mut statement = conn.preallocate()?;
+                    if this.dedicated {
+                        statement.set_query_timeout_sec(script::QUERY_TIMEOUT_SECONDS)?;
+                    }
+                    *this.active_statement.lock() =
+                        Some(statement.as_stmt_ref().as_sys().0 as usize);
+                    let _active = ActiveStatement(this.active_statement.clone());
+                    if this.cancelled.load(Ordering::SeqCst) {
+                        bail!("Query cancelled");
+                    }
+                    control.check()?;
+                    let no_rows = match statement.execute(&sql, ())? {
+                        Some(mut cursor) => {
+                            let count = cursor.num_result_cols()? as u16;
+                            let mut columns = Vec::new();
+                            let mut binary = Vec::new();
                             for col in 1..=count {
-                                sink.cells_mut()[(col - 1) as usize] = if binary[(col - 1) as usize]
-                                {
-                                    let mut bytes = Vec::new();
-                                    if row.get_binary(col, &mut bytes)? {
-                                        Some(
-                                            format!(
-                                                "\\x{}",
-                                                bytes
-                                                    .iter()
-                                                    .map(|b| format!("{b:02x}"))
-                                                    .collect::<String>()
-                                            )
-                                            .into_bytes(),
-                                        )
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    let mut text = Vec::new();
-                                    if row.get_wide_text(col, &mut text)? {
-                                        Some(String::from_utf16(&text)?.into_bytes())
-                                    } else {
-                                        None
-                                    }
-                                };
+                                let mut description = odbc_api::ColumnDescription::default();
+                                cursor.describe_col(col, &mut description)?;
+                                let kind = engine_type(description.data_type);
+                                binary.push(kind == DataType::Bytea);
+                                columns.push(
+                                    ColumnMeta::new(description.name_to_string()?, kind)
+                                        .with_nullable(description.could_be_nullable()),
+                                );
                             }
-                            sink.commit_row()?;
-                        }
-                        // Drain subsequent results so session state and late SQL errors are preserved.
-                        while let Some(mut next) = cursor.more_results()? {
-                            while next.num_result_cols()? > 0 && next.next_row()?.is_some() {
+                            let mut sink = RowSink::start(columns, event_tx.clone(), started)?;
+                            while let Some(mut row) = cursor.next_row()? {
                                 if this.cancelled.load(Ordering::SeqCst) {
                                     bail!("Query cancelled");
                                 }
+                                for col in 1..=count {
+                                    sink.cells_mut()[(col - 1) as usize] =
+                                        if binary[(col - 1) as usize] {
+                                            let mut bytes = Vec::new();
+                                            if row.get_binary(col, &mut bytes)? {
+                                                Some(
+                                                    format!(
+                                                        "\\x{}",
+                                                        bytes
+                                                            .iter()
+                                                            .map(|b| format!("{b:02x}"))
+                                                            .collect::<String>()
+                                                    )
+                                                    .into_bytes(),
+                                                )
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            let mut text = Vec::new();
+                                            if row.get_wide_text(col, &mut text)? {
+                                                Some(String::from_utf16(&text)?.into_bytes())
+                                            } else {
+                                                None
+                                            }
+                                        };
+                                }
+                                sink.commit_row()?;
                             }
-                            cursor = next;
-                        }
-                        if this.cancelled.load(Ordering::SeqCst) {
-                            bail!("Query cancelled");
-                        }
-                        sink.finish();
-                        false
-                    }
-                    None => true,
-                };
-                if no_rows {
-                    let affected_rows = statement.row_count()?.map(|n| n as u64);
-                    if this.dedicated && this.config.driver == DbDriverKind::SqlServer {
-                        let mut statement = statement.as_stmt_ref();
-                        // SAFETY: no cursor or bound buffers remain after execute returned None.
-                        // Advancing also surfaces errors from later commands in the same batch.
-                        while unsafe { statement.more_results() }.into_result_bool(&statement)? {
-                            if this.cancelled.load(Ordering::Acquire) {
+                            // Drain subsequent results so session state and late SQL errors are preserved.
+                            while let Some(mut next) = cursor.more_results()? {
+                                while next.num_result_cols()? > 0 && next.next_row()?.is_some() {
+                                    if this.cancelled.load(Ordering::SeqCst) {
+                                        bail!("Query cancelled");
+                                    }
+                                }
+                                cursor = next;
+                            }
+                            if this.cancelled.load(Ordering::SeqCst) {
                                 bail!("Query cancelled");
                             }
+                            observed_rows = Some(sink.finish());
+                            false
                         }
+                        None => true,
+                    };
+                    if no_rows {
+                        let affected_rows = statement.row_count()?.map(|n| n as u64);
+                        observed_rows = affected_rows;
+                        if this.dedicated && this.config.driver == DbDriverKind::SqlServer {
+                            let mut statement = statement.as_stmt_ref();
+                            // SAFETY: no cursor or bound buffers remain after execute returned None.
+                            // Advancing also surfaces errors from later commands in the same batch.
+                            while unsafe { statement.more_results() }
+                                .into_result_bool(&statement)?
+                            {
+                                if this.cancelled.load(Ordering::Acquire) {
+                                    bail!("Query cancelled");
+                                }
+                            }
+                        }
+                        let _ = event_tx.send(StreamEvent::CommandComplete { affected_rows });
+                        RowSink::start(Vec::new(), event_tx, started)?.finish();
                     }
-                    let _ = event_tx.send(StreamEvent::CommandComplete { affected_rows });
-                    RowSink::start(Vec::new(), event_tx, started)?.finish();
-                }
-                Ok(())
+                    Ok(())
+                })();
+                observation.finish(&outcome, observed_rows);
+                outcome
             })
             .await;
         result.map_err(|e| report_error(&errors, format!("{e:#}")))
@@ -482,14 +506,14 @@ impl DatabaseDriver for OdbcDriver {
             let result = (|| -> Result<u64> {
                 for sql in &statements {
                     let mut statement = conn.preallocate()?;
-                    drop(statement.execute(&executable_sql(this_kind, sql), ())?);
+                    drop(crate::sql_observer::observe!("ODBC", executable_sql(this_kind, sql), |query| statement.execute(&query, ()))?);
                     let rows = statement.row_count()?;
                     if rows != Some(1) { bail!("Edit affected {rows:?} rows; expected exactly one. Transaction rolled back."); }
                 }
-                conn.commit()?;
+                crate::sql_observer::observe!("ODBC", "COMMIT", |_query| conn.commit())?;
                 Ok(statements.len() as u64)
             })();
-            if result.is_err() { conn.rollback().context("Failed to roll back row edits")?; }
+            if result.is_err() { crate::sql_observer::observe!("ODBC", "ROLLBACK", |_query| conn.rollback()).context("Failed to roll back row edits")?; }
             conn.set_autocommit(true)?;
             result
         }).await

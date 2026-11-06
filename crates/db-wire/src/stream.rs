@@ -66,6 +66,13 @@ impl RowSink {
         })
     }
 
+    pub(crate) fn total_rows(&self) -> u64 {
+        self.total_rows
+    }
+    pub(crate) fn num_columns(&self) -> usize {
+        self.cells.len()
+    }
+
     /// Cell buffers for the next row, one per column; None is SQL NULL
     pub fn cells_mut(&mut self) -> &mut [Option<Vec<u8>>] {
         &mut self.cells

@@ -57,7 +57,8 @@ impl MySqlScriptSession {
         let state = transaction.clone();
         let closed = Arc::new(AtomicBool::new(false));
         let worker_closed = closed.clone();
-        crate::get_runtime().spawn(async move {
+        let session_id = format!("MySQL#{:x}", connection.id());
+        crate::get_runtime().spawn(crate::sql_observer::with_session(session_id, async move {
             let result = worker(
                 connection,
                 receiver,
@@ -70,7 +71,7 @@ impl MySqlScriptSession {
             drop(tunnel);
             worker_closed.store(true, Ordering::SeqCst);
             completed.send_replace(Some(result.map_err(|error| format!("{error:#}"))));
-        });
+        }));
         Self {
             commands,
             read_only,
@@ -210,16 +211,16 @@ async fn worker(
                             crate::transfer::mapping::Value::Text(text) => mysql_async::Value::Bytes(text.into_bytes()),
                             crate::transfer::mapping::Value::Binary(bytes) => mysql_async::Value::Bytes(bytes),
                         }).collect::<Vec<_>>();
-                        connection.exec_drop(sql, Params::Positional(values)).await?;
+                        async { crate::sql_observer::observe!("MySQL", sql, |query| connection.exec_drop(query, Params::Positional(values)).await, |_result| Some(connection.affected_rows())) }.await?;
                         Ok(connection.affected_rows())
                     }
                     Action::BeginTransfer { schema, table, columns } => {
                         let check_sql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'";
-                        let rows: Vec<u64> = connection.exec(check_sql, (schema.clone(), table.clone())).await?;
+                        let rows: Vec<u64> = async { crate::sql_observer::observe!("MySQL", check_sql, |query| connection.exec(query, (schema.clone(), table.clone())).await) }.await?;
                         anyhow::ensure!(rows.first().copied().unwrap_or(0) > 0, "MySQL destination table not found or is a view");
 
                         let col_sql = "SELECT column_name, data_type, is_nullable, column_key FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position";
-                        let col_rows: Vec<(String, String, String, String)> = connection.exec(col_sql, (schema.clone(), table.clone())).await?;
+                        let col_rows: Vec<(String, String, String, String)> = async { crate::sql_observer::observe!("MySQL", col_sql, |query| connection.exec(query, (schema.clone(), table.clone())).await) }.await?;
                         let current: Vec<ColumnMeta> = col_rows.into_iter().map(|(n, dt, is_null, k)| info_schema_column(n, &dt, &is_null, &k)).collect();
                         for expected in &columns {
                             anyhow::ensure!(
@@ -228,7 +229,7 @@ async fn worker(
                                 expected.name
                             );
                         }
-                        connection.query_drop("START TRANSACTION").await?;
+                        async { crate::sql_observer::observe!("MySQL", "START TRANSACTION", |query| connection.query_drop(query).await) }.await?;
                         Ok(0)
                     }
                 }
@@ -243,7 +244,7 @@ async fn worker(
             tokio::select! {
                 biased;
                 _ = closing.changed() => break CloseReason::Interrupted,
-                refreshed = tokio::time::timeout(STATE_TIMEOUT, connection.query_drop("DO 0")) => match refreshed {
+                refreshed = tokio::time::timeout(STATE_TIMEOUT, async { crate::sql_observer::observe!("MySQL", "DO 0", |query| connection.query_drop(query).await) }) => match refreshed {
                     Ok(Ok(())) => None,
                     Ok(Err(error)) if error.is_fatal() => Some(CloseReason::Lost),
                     Ok(Err(_)) | Err(_) => Some(CloseReason::Interrupted),
@@ -290,10 +291,14 @@ async fn close_connection(mut connection: mysql_async::Conn, reason: CloseReason
             kill_connection(connection.opts().clone(), connection.id()).await
         }
         CloseReason::Lost => Ok(()),
-        CloseReason::Idle => tokio::time::timeout(STATE_TIMEOUT, connection.query_drop("ROLLBACK"))
-            .await
-            .map_err(|_| anyhow::anyhow!("MySQL rollback timed out"))
-            .and_then(|result| result.map_err(Into::into)),
+        CloseReason::Idle => tokio::time::timeout(STATE_TIMEOUT, async {
+            crate::sql_observer::observe!("MySQL", "ROLLBACK", |query| connection
+                .query_drop(query)
+                .await)
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("MySQL rollback timed out"))
+        .and_then(|result| result.map_err(Into::into)),
     };
     // Explicit disconnect marks the connection terminal before any await. Unlike
     // dropping a live Conn, this cannot spawn an unbounded pending-result drain.
@@ -310,10 +315,11 @@ async fn kill_connection(opts: Opts, id: u32) -> Result<()> {
     let mut control = tokio::time::timeout(CANCEL_CONNECT_TIMEOUT, mysql_async::Conn::new(opts))
         .await
         .map_err(|_| anyhow::anyhow!("MySQL cancellation connection timed out"))??;
-    let killed = tokio::time::timeout(
-        CANCEL_COMMAND_TIMEOUT,
-        control.query_drop(format!("KILL CONNECTION {id}")),
-    )
+    let killed = tokio::time::timeout(CANCEL_COMMAND_TIMEOUT, async {
+        crate::sql_observer::observe!("MySQL", format!("KILL CONNECTION {id}"), |query| control
+            .query_drop(query)
+            .await)
+    })
     .await
     .map_err(|_| anyhow::anyhow!("MySQL cancellation command timed out"))
     .and_then(|result| result.map_err(anyhow::Error::from));

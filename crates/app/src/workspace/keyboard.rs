@@ -43,6 +43,11 @@ impl Workspace {
             return;
         }
 
+        if self.transaction_log.is_some() {
+            self.transaction_log_key(&event.keystroke, cx);
+            return;
+        }
+
         // Toggle Theme shortcut: Cmd+Shift+T / Ctrl+Shift+T
         if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
             && event.keystroke.modifiers.shift

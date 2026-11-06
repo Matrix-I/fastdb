@@ -8,8 +8,9 @@ pub(super) async fn columns(
     schema: Option<&str>,
     table: Option<&str>,
 ) -> Result<Vec<(String, String, Vec<crate::ColumnMeta>)>> {
-    let rows = client
-        .query(
+    let rows = async {
+        crate::sql_observer::observe!(
+            "PostgreSQL",
             r#"
         SELECT col.table_schema, col.table_name, col.column_name, col.data_type,
                col.is_nullable, col.column_default, col.collation_name,
@@ -27,13 +28,15 @@ pub(super) async fn columns(
           AND ($2::text IS NULL OR col.table_name = $2)
         ORDER BY col.table_schema, col.table_name, col.ordinal_position
     "#,
-            &[&schema, &table],
+            |query| client.query(query, &[&schema, &table],).await,
+            |rows| Some(rows.len() as u64)
         )
-        .await
-        .map_err(|e| {
-            let message = super::pg_error_message(&e);
-            anyhow::Error::new(e).context(message)
-        })?;
+    }
+    .await
+    .map_err(|e| {
+        let message = super::pg_error_message(&e);
+        anyhow::Error::new(e).context(message)
+    })?;
     let mut tables = BTreeMap::<(String, String), Vec<crate::ColumnMeta>>::new();
     for row in rows {
         let mut column =
@@ -115,7 +118,16 @@ ORDER BY n.nspname, c.relname, con.conname
 
 pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDetails)>> {
     let mut tables = BTreeMap::new();
-    for row in client.query(TABLES, &[]).await.map_err(|e| {
+    for row in async {
+        crate::sql_observer::observe!(
+            "PostgreSQL",
+            TABLES,
+            |query| client.query(query, &[]).await,
+            |rows| Some(rows.len() as u64)
+        )
+    }
+    .await
+    .map_err(|e| {
         let message = super::pg_error_message(&e);
         anyhow::Error::new(e).context(message)
     })? {
@@ -143,7 +155,16 @@ pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDe
             },
         );
     }
-    for row in client.query(INDEXES, &[]).await.map_err(|e| {
+    for row in async {
+        crate::sql_observer::observe!(
+            "PostgreSQL",
+            INDEXES,
+            |query| client.query(query, &[]).await,
+            |rows| Some(rows.len() as u64)
+        )
+    }
+    .await
+    .map_err(|e| {
         let message = super::pg_error_message(&e);
         anyhow::Error::new(e).context(message)
     })? {
@@ -158,7 +179,16 @@ pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDe
             });
         }
     }
-    for row in client.query(CONSTRAINTS, &[]).await.map_err(|e| {
+    for row in async {
+        crate::sql_observer::observe!(
+            "PostgreSQL",
+            CONSTRAINTS,
+            |query| client.query(query, &[]).await,
+            |rows| Some(rows.len() as u64)
+        )
+    }
+    .await
+    .map_err(|e| {
         let message = super::pg_error_message(&e);
         anyhow::Error::new(e).context(message)
     })? {
@@ -172,7 +202,16 @@ pub(super) async fn load(client: &Client) -> Result<Vec<(String, String, TableDe
             });
         }
     }
-    match client.query(include_str!("ddl.sql"), &[]).await {
+    match async {
+        crate::sql_observer::observe!(
+            "PostgreSQL",
+            include_str!("ddl.sql"),
+            |query| client.query(query, &[]).await,
+            |rows| Some(rows.len() as u64)
+        )
+    }
+    .await
+    {
         Ok(rows) => {
             for row in rows {
                 if let Some(table) =

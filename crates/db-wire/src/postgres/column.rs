@@ -16,8 +16,7 @@ async fn read(
     table: &str,
     column: &str,
 ) -> Result<ColumnDefinition> {
-    let row = client.query_opt(
-        "SELECT current_database()::text, c.oid::text, a.attnum, a.attname::text,
+    let row = async { crate::sql_observer::observe!("PostgreSQL", "SELECT current_database()::text, c.oid::text, a.attnum, a.attname::text,
                 format_type(a.atttypid,a.atttypmod), NOT a.attnotnull,
                 CASE WHEN a.attgenerated = '' THEN pg_get_expr(d.adbin,d.adrelid) END,
                 col_description(c.oid,a.attnum), a.attidentity::text, a.attgenerated::text,
@@ -34,8 +33,8 @@ async fn read(
          LEFT JOIN pg_collation co ON co.oid=a.attcollation
          LEFT JOIN pg_namespace cn ON cn.oid=co.collnamespace
          WHERE n.nspname=$1 AND c.relname=$2 AND a.attname=$3
-           AND a.attnum>0 AND NOT a.attisdropped", &[&schema,&table,&column]
-    ).await.map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?
+           AND a.attnum>0 AND NOT a.attisdropped", |query| client.query_opt(query, &[&schema,&table,&column]
+    ).await, |row| Some(u64::from(row.is_some()))) }.await.map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?
         .ok_or_else(|| anyhow::anyhow!("Column no longer exists; refresh the catalog"))?;
     Ok(ColumnDefinition {
         database: row.get(0), schema: schema.into(), table: table.into(),
@@ -56,9 +55,14 @@ impl PostgresDriver {
     ) -> Result<ColumnDefinition> {
         let (client, task) = Self::connect_with_task(self.config.clone()).await?;
         let _guard = SocketGuard(task);
-        client
-            .batch_execute("SET search_path = pg_catalog; SET statement_timeout = '15s'")
-            .await?;
+        async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                "SET search_path = pg_catalog; SET statement_timeout = '15s'",
+                |query| client.batch_execute(query).await
+            )
+        }
+        .await?;
         read(&client, schema, table, name).await
     }
     pub(super) async fn reload_column_identity(
@@ -67,12 +71,16 @@ impl PostgresDriver {
     ) -> Result<ColumnDefinition> {
         let (client, task) = Self::connect_with_task(self.config.clone()).await?;
         let _guard = SocketGuard(task);
-        client
-            .batch_execute("SET search_path=pg_catalog; SET statement_timeout='15s'")
-            .await?;
-        let row = client.query_opt(
-            "SELECT n.nspname::text,c.relname::text,a.attname::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid WHERE c.oid::text=$1 AND a.attnum=$2 AND NOT a.attisdropped AND current_database()::text=$3",
-            &[&original.relation_oid, &original.attribute, &original.database]).await?
+        async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
+                "SET search_path=pg_catalog; SET statement_timeout='15s'",
+                |query| client.batch_execute(query).await
+            )
+        }
+        .await?;
+        let row = async { crate::sql_observer::observe!("PostgreSQL", "SELECT n.nspname::text,c.relname::text,a.attname::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid WHERE c.oid::text=$1 AND a.attnum=$2 AND NOT a.attisdropped AND current_database()::text=$3", |query| client.query_opt(query,
+            &[&original.relation_oid, &original.attribute, &original.database]).await, |row| Some(u64::from(row.is_some()))) }.await?
             .ok_or_else(|| anyhow::anyhow!("Original column was dropped or database identity changed"))?;
         read(
             &client,
@@ -84,18 +92,21 @@ impl PostgresDriver {
     }
     pub(super) async fn column_type_choices(&self) -> Result<Vec<String>> {
         let client = self.get_or_connect().await?;
-        Ok(client
-            .query(
+        Ok(async {
+            crate::sql_observer::observe!(
+                "PostgreSQL",
                 "SELECT quote_ident(n.nspname)||'.'||quote_ident(t.typname)
              FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
              WHERE t.typtype IN ('b','d','e') AND t.typelem=0
              AND n.nspname NOT IN ('information_schema') ORDER BY n.nspname,t.typname LIMIT 2000",
-                &[],
+                |query| client.query(query, &[],).await,
+                |rows| Some(rows.len() as u64)
             )
-            .await?
-            .into_iter()
-            .map(|r| r.get(0))
-            .collect())
+        }
+        .await?
+        .into_iter()
+        .map(|r| r.get(0))
+        .collect())
     }
     pub(super) async fn persist_column(
         &self,
@@ -113,12 +124,17 @@ impl PostgresDriver {
         };
         let _guard = SocketGuard(task);
         let applied = async {
-            client.batch_execute("SET search_path=pg_catalog; SET standard_conforming_strings=on; SET lock_timeout='3s'; SET statement_timeout='15s'; BEGIN").await?;
+            async { crate::sql_observer::observe!("PostgreSQL", "SET search_path=pg_catalog; SET standard_conforming_strings=on; SET lock_timeout='3s'; SET statement_timeout='15s'; BEGIN", |query| client.batch_execute(query).await) }.await?;
             let table = SqlDialect(DbDriverKind::Postgres)
                 .qualified_table(&original.schema, &original.table);
-            client
-                .batch_execute(&format!("LOCK TABLE ONLY {table} IN ACCESS EXCLUSIVE MODE"))
-                .await?;
+            async {
+                crate::sql_observer::observe!(
+                    "PostgreSQL",
+                    &format!("LOCK TABLE ONLY {table} IN ACCESS EXCLUSIVE MODE"),
+                    |query| client.batch_execute(query).await
+                )
+            }
+            .await?;
             let current = read(&client, &original.schema, &original.table, &original.name).await?;
             if &current != original {
                 anyhow::bail!("Column changed concurrently. Refresh and review a new draft");
@@ -131,10 +147,13 @@ impl PostgresDriver {
                     .await?;
             }
             for sql in &statements {
-                client
-                    .batch_execute(sql)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
+                async {
+                    crate::sql_observer::observe!("PostgreSQL", sql, |query| client
+                        .batch_execute(query)
+                        .await)
+                }
+                .await
+                .map_err(|e| anyhow::anyhow!(pg_error_message(&e)))?;
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -145,15 +164,22 @@ impl PostgresDriver {
                     Ok(Err(e)) => format!("{e:#}"),
                     _ => "Schema change timed out before commit".into(),
                 };
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(3),
-                    client.batch_execute("ROLLBACK"),
-                )
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                    crate::sql_observer::observe!("PostgreSQL", "ROLLBACK", |query| client
+                        .batch_execute(query)
+                        .await)
+                })
                 .await;
                 return ColumnApplyOutcome::Rejected(error);
             }
         }
-        if let Err(e) = client.batch_execute("COMMIT").await {
+        if let Err(e) = async {
+            crate::sql_observer::observe!("PostgreSQL", "COMMIT", |query| client
+                .batch_execute(query)
+                .await)
+        }
+        .await
+        {
             return ColumnApplyOutcome::ReadbackRequired(format!(
                 "Commit acknowledgement failed; Refresh before retrying: {}",
                 pg_error_message(&e)

@@ -80,8 +80,7 @@ impl OdbcSession {
             if let Some(connection) = connection.lock().take()
                 && state.load(Ordering::Acquire) != IDLE
             {
-                connection
-                    .rollback()
+                crate::sql_observer::observe!("ODBC", "ROLLBACK", |_query| connection.rollback())
                     .context("ODBC session rollback failed")?;
             }
             Ok(())
@@ -102,14 +101,16 @@ impl OdbcSession {
                     if state.load(Ordering::Acquire) != IDLE {
                         bail!("Commit or Rollback before beginning another transaction");
                     }
-                    conn.set_autocommit(false)?;
+                    crate::sql_observer::observe!("ODBC", "BEGIN", |_query| conn
+                        .set_autocommit(false))?;
                     state.store(ACTIVE, Ordering::Release);
                 } else {
                     state.store(UNKNOWN, Ordering::Release);
                     if boundary == Boundary::Commit {
-                        conn.commit()?;
+                        crate::sql_observer::observe!("ODBC", "COMMIT", |_query| conn.commit())?;
                     } else {
-                        conn.rollback()?;
+                        crate::sql_observer::observe!("ODBC", "ROLLBACK", |_query| conn
+                            .rollback())?;
                     }
                     conn.set_autocommit(true)?;
                     state.store(IDLE, Ordering::Release);
@@ -130,8 +131,9 @@ impl OdbcSession {
         let state = self.state.clone();
         self.driver
             .with_connection(move |conn, _| {
-                let mut cursor = conn
-                    .execute("SELECT XACT_STATE()", (), Some(5))?
+                let mut cursor =
+                    crate::sql_observer::observe!("ODBC", "SELECT XACT_STATE()", |query| conn
+                        .execute(query, (), Some(5)))?
                     .context("SQL Server did not return transaction state")?;
                 let mut value = Vec::new();
                 let mut row = cursor

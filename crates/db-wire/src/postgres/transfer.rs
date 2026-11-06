@@ -81,10 +81,16 @@ pub(super) async fn insert(
         .iter()
         .map(|value| value as &(dyn ToSql + Sync))
         .collect();
-    client
-        .execute(&statement, &parameters)
-        .await
-        .context("PostgreSQL transfer batch failed")
+    async {
+        crate::sql_observer::observe!(
+            "PostgreSQL",
+            &sql,
+            |_query| client.execute(&statement, &parameters).await,
+            |rows| Some(*rows)
+        )
+    }
+    .await
+    .context("PostgreSQL transfer batch failed")
 }
 
 #[cfg(test)]
