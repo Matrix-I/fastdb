@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use super::*;
 use db_wire::script::{ScriptControl, ScriptEvent};
 use db_wire::session_context::{ContextKind, choices_sql, schema_statements};

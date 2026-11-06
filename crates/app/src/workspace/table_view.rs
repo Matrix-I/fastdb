@@ -188,20 +188,39 @@ impl Workspace {
                             .border_b_1()
                             .border_color(theme.border)
                             .px_2()
-                            // Show SQL Button
-                            .child(
+                            // DBeaver Query Source Preview: select * from "table" alias
+                            .child({
+                                let table_name = self.tabs[active_tab_idx].table_name.clone().unwrap_or_default();
+                                let mut alias = String::new();
+                                let mut prev_lower = false;
+                                for c in table_name.chars() {
+                                    if c.is_alphabetic() {
+                                        if alias.is_empty() {
+                                            alias.push(c.to_ascii_lowercase());
+                                            prev_lower = c.is_lowercase();
+                                        } else if c.is_uppercase() && prev_lower {
+                                            alias.push(c.to_ascii_lowercase());
+                                            prev_lower = false;
+                                        } else if c == '_' {
+                                            prev_lower = false;
+                                        }
+                                    }
+                                }
+                                let alias = if alias.is_empty() { "t".to_string() } else { alias };
+                                let sql_label = format!("select * from \"{table_name}\" {alias}");
+
                                 div()
                                     .id("btn-show-sql")
                                     .flex()
                                     .items_center()
-                                    .gap_1()
+                                    .gap_1p5()
                                     .px_2()
                                     .py_1()
                                     .rounded_sm()
                                     .bg(if show_sql_dialog { theme.bg_surface_selected } else { hsla(0.0, 0.0, 0.0, 0.0).into() })
                                     .hover(|s| s.bg(theme.bg_surface_hover))
                                     .cursor_pointer()
-                                    .text_size(px(11.0))
+                                    .text_size(px(11.5))
                                     .text_color(rgb(0x3fb950))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
@@ -209,15 +228,29 @@ impl Workspace {
                                             cx.notify();
                                         }
                                     }))
-                                    .child(img("icons/sql.svg").w(px(12.0)).h(px(12.0)))
-                                    .child("Show SQL")
-                            )
+                                    .child(img("icons/sql.svg").w(px(13.0)).h(px(13.0)))
+                                    .child(sql_label)
+                            })
                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                             .child(
-                                div().id("btn-expand-data").px_1().py_0p5().text_size(px(11.0))
-    .text_color(theme.text_secondary).cursor_pointer().hover(|s|s.bg(theme.bg_surface_hover))
-    .on_click(cx.listener(|this,_,_,cx|{this.layout.focus_data= !this.layout.focus_data;this.layout.resizing_panel=None;cx.notify();}))
-    .child(if expanded{"Restore"}else{"Expand"})
+                                div()
+                                    .id("btn-expand-data")
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(22.0))
+                                    .h(px(22.0))
+                                    .rounded_xs()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.bg_surface_hover))
+                                    .text_size(px(12.0))
+                                    .text_color(theme.text_secondary)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.layout.focus_data = !this.layout.focus_data;
+                                        this.layout.resizing_panel = None;
+                                        cx.notify();
+                                    }))
+                                    .child(if expanded { "⤡" } else { "⤢" }),
                             )
                             // Filter Expression Input Box ("khung để nối thêm sql như dbeaver")
                             .child(
@@ -556,6 +589,73 @@ impl Workspace {
             })
             .child(div().text_color(theme.text_secondary).child(row_count))
             .child(div().w(px(1.0)).h(px(14.0)).bg(theme.border))
+            .child({
+                let tab_id = tab.id;
+                let has_pager = tab.grid.pager.is_some();
+                div()
+                    .id("btn-find-in-result")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(20.0))
+                    .px_1p5()
+                    .rounded_xs()
+                    .text_size(px(11.0))
+                    .text_color(if has_pager {
+                        theme.text_secondary
+                    } else {
+                        theme.text_muted
+                    })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_surface_hover))
+                    .child("⌕ Find…")
+                    .when(has_pager, |btn| {
+                        btn.on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_result_search(tab_id, cx);
+                        }))
+                    })
+            })
+            .children(
+                (tab.is_script() && self.tab_provider(tab_idx) == DbDriverKind::Postgres).then(
+                    || {
+                        let tab_id = tab.id;
+                        div()
+                            .id("btn-load-editable-result")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .h(px(20.0))
+                            .px_1p5()
+                            .rounded_xs()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_surface_hover))
+                            .text_size(px(11.0))
+                            .text_color(theme.text_secondary)
+                            .child("Load editable")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.load_editable_result(tab_id, cx);
+                            }))
+                    },
+                ),
+            )
+            .children(tab.reference_picker.is_some().then(|| {
+                div()
+                    .id("btn-use-selected-key")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(20.0))
+                    .px_1p5()
+                    .rounded_xs()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_surface_hover))
+                    .text_size(px(11.0))
+                    .text_color(theme.text_secondary)
+                    .child("Use selected key")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.accept_grid_reference(cx);
+                    }))
+            }))
             .child(
                 div()
                     .flex_1()

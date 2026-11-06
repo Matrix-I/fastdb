@@ -1,4 +1,5 @@
 //! A single background worker serializes history reads/writes across script tabs.
+#![allow(dead_code)]
 use std::path::{Path, PathBuf};
 
 const MAX_ENTRIES: usize = 100;

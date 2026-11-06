@@ -44,9 +44,12 @@ impl Render for ScriptToolTip {
             .px_2()
             .py_1()
             .rounded_sm()
-            .bg(rgb(0x30363d))
-            .text_color(rgb(0xffffff))
-            .text_size(px(12.0))
+            .bg(rgb(0x21262d))
+            .border_1()
+            .border_color(rgb(0x30363d))
+            .shadow_lg()
+            .text_color(rgb(0xf0f6fc))
+            .text_size(px(11.5))
             .child(self.0.clone())
     }
 }
@@ -62,6 +65,8 @@ fn rail_symbol(label: &str) -> &'static str {
         "Commit" => "✓",
         "Rollback" => "↶",
         "Isolation…" => "◇",
+        "Transaction: Auto" | "Transaction" => "Ⓐ",
+        "Transaction: Manual" => "Ⓜ",
         label if label.starts_with("Autocommit") => "Ⓐ",
         "Database…" => "▤",
         "Schema…" => "▦",
@@ -82,8 +87,52 @@ fn rail_symbol(label: &str) -> &'static str {
     }
 }
 
+fn rail_explanation(label: &str) -> String {
+    if label.starts_with("Timeout:") {
+        return format!("{label} — click to cycle off, 5s, 30s, 60s and 300s for the next run");
+    }
+    if label.starts_with("Autocommit") {
+        return format!("{label} — choose the transaction mode for this SQL tab");
+    }
+    match label {
+        "Execute" => "Execute selected SQL or the statement at the caret (Cmd/Ctrl+Enter)",
+        "Cancel execution" => "Request cancellation of the running operation",
+        "Run script" => "Run all statements in order (Cmd/Ctrl+Shift+Enter)",
+        "Execution log" => "Show or hide recent statement outcomes",
+        "Begin" => "Begin a transaction on this SQL tab's session",
+        "Commit" => "Commit the transaction on this SQL tab's session",
+        "Rollback" => "Roll back the transaction on this SQL tab's session",
+        "Isolation…" => "Choose the session transaction isolation level",
+        "Transaction: Auto" | "Transaction" => {
+            "Transaction mode: Auto-commit — click to choose Auto-Commit, Manual Commit or isolation level"
+        }
+        "Transaction: Manual" => {
+            "Transaction mode: Manual Commit — click to choose Auto-Commit, Manual Commit or isolation level"
+        }
+        "Database…" => "Choose a database for a new SQL tab",
+        "Schema…" => "Choose the current schema on this SQL tab's session",
+        "Format" => "Format selected SQL or the whole script (Cmd/Ctrl+Shift+F)",
+        "Snippets…" => "Browse SQL templates and insert one at the caret",
+        "Import SQL copy…" => "Import a SQL file into a new autosaved script",
+        "Save SQL copy…" => "Save a copy of the current SQL text to a file",
+        "Find / Replace" => "Find and replace literal text in this script",
+        "Comment / Uncomment" => "Toggle line comments on the current or selected lines",
+        "Indent" => "Indent the current or selected lines by four spaces",
+        "Outdent" => "Remove one level of indentation from the current or selected lines",
+        "History" => "Show recent queries for this connection and insert a previous query",
+        "Explain" => "Show the PostgreSQL query plan without executing SQL",
+        "Analyze (executes SQL)" => {
+            "Analyze: executes SQL, including writes, and shows actual timings"
+        }
+        "Rename" => "Rename the current script file",
+        "Delete" => "Delete script: confirm moving the file to .trash",
+        _ => label,
+    }
+    .to_owned()
+}
+
 pub(super) fn rail_tool(label: &'static str) -> Stateful<Div> {
-    div()
+    let mut btn = div()
         .id(label)
         .flex()
         .flex_none()
@@ -92,36 +141,37 @@ pub(super) fn rail_tool(label: &'static str) -> Stateful<Div> {
         .w(px(28.0))
         .h(px(28.0))
         .rounded_xs()
-        .cursor_pointer()
-        .text_size(px(14.0))
-        .hover(|s| s.bg(rgb(0x30363d)))
-        .tooltip(move |_, cx| {
-            cx.new(|_| {
-                ScriptToolTip(
-                    (match label {
-                        "Execute" => {
-                            "Execute selected SQL or the statement at the caret (Cmd/Ctrl+Enter)"
-                        }
-                        "Cancel execution" => "Request cancellation of the running operation",
-                        "Run script" => "Run all statements in order (Cmd/Ctrl+Shift+Enter)",
-                        "Execution log" => "Show or hide recent statement outcomes",
-                        "Explain" => "Show the PostgreSQL query plan without executing SQL",
-                        "Analyze (executes SQL)" => {
-                            "Analyze: executes SQL, including writes, and shows actual timings"
-                        }
-                        "Delete" => "Delete script: confirm moving the file to .trash",
-                        "Format" => "Format selected SQL or the whole script (Cmd/Ctrl+Shift+F)",
-                        _ => label,
-                    })
-                    .to_owned(),
-                )
-            })
-            .into()
-        })
+        .cursor_pointer();
+
+    match label {
+        "Execute" => {
+            btn = btn
+                .bg(rgb(0x238636))
+                .hover(|s| s.bg(rgb(0x2ea043)))
+                .text_size(px(12.0))
+                .text_color(rgb(0xffffff));
+        }
+        "Cancel execution" => {
+            btn = btn
+                .bg(rgb(0xda3633))
+                .hover(|s| s.bg(rgb(0xf85149)))
+                .text_size(px(12.0))
+                .text_color(rgb(0xffffff));
+        }
+        _ => {
+            btn = btn
+                .text_size(px(13.5))
+                .text_color(rgb(0xc9d1d9))
+                .hover(|s| s.bg(rgb(0x30363d)).text_color(rgb(0xffffff)));
+        }
+    }
+
+    btn.tooltip(move |_, cx| cx.new(|_| ScriptToolTip(rail_explanation(label))).into())
         .child(rail_symbol(label))
 }
 
 impl Workspace {
+    #[allow(dead_code)]
     pub(super) fn edit_script_lines(
         &mut self,
         command: super::script_lines::LineCommand,
@@ -176,6 +226,7 @@ impl Workspace {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     pub(super) fn toggle_history(&mut self, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get_mut(self.active_tab).filter(|t| t.is_script()) else {
             return;
@@ -221,6 +272,7 @@ impl Workspace {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn open_script_action(&mut self, delete: bool, cx: &mut Context<Self>) {
         if self.operations.is_running() {
             return;
@@ -417,7 +469,18 @@ impl Workspace {
 
 #[cfg(test)]
 mod rail_tests {
-    use super::rail_symbol;
+    use super::{rail_explanation, rail_symbol};
+
+    #[test]
+    fn hover_explanations_include_state_and_execution_warning() {
+        let timeout = rail_explanation("Timeout: 30s");
+        assert!(timeout.contains("Timeout: 30s"));
+        assert!(timeout.contains("click to cycle"));
+        assert!(rail_explanation("Autocommit: off…").contains("off"));
+        assert!(rail_explanation("Execute").contains("statement at the caret"));
+        assert!(rail_explanation("Analyze (executes SQL)").contains("including writes"));
+        assert!(rail_explanation("Delete").contains("confirm"));
+    }
 
     #[test]
     fn dynamic_controls_keep_their_icons() {
@@ -438,5 +501,47 @@ mod rail_tests {
             rail_symbol("Explain"),
             rail_symbol("Analyze (executes SQL)")
         );
+    }
+
+    #[test]
+    fn every_rail_symbol_has_a_descriptive_explanation() {
+        let labels = [
+            "Execute",
+            "Cancel execution",
+            "Run script",
+            "Execution log",
+            "Timeout: off",
+            "Begin",
+            "Commit",
+            "Rollback",
+            "Isolation…",
+            "Autocommit…",
+            "Transaction: Auto",
+            "Transaction: Manual",
+            "Database…",
+            "Schema…",
+            "Format",
+            "Snippets…",
+            "Import SQL copy…",
+            "Save SQL copy…",
+            "Find / Replace",
+            "Comment / Uncomment",
+            "Indent",
+            "Outdent",
+            "History",
+            "Explain",
+            "Analyze (executes SQL)",
+            "Rename",
+            "Delete",
+        ];
+        for label in labels {
+            let symbol = rail_symbol(label);
+            assert_ne!(symbol, "?", "Label {label} has no rail symbol");
+            let explanation = rail_explanation(label);
+            assert!(!explanation.is_empty(), "Explanation for {label} is empty");
+            if !label.starts_with("Timeout:") && !label.starts_with("Autocommit") {
+                assert_ne!(explanation, label, "Label {label} fell back to raw label");
+            }
+        }
     }
 }

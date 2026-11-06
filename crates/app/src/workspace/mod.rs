@@ -81,6 +81,7 @@ mod tab_context_menu;
 mod table_view;
 mod text_input;
 mod top_bar;
+mod transaction_menu;
 mod transaction_mode;
 use software_update::UpdateController;
 mod value_editor;
@@ -104,6 +105,7 @@ pub use tab_context_menu::TabContextMenu;
 #[cfg(test)]
 pub use tab_state::{QueryStatus, script_fetch_query};
 pub use tab_state::{TabState, group_thousands};
+pub use transaction_menu::TransactionMenu;
 use ui_core::actions::CheckForUpdates;
 use ui_editor::line_input::{
     CaretPick, LineHistory, LineInput, apply_pick, handle_line_key, render_caret_text,
@@ -330,6 +332,7 @@ impl Workspace {
                 tab_context_menu: None,
                 column_menu: None,
                 grid_context_menu: None,
+                tx_menu: None,
             },
         };
 
@@ -570,6 +573,9 @@ impl Render for Workspace {
         }
         if let Some(menu) = self.menus.grid_context_menu.clone() {
             root = root.child(self.render_grid_context_menu(menu, cx));
+        }
+        if let Some(menu) = self.menus.tx_menu.clone() {
+            root = root.child(self.render_transaction_menu(menu, cx));
         }
 
         // 4. Modal Dialog: Database Connection Setup

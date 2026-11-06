@@ -1,5 +1,3 @@
-#![recursion_limit = "4096"]
-
 use anyhow::Result;
 use gpui::*;
 use tracing::info;

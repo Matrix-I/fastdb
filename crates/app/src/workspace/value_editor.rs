@@ -178,6 +178,7 @@ fn stage_value(editor: ValueEditor, value: Option<String>, grid: &mut ui_grid::V
 }
 
 impl Workspace {
+    #[allow(dead_code)]
     pub(super) fn open_value_editor(&mut self, cx: &mut Context<Self>) {
         if self.execution_busy(cx) || self.value_editor.is_some() {
             return;
