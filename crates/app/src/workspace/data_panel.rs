@@ -1,5 +1,11 @@
 use super::*;
 
+fn strip_label(path: &'static str, height: f32) -> gpui::Svg {
+    svg().path(path).w(px(10.0)).h(px(height)).flex_shrink_0()
+}
+
+type StripAction = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>) + 'static>;
+
 impl Workspace {
     /// Data sub-tab: result grid or text view, with the optional record side panel
     pub(super) fn render_data_panel(
@@ -17,83 +23,114 @@ impl Workspace {
             && view_mode != DataViewMode::Record;
         let mut data_row = div().flex().flex_row().flex_1().w_full().overflow_hidden();
 
-        // Left vertical toolstrip (Grid / Text)
+        let tab_id = tab.id;
+
+        // Left vertical toolstrip matching DBeaver: Grid / Text / Record
+        let strip_item = |id: &'static str,
+                          icon: &'static str,
+                          label_icon: &'static str,
+                          label_height: f32,
+                          is_active: bool,
+                          on_click: StripAction,
+                          cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .flex()
+                .flex_col()
+                .items_center()
+                .w(px(24.0))
+                .py_1p5()
+                .gap_1p5()
+                .rounded_xs()
+                .border_1()
+                .border_color(if is_active {
+                    theme.border
+                } else {
+                    hsla(0.0, 0.0, 0.0, 0.0).into()
+                })
+                .bg(if is_active {
+                    theme.bg_surface_selected
+                } else {
+                    hsla(0.0, 0.0, 0.0, 0.0).into()
+                })
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.bg_surface_hover))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    on_click(this, cx);
+                    cx.notify();
+                }))
+                .child(
+                    strip_label(label_icon, label_height).text_color(if is_active {
+                        theme.text_primary
+                    } else {
+                        theme.text_muted
+                    }),
+                )
+                .child(img(icon).w(px(14.0)).h(px(14.0)))
+        };
+
         data_row = data_row.child(
             div()
                 .flex()
                 .flex_col()
                 .items_center()
-                .w(px(26.0))
+                .w(px(28.0))
                 .h_full()
                 .bg(theme.bg_surface)
                 .border_r_1()
                 .border_color(theme.border)
                 .py_2()
                 .gap_2()
-                .child({
-                    let is_grid = view_mode == DataViewMode::Grid;
-                    div()
-                        .id("toolstrip-grid")
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .w(px(22.0))
-                        .py_2()
-                        .rounded_xs()
-                        .bg(if is_grid {
-                            theme.bg_surface_selected
-                        } else {
-                            hsla(0.0, 0.0, 0.0, 0.0).into()
-                        })
-                        .border_l_2()
-                        .border_color(if is_grid {
-                            rgb(0x388bfd)
-                        } else {
-                            hsla(0.0, 0.0, 0.0, 0.0).into()
-                        })
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(t) = this.tabs.get_mut(this.active_tab) {
-                                t.view_mode = DataViewMode::Grid;
-                                t.record_view = None;
-                                cx.notify();
+                .child(strip_item(
+                    "toolstrip-grid",
+                    "icons/grid.svg",
+                    "icons/label_grid.svg",
+                    23.0,
+                    view_mode == DataViewMode::Grid,
+                    Box::new(|this, _| {
+                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                            t.view_mode = DataViewMode::Grid;
+                            t.record_view = None;
+                        }
+                    }),
+                    cx,
+                ))
+                .child(strip_item(
+                    "toolstrip-text",
+                    "icons/sql_script.svg",
+                    "icons/label_text.svg",
+                    24.0,
+                    view_mode == DataViewMode::Text,
+                    Box::new(|this, _| {
+                        if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                            t.view_mode = DataViewMode::Text;
+                            t.record_view = None;
+                        }
+                    }),
+                    cx,
+                ))
+                .child(strip_item(
+                    "toolstrip-record",
+                    "icons/columns.svg",
+                    "icons/label_record.svg",
+                    37.0,
+                    view_mode == DataViewMode::Record,
+                    Box::new(move |this, cx| {
+                        if let Some(t) = this.tabs.get(this.active_tab) {
+                            if t.view_mode == DataViewMode::Record {
+                                if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                    t.view_mode = DataViewMode::Grid;
+                                    t.record_view = None;
+                                }
+                            } else if t.grid.row_count() > 0 && t.grid.pager.is_some() {
+                                this.open_record_view(tab_id, cx);
+                            } else if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                                t.view_mode = DataViewMode::Record;
                             }
-                        }))
-                        .child(img("icons/grid.svg").w(px(14.0)).h(px(14.0)))
-                })
-                .child({
-                    let is_text = view_mode == DataViewMode::Text;
-                    div()
-                        .id("toolstrip-text")
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .w(px(22.0))
-                        .py_2()
-                        .rounded_xs()
-                        .bg(if is_text {
-                            theme.bg_surface_selected
-                        } else {
-                            hsla(0.0, 0.0, 0.0, 0.0).into()
-                        })
-                        .border_l_2()
-                        .border_color(if is_text {
-                            rgb(0x388bfd)
-                        } else {
-                            hsla(0.0, 0.0, 0.0, 0.0).into()
-                        })
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(t) = this.tabs.get_mut(this.active_tab) {
-                                t.view_mode = DataViewMode::Text;
-                                t.record_view = None;
-                                cx.notify();
-                            }
-                        }))
-                        .child(img("icons/sql_script.svg").w(px(14.0)).h(px(14.0)))
-                }),
+                        }
+                    }),
+                    cx,
+                )),
         );
 
         // Center Grid / Text
@@ -291,68 +328,50 @@ impl Workspace {
         // Right vertical toolstrip (Panels)
         data_row = data_row.child(
             div()
-                .id("btn-toggle-panels-strip")
                 .flex()
                 .flex_col()
                 .items_center()
-                .w(px(22.0))
+                .w(px(28.0))
                 .h_full()
                 .bg(theme.bg_surface)
                 .border_l_1()
                 .border_color(theme.border)
-                .py_3()
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.layout.show_right_panels = !this.layout.show_right_panels;
-                    cx.notify();
-                }))
+                .py_2()
                 .child(
                     div()
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.text_color(theme.text_primary))
-                        .child("P"),
-                )
-                .child(
-                    div()
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.text_color(theme.text_primary))
-                        .child("A"),
-                )
-                .child(
-                    div()
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.text_color(theme.text_primary))
-                        .child("N"),
-                )
-                .child(
-                    div()
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.text_color(theme.text_primary))
-                        .child("E"),
-                )
-                .child(
-                    div()
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.text_color(theme.text_primary))
-                        .child("L"),
-                )
-                .child(
-                    div()
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.text_color(theme.text_primary))
-                        .child("S"),
+                        .id("btn-toggle-panels-strip")
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .w(px(24.0))
+                        .py_1p5()
+                        .gap_1p5()
+                        .rounded_xs()
+                        .border_1()
+                        .border_color(if show_right_panels {
+                            theme.border
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0).into()
+                        })
+                        .bg(if show_right_panels {
+                            theme.bg_surface_selected
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0).into()
+                        })
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_surface_hover))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.layout.show_right_panels = !this.layout.show_right_panels;
+                            cx.notify();
+                        }))
+                        .child(img("icons/panels.svg").w(px(14.0)).h(px(14.0)))
+                        .child(strip_label("icons/label_panels.svg", 35.0).text_color(
+                            if show_right_panels {
+                                theme.text_primary
+                            } else {
+                                theme.text_muted
+                            },
+                        )),
                 ),
         );
 
@@ -441,4 +460,22 @@ fn is_scrolled_to_bottom(grid: &VirtualDataGrid) -> bool {
     let max_y = f32::from(state.base_handle.max_offset().height);
     let scrolled_y = -f32::from(state.base_handle.offset().y);
     max_y > 0.0 && scrolled_y >= max_y - grid.theme.row_height
+}
+
+#[cfg(test)]
+mod strip_label_tests {
+    #[test]
+    fn strip_labels_reserve_visible_layout_space() {
+        use gpui::{Styled, px};
+        for (path, height) in [
+            ("icons/label_grid.svg", 23.0),
+            ("icons/label_text.svg", 24.0),
+            ("icons/label_record.svg", 37.0),
+            ("icons/label_panels.svg", 35.0),
+        ] {
+            let mut label = super::strip_label(path, height);
+            assert_eq!(label.style().size.width, Some(px(10.0).into()));
+            assert_eq!(label.style().size.height, Some(px(height).into()));
+        }
+    }
 }
