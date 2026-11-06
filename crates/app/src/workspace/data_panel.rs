@@ -282,42 +282,93 @@ impl Workspace {
                         DataViewMode::Record => self.render_record_view(active_tab_idx, cx).into_any_element(),
                         DataViewMode::Text => {
                             let tab = &self.tabs[active_tab_idx];
-                            let mut text_lines = Vec::new();
-                            if let Some(ref pager) = tab.grid.pager {
-                                let col_names: Vec<String> = pager.columns.iter().map(|c| c.name.clone()).collect();
-                                text_lines.push(col_names.join(" | "));
-                                text_lines.push(col_names.iter().map(|c| "-".repeat(c.len().max(6))).collect::<Vec<_>>().join("-+-"));
-                                let limit_render = pager.total_rows().min(200);
-                                for r in 0..limit_render {
-                                    let mut row_vals = Vec::new();
-                                    for c in 0..pager.num_cols() as usize {
-                                        let val = if let Some(cell) = pager.get_cell(r, c) {
-                                            String::from_utf8_lossy(&cell).to_string()
-                                        } else {
-                                            "NULL".to_string()
-                                        };
-                                        row_vals.push(val);
-                                    }
-                                    text_lines.push(row_vals.join(" | "));
-                                }
-                            }
+                            let text_lines = if let Some(ref pager) = tab.grid.pager {
+                                format_text_presentation(
+                                    pager,
+                                    &tab.grid.changeset,
+                                    tab.grid.display_columns(),
+                                    tab.grid.row_count() as usize,
+                                )
+                            } else {
+                                Vec::new()
+                            };
+
+                            let total_rows = tab.grid.row_count();
+                            let max_line_len = text_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+                            let table_width_px = (max_line_len as f32 * 7.5 + 40.0).max(100.0);
+                            let text_copy = text_lines.join("\n");
+
+                            let header = div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .h(px(28.0))
+                                .px_3()
+                                .bg(theme.bg_surface)
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(theme.text_secondary)
+                                        .child(format!("{total_rows} row(s) · Plain text presentation")),
+                                )
+                                .child(
+                                    div()
+                                        .id("btn-copy-text-view")
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_xs()
+                                        .bg(theme.bg_editor)
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .text_size(px(11.0))
+                                        .text_color(theme.text_primary)
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(theme.bg_surface_hover))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.clipboard_request_id += 1;
+                                            cx.write_to_clipboard(ClipboardItem::new_string(text_copy.clone()));
+                                            cx.notify();
+                                        }))
+                                        .child("📋 Copy"),
+                                );
+
+                            let text_body = if text_lines.is_empty() {
+                                div()
+                                    .p_3()
+                                    .text_size(px(12.0))
+                                    .text_color(theme.text_muted)
+                                    .child("(No query result data to display in text mode)")
+                                    .into_any_element()
+                            } else {
+                                text_table_body(text_lines.join("\n"), table_width_px)
+                                    .text_color(theme.text_primary)
+                                    .into_any_element()
+                            };
 
                             div()
-                                .id("text-view-scroll")
+                                .id("text-view-container")
                                 .flex()
                                 .flex_col()
                                 .flex_1()
-                                .p_3()
-                                .overflow_y_scroll()
-                                .bg(theme.bg_editor)
-                                .text_size(px(12.0))
-                                .text_color(theme.text_primary)
+                                .size_full()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(header)
                                 .child(
-                                    if text_lines.is_empty() {
-                                        "(No query result data to display in text mode)".to_string()
-                                    } else {
-                                        text_lines.join("\n")
-                                    }
+                                    div()
+                                        .id("text-view-scroll")
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_scroll()
+                                        .bg(theme.bg_editor)
+                                        .child(text_body),
                                 )
                                 .into_any_element()
                         }
@@ -443,6 +494,156 @@ impl Workspace {
     }
 }
 
+// GPUI accepts one family name; CSS-style lists silently fall back to a proportional font.
+#[cfg(target_os = "macos")]
+const MONO_FONT: &str = "Menlo";
+#[cfg(not(target_os = "macos"))]
+const MONO_FONT: &str = "DejaVu Sans Mono";
+
+/// Shared by table tabs and SQL result panels through `render_data_panel`.
+fn text_table_body(text: String, width: f32) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .min_w_full()
+        .w(px(width))
+        .whitespace_nowrap()
+        .p_3()
+        .font_family(MONO_FONT)
+        .text_size(px(12.0))
+        .line_height(px(18.0))
+        .child(text)
+}
+pub const MAX_TEXT_COLUMN_WIDTH: usize = 255;
+
+pub(super) fn format_text_presentation(
+    pager: &db_wire::QueryResultPager,
+    changeset: &ui_grid::Changeset,
+    display_columns: &[usize],
+    row_count: usize,
+) -> Vec<String> {
+    if pager.columns.is_empty() {
+        return Vec::new();
+    }
+
+    let columns: Vec<usize> = if display_columns.is_empty() {
+        (0..pager.columns.len()).collect()
+    } else {
+        display_columns.to_vec()
+    };
+
+    if columns.is_empty() {
+        return Vec::new();
+    }
+
+    let num_rows = row_count.min(2000);
+
+    // Initial width based on column header name
+    let mut col_widths: Vec<usize> = columns
+        .iter()
+        .map(|&c| {
+            pager
+                .columns
+                .get(c)
+                .map(|col| col.name.chars().count().max(1))
+                .unwrap_or(1)
+        })
+        .collect();
+
+    // 1. First pass: sanitize cell values and calculate column widths
+    let mut formatted_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
+    for r in 0..num_rows {
+        let mut row_vals = Vec::with_capacity(columns.len());
+        for (i, &c) in columns.iter().enumerate() {
+            let cell = ui_grid::resolve_cell(pager, changeset, r as u64, c);
+            let val_str = match cell {
+                Some(s) => sanitize_text_cell(&s),
+                None => "[NULL]".to_string(),
+            };
+            col_widths[i] = col_widths[i].max(val_str.chars().count());
+            row_vals.push(val_str);
+        }
+        formatted_rows.push(row_vals);
+    }
+
+    // Cap column widths at MAX_TEXT_COLUMN_WIDTH (255),
+    // while keeping at least the column header width (or capped if header itself > 255).
+    for (i, &c) in columns.iter().enumerate() {
+        let header_len = pager
+            .columns
+            .get(c)
+            .map(|col| col.name.chars().count())
+            .unwrap_or(1);
+        col_widths[i] = col_widths[i]
+            .min(MAX_TEXT_COLUMN_WIDTH)
+            .max(header_len.min(MAX_TEXT_COLUMN_WIDTH))
+            .max(1);
+    }
+
+    let mut lines = Vec::with_capacity(num_rows + 2);
+
+    // 2. Format header line
+    let mut header_line = String::new();
+    for (i, &c) in columns.iter().enumerate() {
+        let col_name = pager
+            .columns
+            .get(c)
+            .map(|col| col.name.as_str())
+            .unwrap_or("");
+        let width = col_widths[i];
+        let name_chars: Vec<char> = col_name.chars().collect();
+        let take_len = name_chars.len().min(width);
+        let name_str: String = name_chars[..take_len].iter().collect();
+        header_line.push_str(&name_str);
+        let pad = width.saturating_sub(take_len);
+        for _ in 0..pad {
+            header_line.push(' ');
+        }
+        header_line.push('|');
+    }
+    lines.push(header_line);
+
+    // 3. Format divider line
+    let mut divider_line = String::new();
+    for &width in &col_widths {
+        for _ in 0..width {
+            divider_line.push('-');
+        }
+        divider_line.push('+');
+    }
+    lines.push(divider_line);
+
+    // 4. Format data rows
+    for row in formatted_rows {
+        let mut row_line = String::new();
+        for (i, val) in row.into_iter().enumerate() {
+            let width = col_widths[i];
+            let val_chars: Vec<char> = val.chars().collect();
+            let take_len = val_chars.len().min(width);
+            let val_str: String = val_chars[..take_len].iter().collect();
+            row_line.push_str(&val_str);
+            let pad = width.saturating_sub(take_len);
+            for _ in 0..pad {
+                row_line.push(' ');
+            }
+            row_line.push('|');
+        }
+        lines.push(row_line);
+    }
+
+    lines
+}
+
+fn sanitize_text_cell(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\r' | '\n' | '\t' => ' ',
+            _ => c,
+        })
+        .collect()
+}
+
 pub(super) fn auto_fetch_allowed(
     has_more: bool,
     running: bool,
@@ -463,7 +664,28 @@ fn is_scrolled_to_bottom(grid: &VirtualDataGrid) -> bool {
 }
 
 #[cfg(test)]
-mod strip_label_tests {
+mod tests {
+    // Not a glob: `super::*` brings in `gpui::test`, which shadows the built-in `#[test]`.
+    use super::format_text_presentation;
+    use db_wire::{ColumnMeta, DataType, QueryResultPager};
+    use ui_grid::Changeset;
+
+    #[test]
+    fn text_table_uses_a_single_monospace_family() {
+        // GPUI treats this as one family name, not a CSS fallback list.
+        use gpui::Styled;
+        let mut body =
+            super::text_table_body("key  |value|\n-----+-----+\nshort|text |".into(), 200.0);
+        let style = body.text_style().as_ref().unwrap();
+        let family = style.font_family.as_ref().unwrap();
+        assert!(!family.contains(','));
+        assert_eq!(family.as_ref(), super::MONO_FONT);
+        #[cfg(target_os = "macos")]
+        assert_eq!(super::MONO_FONT, "Menlo");
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(super::MONO_FONT, "DejaVu Sans Mono");
+    }
+
     #[test]
     fn strip_labels_reserve_visible_layout_space() {
         use gpui::{Styled, px};
@@ -477,5 +699,127 @@ mod strip_label_tests {
             assert_eq!(label.style().size.width, Some(px(10.0).into()));
             assert_eq!(label.style().size.height, Some(px(height).into()));
         }
+    }
+
+    #[test]
+    fn test_text_presentation_matches_dbeaver_format() {
+        let cols = vec![
+            ColumnMeta::new("key", DataType::Text),
+            ColumnMeta::new("value", DataType::Text),
+        ];
+        let pager = QueryResultPager::new(cols).unwrap();
+
+        let long_sws = concat!(
+            "[{\"errorCode\": 0, \"errorText\": \"No errors found\", \"errorLanguage\": \"EN\", \"errorLanguage2\": \"ENG\"}, ",
+            "{\"errorCode\": 1, \"errorText\": \"Generic error\", \"errorLanguage\": \"EN\", \"errorLanguage2\": \"ENG\"}, ",
+            "{\"errorCode\": 3, \"errorText\": \"Virtual device locked\", \"errorLanguage\": \"EN\", \"errorLanguage2\": \"ENG\"}, ",
+            "{\"errorCode\": 4, \"errorText\": \"Wrong credentials\", \"errorLanguage\": \"EN\"}]"
+        );
+        let phone_rules = "{\"41\": {\"maxLength\": 9, \"minLength\": 9, \"leadingZero\": true, \"allowedPrefixes\": [\"76\", \"77\", \"78\", \"79\"]}, \"99999\": {\"maxLength\": 50, \"minLength\": 1, \"leadingZero\": true}}";
+
+        pager
+            .append_row(vec![
+                Some(b"io.ubitec.namirial.service.SWS_ERROR_CODES".as_slice()),
+                Some(long_sws.as_bytes()),
+            ])
+            .unwrap();
+        pager
+            .append_row(vec![
+                Some(b"io.ubitec.id.service.PHONE_NUMBER_VALIDATION_RULES".as_slice()),
+                Some(phone_rules.as_bytes()),
+            ])
+            .unwrap();
+
+        let changeset = Changeset::default();
+        let lines = format_text_presentation(&pager, &changeset, &[0, 1], 2);
+
+        assert_eq!(lines.len(), 4);
+
+        // Header: "key" padded to 50 + "|" + "value" padded to 255 + "|" -> len 307
+        assert_eq!(lines[0].len(), 307);
+        assert!(lines[0].starts_with("key                                               |value"));
+        assert!(lines[0].ends_with('|'));
+
+        // Divider: 50 dashes + "+" + 255 dashes + "+" -> len 307
+        assert_eq!(lines[1].len(), 307);
+        let expected_divider = format!("{}+{}+", "-".repeat(50), "-".repeat(255));
+        assert_eq!(lines[1], expected_divider);
+
+        // Row 0: key padded to 50 (42 chars + 8 spaces) + "|" + value truncated to 255 + "|" -> len 307
+        assert_eq!(lines[2].len(), 307);
+        assert!(
+            lines[2].starts_with(
+                "io.ubitec.namirial.service.SWS_ERROR_CODES        |[{\"errorCode\": 0,"
+            )
+        );
+        assert!(lines[2].ends_with('|'));
+
+        // Row 1: key exact 50 chars + "|" + value padded to 255 + "|" -> len 307
+        assert_eq!(lines[3].len(), 307);
+        assert!(
+            lines[3].starts_with("io.ubitec.id.service.PHONE_NUMBER_VALIDATION_RULES|{\"41\":")
+        );
+        assert!(lines[3].ends_with('|'));
+    }
+
+    #[test]
+    fn test_text_presentation_null_and_newline_handling() {
+        let cols = vec![
+            ColumnMeta::new("id", DataType::Int4),
+            ColumnMeta::new("notes", DataType::Text),
+        ];
+        let pager = QueryResultPager::new(cols).unwrap();
+
+        pager
+            .append_row(vec![
+                Some(b"1".as_slice()),
+                Some(b"line 1\nline 2\r\nline 3\ttab".as_slice()),
+            ])
+            .unwrap();
+        pager.append_row(vec![Some(b"2".as_slice()), None]).unwrap();
+
+        let changeset = Changeset::default();
+        let lines = format_text_presentation(&pager, &changeset, &[0, 1], 2);
+
+        assert_eq!(lines.len(), 4);
+        // Header
+        assert_eq!(lines[0], "id|notes                    |");
+        // Divider
+        assert_eq!(lines[1], "--+-------------------------+");
+        // Row 0: newlines and tabs replaced with space
+        assert_eq!(lines[2], "1 |line 1 line 2  line 3 tab|");
+        // Row 1: NULL displayed as [NULL]
+        assert_eq!(lines[3], "2 |[NULL]                   |");
+    }
+
+    #[test]
+    fn test_text_presentation_empty_result() {
+        let cols = vec![
+            ColumnMeta::new("col_a", DataType::Text),
+            ColumnMeta::new("col_b", DataType::Text),
+        ];
+        let pager = QueryResultPager::new(cols).unwrap();
+        let changeset = Changeset::default();
+        let lines = format_text_presentation(&pager, &changeset, &[0, 1], 0);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "col_a|col_b|");
+        assert_eq!(lines[1], "-----+-----+");
+    }
+
+    #[test]
+    fn test_text_presentation_changeset_edits() {
+        let cols = vec![ColumnMeta::new("name", DataType::Text)];
+        let pager = QueryResultPager::new(cols).unwrap();
+        pager.append_row(vec![Some(b"Alice".as_slice())]).unwrap();
+
+        let mut changeset = Changeset::default();
+        changeset.set_cell(0, 0, Some(b"Alice".to_vec()), Some("Bob".to_string()));
+
+        let lines = format_text_presentation(&pager, &changeset, &[0], 1);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "name|");
+        assert_eq!(lines[1], "----+");
+        assert_eq!(lines[2], "Bob |");
     }
 }
