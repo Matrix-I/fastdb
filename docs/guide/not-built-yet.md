@@ -35,3 +35,5 @@ The [audited roadmap](../ROADMAP.md) separates working paths, partial features, 
 - **SQL action rail acceptance.** Vertical icon buttons beside the line numbers, hover explanations, independent scrolling and Execute/Cancel presentation await manual desktop acceptance.
 
 - **Result rail label and icon acceptance.** Explicit label sizing, unmirrored glyph coordinates, left/right reading directions and the grid-and-gear Panels asset have automated coverage; the user confirmed the labels and Panels icon during desktop acceptance.
+
+- **Script result panel acceptance.** Initial result hiding and bounded per-tab vertical resizing have automated coverage; the user confirmed initial hiding, vertical resizing and closing the last result during desktop acceptance.
