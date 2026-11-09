@@ -714,3 +714,62 @@ fn full_export_streams_all_rows_to_csv_and_sql() {
         assert!(content.contains(r#"INSERT INTO items ("id", "name") VALUES ("#));
     });
 }
+
+#[test]
+fn full_export_reports_progress_and_cancel_keeps_previous_file() {
+    db_wire::get_runtime().block_on(async {
+        let driver = Arc::new(SqliteDriver::new_memory());
+        driver
+            .execute_schema_ddl("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+            .await
+            .unwrap();
+        driver
+            .execute_schema_ddl(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30) \
+                 INSERT INTO items SELECT i FROM n",
+            )
+            .await
+            .unwrap();
+        let settings = || db_wire::transfer::export::FullExportSettings {
+            format: db_wire::transfer::export::FullExportFormat::Csv,
+            csv_options: db_wire::transfer::csv::CsvOptions::default(),
+            target_table: "items".into(),
+            dialect: db_wire::sql::SqlDialect(db_wire::DbDriverKind::Sqlite),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("items.csv");
+        std::fs::write(&path, "previous").unwrap();
+
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(true);
+        let (progress_tx, _) = tokio::sync::watch::channel(0);
+        let result = db_wire::transfer::export::run_full_export(
+            driver.clone(),
+            "SELECT id FROM items".into(),
+            &path,
+            settings(),
+            cancel_rx,
+            progress_tx,
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "previous");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        drop(cancel_tx);
+
+        let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(0);
+        let count = db_wire::transfer::export::run_full_export(
+            driver,
+            "SELECT id FROM items".into(),
+            &path,
+            settings(),
+            cancel_rx,
+            progress_tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 30);
+        assert_eq!(*progress_rx.borrow(), 30);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    });
+}

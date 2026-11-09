@@ -82,6 +82,10 @@ enum NavMenuAction {
         schema: String,
         table: String,
     },
+    TransferTable {
+        schema: String,
+        table: String,
+    },
     RenameTable {
         schema: String,
         table: String,
@@ -303,6 +307,17 @@ impl Workspace {
                         },
                         cx,
                     ))
+                    .child(item(
+                        "nav-menu-table-transfer",
+                        "icons/table.svg",
+                        "Transfer to Table…",
+                        is_connected && self.can_transfer_table(&conn_id, &schema, &table),
+                        NavMenuAction::TransferTable {
+                            schema: schema.clone(),
+                            table: table.clone(),
+                        },
+                        cx,
+                    ))
                     .child(separator())
                     .child(item(
                         "nav-menu-table-add-col",
@@ -513,6 +528,10 @@ impl Workspace {
             }
             NavMenuAction::ImportCsv { schema, table } => {
                 self.open_import_modal(conn_id, &schema, &table, cx);
+            }
+            NavMenuAction::TransferTable { schema, table } => {
+                // The menu item is disabled when the source cannot be built.
+                let _ = self.open_table_transfer(conn_id, &schema, &table, "", cx);
             }
             NavMenuAction::RenameTable { schema, table } => {
                 self.open_schema_action(

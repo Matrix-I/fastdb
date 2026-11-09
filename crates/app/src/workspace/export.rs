@@ -7,6 +7,8 @@ use std::path::Path;
 pub(super) struct ExportState {
     pub busy: bool,
     pub message: Option<String>,
+    /// Present while a full-source export runs; sending `true` stops it.
+    pub cancel: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 #[derive(Clone, Copy)]
@@ -30,6 +32,87 @@ pub(super) fn sql_target(dialect: SqlDialect, schema: Option<&str>, table: Optio
         Some(schema) => dialect.qualified_table(schema, table),
         None => dialect.quote_ident(table),
     }
+}
+
+/// Builds a full-table read; `columns` pins the column order to the cached catalog order.
+pub(super) fn table_source_sql(
+    target: &str,
+    columns: Option<(SqlDialect, &[String])>,
+    filter: &str,
+) -> String {
+    let list = columns.map_or_else(
+        || "*".to_string(),
+        |(dialect, names)| {
+            names
+                .iter()
+                .map(|n| dialect.quote_ident(n))
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+    );
+    let filter = filter.trim();
+    let upper = filter.to_uppercase();
+    if filter.is_empty() {
+        format!("SELECT {list} FROM {target}")
+    } else if upper.starts_with("WHERE ") || upper.starts_with("ORDER BY ") {
+        format!("SELECT {list} FROM {target} {filter}")
+    } else {
+        format!("SELECT {list} FROM {target} WHERE {filter}")
+    }
+}
+
+/// Keywords that can make a `SELECT`/`WITH` statement write (data-modifying CTEs,
+/// `SELECT … INTO`) or that indicate a second statement. Locking reads such as
+/// `FOR UPDATE` are rejected too, which is conservative.
+const WRITE_KEYWORDS: [&str; 12] = [
+    "INSERT", "UPDATE", "DELETE", "MERGE", "INTO", "TRUNCATE", "DROP", "ALTER", "CREATE", "GRANT",
+    "REVOKE", "CALL",
+];
+
+/// Uppercased bare words outside quotes and comments, or `None` for a second statement.
+fn bare_words(sql: &str) -> Option<Vec<String>> {
+    let chars: Vec<char> = sql.chars().collect();
+    let (mut words, mut word, mut i) = (Vec::new(), String::new(), 0);
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        let skip_to = |i: usize, end: &str| {
+            let rest: String = chars[i..].iter().collect();
+            rest.find(end).map_or(chars.len(), |p| {
+                i + rest[..p].chars().count() + end.chars().count()
+            })
+        };
+        let jump = match (c, next) {
+            ('\'', _) => Some(skip_to(i + 1, "'")),
+            ('"', _) => Some(skip_to(i + 1, "\"")),
+            ('`', _) => Some(skip_to(i + 1, "`")),
+            ('-', Some('-')) => Some(skip_to(i, "\n")),
+            ('/', Some('*')) => Some(skip_to(i + 2, "*/")),
+            (';', _) => return None,
+            _ => None,
+        };
+        if c.is_alphanumeric() || c == '_' {
+            word.extend(c.to_uppercase());
+            i += 1;
+            continue;
+        }
+        if !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        i = jump.unwrap_or(i + 1);
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// Re-running a source is only safe for read queries; mutations must not repeat.
+pub(super) fn read_query(sql: Option<&str>) -> Option<String> {
+    let sql = sql?.trim().trim_end_matches(';').trim();
+    let words = bare_words(sql)?;
+    let reads = matches!(words.first().map(String::as_str), Some("SELECT" | "WITH"));
+    (reads && !words.iter().any(|w| WRITE_KEYWORDS.contains(&w.as_str()))).then(|| sql.to_string())
 }
 
 /// Keep any previous destination intact until the complete export is ready.
@@ -181,30 +264,20 @@ impl Workspace {
             ExportFormat::Csv => db_wire::transfer::export::FullExportFormat::Csv,
             ExportFormat::Sql => db_wire::transfer::export::FullExportFormat::Sql,
         };
-        let source_sql = if let (Some(_schema), Some(_table)) =
-            (tab.schema_name.as_deref(), tab.table_name.as_deref())
-        {
-            let filter = tab.filter_sql.trim();
-            if filter.is_empty() {
-                format!("SELECT * FROM {target}")
-            } else if filter.to_uppercase().starts_with("WHERE ")
-                || filter.to_uppercase().starts_with("ORDER BY ")
-            {
-                format!("SELECT * FROM {target} {filter}")
-            } else {
-                format!("SELECT * FROM {target} WHERE {filter}")
-            }
-        } else {
-            let sql = tab.editor.buffer.text().trim().to_string();
-            let upper = sql.to_uppercase();
-            if !upper.starts_with("SELECT") && !upper.starts_with("WITH") {
-                tab.export.message =
-                    Some("Full export requires a SELECT query to avoid repeating mutations".into());
-                cx.notify();
-                return;
-            }
+        let source_sql = if tab.schema_name.is_some() && tab.table_name.is_some() {
+            table_source_sql(&target, None, &tab.filter_sql)
+        } else if let Some(sql) = read_query(tab.script_sql.as_deref()) {
+            // The active result's statement, not the whole editor buffer.
             sql
+        } else {
+            tab.export.message =
+                Some("Full export requires a SELECT query to avoid repeating mutations".into());
+            cx.notify();
+            return;
         };
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(0u64);
+        tab.export.cancel = Some(cancel_tx);
         tab.export.busy = true;
         tab.export.message = Some("Choose a destination for full export…".into());
         let dialog = cx.prompt_for_new_path(&platform_hal::paths::downloads_dir(), Some(&name));
@@ -219,8 +292,26 @@ impl Workspace {
                             cx.notify();
                         }
                     });
-                    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-                    let (progress_tx, _) = tokio::sync::watch::channel(0);
+                    let progress_task = cx.spawn({
+                        let this = this.clone();
+                        async move |cx| {
+                            while progress_rx.changed().await.is_ok() {
+                                let rows = *progress_rx.borrow();
+                                let _ = this.update(cx, |this, cx| {
+                                    if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id)
+                                        && tab.export.cancel.as_ref().is_some_and(|c| !*c.borrow())
+                                    {
+                                        tab.export.message = Some(format!(
+                                            "Exporting all rows… {} written",
+                                            group_thousands(rows)
+                                        ));
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        }
+                    });
+                    let cancelled = cancel_rx.clone();
                     let settings = db_wire::transfer::export::FullExportSettings {
                         format: full_format,
                         csv_options: db_wire::transfer::csv::CsvOptions::default(),
@@ -242,9 +333,16 @@ impl Workspace {
                             .map(|count| {
                                 format!("Exported all {count} row(s) to {}", path.display())
                             })
-                            .map_err(|e| format!("Full export failed: {e}"))
+                            .map_err(|e| {
+                                if *cancelled.borrow() {
+                                    "Export cancelled; destination unchanged".to_string()
+                                } else {
+                                    format!("Full export failed: {e}")
+                                }
+                            })
                         })
                         .await;
+                    drop(progress_task);
                     Some(result.unwrap_or_else(|message| message))
                 }
                 Ok(Ok(None)) => None,
@@ -254,12 +352,67 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
                     tab.export.busy = false;
+                    tab.export.cancel = None;
                     tab.export.message = outcome;
                     cx.notify();
                 }
             });
         })
         .detach();
+    }
+
+    pub(super) fn cancel_full_export(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(cancel) = self.tabs.get(index).and_then(|t| t.export.cancel.as_ref()) {
+            cancel.send_replace(true);
+            self.tabs[index].export.message = Some("Cancelling export…".into());
+            cx.notify();
+        }
+    }
+
+    /// Opens transfer for the tab's table, or for the active result's read query.
+    pub(super) fn open_result_transfer(&mut self, index: usize, cx: &mut Context<Self>) {
+        if !self.can_export(index) {
+            return;
+        }
+        let tab = &self.tabs[index];
+        let conn_id = tab
+            .connection_id
+            .clone()
+            .or_else(|| self.connections.active_connection_id.clone());
+        if let (Some(conn_id), Some(schema), Some(table)) = (
+            conn_id.clone(),
+            tab.schema_name.clone(),
+            tab.table_name.clone(),
+        ) {
+            let filter = tab.filter_sql.clone();
+            if let Err(message) = self.open_table_transfer(&conn_id, &schema, &table, &filter, cx) {
+                self.tabs[index].export.message = Some(message);
+                cx.notify();
+            }
+            return;
+        }
+        let Some(sql) = read_query(tab.script_sql.as_deref()) else {
+            self.tabs[index].export.message =
+                Some("Transfer requires a SELECT query to avoid repeating mutations".into());
+            cx.notify();
+            return;
+        };
+        let Some(driver) = self.tab_session(index).driver.clone() else {
+            return;
+        };
+        let columns = tab
+            .grid
+            .pager
+            .as_ref()
+            .map(|p| p.columns.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default();
+        let source = super::import_modal::QuerySource {
+            driver,
+            sql,
+            label: format!("{} query result", conn_id.unwrap_or_default()),
+            relation: None,
+        };
+        self.open_transfer_modal(source, columns, cx);
     }
 
     pub(super) fn render_export_toolbar(
@@ -270,6 +423,23 @@ impl Workspace {
         let enabled = self.can_export(index);
         let theme = self.theme.clone();
         let mut toolbar = div().flex().flex_none().items_center().gap_1();
+        if self.tabs[index].export.cancel.is_some() {
+            let cancel_theme = self.theme.clone();
+            return toolbar
+                .child(
+                    div()
+                        .id("export-cancel")
+                        .px_1()
+                        .rounded_xs()
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(cancel_theme.bg_surface_hover))
+                        .child("Cancel export")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.cancel_full_export(index, cx);
+                        })),
+                )
+                .child(div().child(self.tabs[index].export.message.clone().unwrap_or_default()));
+        }
         for (label, format, is_all) in [
             ("Export CSV", ExportFormat::Csv, false),
             ("Export SQL", ExportFormat::Sql, false),
@@ -293,6 +463,23 @@ impl Workspace {
             }
             toolbar = toolbar.child(button);
         }
+        let transfer_theme = self.theme.clone();
+        let mut transfer_btn = div()
+            .id("toolbar-transfer")
+            .px_1()
+            .rounded_xs()
+            .child("Transfer…");
+        if enabled {
+            transfer_btn = transfer_btn
+                .cursor_pointer()
+                .hover(move |s| s.bg(transfer_theme.bg_surface_hover))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open_result_transfer(index, cx);
+                }));
+        } else {
+            transfer_btn = transfer_btn.opacity(0.4);
+        }
+        toolbar = toolbar.child(transfer_btn);
         if let Some(table) = self.tabs[index].table_name.clone() {
             let schema = self.tabs[index]
                 .schema_name
@@ -331,7 +518,9 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportFormat, can_export_tab, sql_target, write_export};
+    use super::{
+        ExportFormat, can_export_tab, read_query, sql_target, table_source_sql, write_export,
+    };
     use db_wire::{ColumnMeta, DbDriverKind, QueryResultPager, sql::SqlDialect};
     use mem_engine::DataType;
 
@@ -359,6 +548,47 @@ mod tests {
         assert!(!can_export_tab(&tab, false));
         tab.grid.changeset.clear();
         assert!(can_export_tab(&tab, false));
+    }
+
+    #[test]
+    fn table_sources_pin_columns_and_apply_filters() {
+        let pg = SqlDialect(DbDriverKind::Postgres);
+        let cols = ["id".to_string(), "a\"b".to_string()];
+        assert_eq!(table_source_sql("\"t\"", None, " "), "SELECT * FROM \"t\"");
+        assert_eq!(
+            table_source_sql("\"t\"", Some((pg, &cols)), "id > 1"),
+            "SELECT \"id\", \"a\"\"b\" FROM \"t\" WHERE id > 1"
+        );
+        assert_eq!(
+            table_source_sql("\"t\"", None, "order by id"),
+            "SELECT * FROM \"t\" order by id"
+        );
+    }
+
+    #[test]
+    fn only_read_queries_can_be_rerun() {
+        assert_eq!(read_query(Some(" select 1; ")).as_deref(), Some("select 1"));
+        assert_eq!(
+            read_query(Some("WITH x AS (SELECT 1) SELECT * FROM x")).as_deref(),
+            Some("WITH x AS (SELECT 1) SELECT * FROM x")
+        );
+        assert_eq!(read_query(Some("DELETE FROM t")), None);
+        assert_eq!(
+            read_query(Some(
+                "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d"
+            )),
+            None
+        );
+        assert_eq!(read_query(Some("SELECT * INTO copy FROM t")), None);
+        assert_eq!(read_query(Some("SELECT 1; DROP TABLE t")), None);
+        assert_eq!(
+            read_query(Some(
+                "SELECT 'delete; into' AS \"update\" -- insert\nFROM t /* merge */"
+            ))
+            .as_deref(),
+            Some("SELECT 'delete; into' AS \"update\" -- insert\nFROM t /* merge */")
+        );
+        assert_eq!(read_query(None), None);
     }
 
     #[test]

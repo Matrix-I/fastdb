@@ -96,6 +96,10 @@ impl ImportControl {
         self.cancel.send_replace(true);
     }
 
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancel.borrow()
+    }
+
     pub fn progress(&self) -> watch::Receiver<ImportProgress> {
         self.progress.subscribe()
     }
