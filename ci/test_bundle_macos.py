@@ -122,5 +122,57 @@ class BundleTests(unittest.TestCase):
         self.assertFalse((dist / "SHA256SUMS.txt.minisig").exists())
 
 
+class CreateDmgTests(unittest.TestCase):
+    """Pick the DMG tool by the options the host's diskutil actually supports."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="fastdb-dmg-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.source = self.root / "staging"
+        self.source.mkdir()
+        self.dmg = self.root / "FastDB.dmg"
+        self.log = self.root / "calls.log"
+        self.stub("hdiutil", 'echo "hdiutil $*" >> "$CALL_LOG"\nfor arg in "$@"; do last="$arg"; done\nprintf dmg > "$last"')
+        self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", CALL_LOG=str(self.log))
+
+    def stub(self, name, body):
+        path = self.bin / name
+        path.write_text("#!/bin/bash\nset -eu\n" + body + "\n")
+        path.chmod(0o755)
+
+    def stub_diskutil(self, usage):
+        self.stub("diskutil", f"""if [ "${{4:-}}" = --help ]; then echo "USAGE: {usage}"; exit 0; fi
+for arg in "$@"; do
+  case "$arg" in --volumeName) case "{usage}" in *--volumeName*) ;; *) echo "Error: Unknown option '--volumeName'" >&2; exit 64;; esac;; esac
+done
+echo "diskutil $*" >> "$CALL_LOG"
+for arg in "$@"; do last="$arg"; done
+printf dmg > "$last\"""")
+
+    def create_dmg(self):
+        result = subprocess.run(["/bin/bash", str(ROOT / "ci/create-macos-dmg.sh"),
+                                 str(self.source), str(self.dmg), "FastDB"],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.dmg.exists())
+        return self.log.read_text()
+
+    def test_diskutil_without_volume_name_falls_back_to_hdiutil(self):
+        # macOS 15 ships `diskutil image create from` without --volumeName.
+        self.stub_diskutil("diskutil image create from [--format <format>] <source> <destination>")
+        calls = self.create_dmg()
+        self.assertIn("hdiutil create -volname FastDB", calls)
+        self.assertNotIn("diskutil", calls)
+
+    def test_diskutil_with_volume_name_is_preferred(self):
+        self.stub_diskutil("diskutil image create from [--format <format>] [--volumeName <volumeName>] <source> <destination>")
+        calls = self.create_dmg()
+        self.assertIn("diskutil image create from --format UDZO --volumeName FastDB", calls)
+        self.assertNotIn("hdiutil", calls)
+
+
 if __name__ == "__main__":
     unittest.main()
