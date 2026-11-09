@@ -9,79 +9,42 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$WORKSPACE_ROOT"
 
+# Building elsewhere would package a host binary into Linux artifacts.
+if [ "$(uname -s)" != Linux ]; then
+    echo "This script requires Linux." >&2
+    exit 1
+fi
+
 TARGET="x86_64-unknown-linux-gnu"
 APP_NAME="fastdb"
-VERSION="0.2.0"
+VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+if [ -z "$VERSION" ]; then
+    echo "Could not read the workspace version from Cargo.toml." >&2
+    exit 1
+fi
 DIST_DIR="$WORKSPACE_ROOT/dist/linux"
-DEB_DIR="$DIST_DIR/deb/fastdb_${VERSION}_amd64"
 
 echo "Building release binary for $TARGET..."
-cargo build --release --target "$TARGET" -p fastdb-app || {
-    echo "Native compilation on current host fallback..."
-    cargo build --release -p fastdb-app
-}
-
+cargo build --release --locked --target "$TARGET" -p fastdb-app
 BIN_SRC="$WORKSPACE_ROOT/target/$TARGET/release/fastdb"
-if [ ! -f "$BIN_SRC" ]; then
-    BIN_SRC="$WORKSPACE_ROOT/target/release/fastdb"
-fi
 
-echo "Creating Debian package structure..."
-rm -rf "$DEB_DIR"
-mkdir -p "$DEB_DIR/usr/bin"
-mkdir -p "$DEB_DIR/usr/share/applications"
-mkdir -p "$DEB_DIR/usr/share/icons/hicolor/scalable/apps"
-mkdir -p "$DEB_DIR/DEBIAN"
+mkdir -p "$DIST_DIR"
+cp "$BIN_SRC" "$DIST_DIR/fastdb-linux-x86_64"
 
-cp "$BIN_SRC" "$DEB_DIR/usr/bin/$APP_NAME"
-chmod +x "$DEB_DIR/usr/bin/$APP_NAME"
-
-# Copy Icon
-if [ -f "$WORKSPACE_ROOT/resources/icon.svg" ]; then
-    cp "$WORKSPACE_ROOT/resources/icon.svg" "$DEB_DIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg"
-fi
-
-# Create desktop entry
-cat <<EOF > "$DEB_DIR/usr/share/applications/$APP_NAME.desktop"
-[Desktop Entry]
-Name=FastDB
-Comment=Next-Gen Pure Rust Database Client
-Exec=$APP_NAME
-Icon=$APP_NAME
-Terminal=false
-Type=Application
-Categories=Development;Database;
-StartupNotify=true
-EOF
-
-# Create Debian control file
-cat <<EOF > "$DEB_DIR/DEBIAN/control"
-Package: $APP_NAME
-Version: $VERSION
-Section: utils
-Priority: optional
-Architecture: amd64
-Maintainer: FastDB Team <support@fastdb.dev>
-Description: Next-Gen Pure Rust Database Client
- High-performance database client with zero-copy memory management,
- 120 FPS virtualized data grid, and embedded AST completion.
-EOF
-
-# Build .deb if dpkg-deb is available
-if command -v dpkg-deb &> /dev/null; then
-    dpkg-deb --build "$DEB_DIR" "$DIST_DIR/fastdb_${VERSION}_amd64.deb"
+if command -v dpkg-shlibdeps &> /dev/null; then
+    bash "$SCRIPT_DIR/package-deb.sh" "$BIN_SRC" "$VERSION" "$DIST_DIR"
     echo "Generated Debian package at $DIST_DIR/fastdb_${VERSION}_amd64.deb"
+else
+    echo "dpkg-shlibdeps not found (install dpkg-dev); skipping the .deb." >&2
 fi
 
 # Build AppImage structure
 APP_DIR="$DIST_DIR/AppDir"
+rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/usr/bin"
-mkdir -p "$APP_DIR/usr/share/icons"
 cp "$BIN_SRC" "$APP_DIR/usr/bin/$APP_NAME"
-cp "$DEB_DIR/usr/share/applications/$APP_NAME.desktop" "$APP_DIR/"
-if [ -f "$WORKSPACE_ROOT/resources/icon.svg" ]; then
-    cp "$WORKSPACE_ROOT/resources/icon.svg" "$APP_DIR/$APP_NAME.svg"
-fi
+cp "$WORKSPACE_ROOT/resources/linux/$APP_NAME.desktop" "$APP_DIR/"
+cp "$WORKSPACE_ROOT/resources/icon.svg" "$APP_DIR/$APP_NAME.svg"
 
 cat <<EOF > "$APP_DIR/AppRun"
 #!/bin/sh

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=FastDB
+Comment=Next-Gen Pure Rust Database Client
+Exec=fastdb
+Icon=fastdb
+Terminal=false
+Type=Application
+Categories=Development;Database;
+StartupNotify=true
