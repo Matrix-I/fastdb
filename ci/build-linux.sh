@@ -11,7 +11,7 @@ cd "$WORKSPACE_ROOT"
 
 TARGET="x86_64-unknown-linux-gnu"
 APP_NAME="fastdb"
-VERSION="0.1.0"
+VERSION="0.2.0"
 DIST_DIR="$WORKSPACE_ROOT/dist/linux"
 DEB_DIR="$DIST_DIR/deb/fastdb_${VERSION}_amd64"
 

@@ -11,7 +11,7 @@ cd "$WORKSPACE_ROOT"
 
 TARGET="aarch64-apple-darwin"
 APP_NAME="FastDB"
-VERSION="0.1.0"
+VERSION="0.2.0"
 DIST_DIR="$WORKSPACE_ROOT/dist/macos"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 
