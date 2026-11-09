@@ -13,8 +13,8 @@ not replace acceptance on the current build.
 
 | Provider | Connect/browse/run | Edit/save/read-back | Export/read-back | Cancel/disconnect | Desktop status |
 | --- | --- | --- | --- | --- | --- |
-| PostgreSQL | Pending | Pending | Pending | Pending | Pending |
-| MySQL | Pending | Pending | Pending | Pending | Pending |
+| PostgreSQL | Automated live (15.19, 2026-11-09) | Automated live: change/insert/delete, row-count and FK failure rollback, fresh-connection read-back | Automated live: exact CSV bytes, SQL replay read-back | Automated live: cancel + fresh read, tab-session close rolls back | Pending |
+| MySQL | Automated live (8.4.13, 2026-11-09) | Automated live (same cases) | Automated live (same cases) | Automated live (same cases) | Pending |
 | MariaDB | Pending separately from MySQL | Pending | Pending | Pending | Pending |
 | SQLite | Automated in-memory browse/run | Automated planned edit and atomic rollback | Automated CSV output and SQL read-back | Existing driver cancellation tests; desktop disconnect pending | Skipped by user |
 | SQL Server | Pending; vendor ODBC required | Pending | Pending | Pending | Pending |
@@ -82,6 +82,32 @@ multi-statement transaction, read-back, exact CSV bytes and SQL export into an
 independent database. It also verifies that a same-named table on another
 connection stays unchanged. It does not prove desktop routing, filesystem
 reconnection, cancellation/disconnect or other-provider compatibility.
+
+The same suite has `postgres_live_workflow` and `mysql_live_workflow`, which run
+when `FASTDB_TEST_PG_PORT` / `FASTDB_TEST_MYSQL_PORT` are set (plus optional
+`_HOST`, `_USER`, `_PASSWORD`). Each run recreates two disposable databases,
+`fastdb_wf_a` and `fastdb_wf_b`, so the account needs `CREATE DATABASE`. It covers
+the following steps in order:
+
+1. **Connect:** a ping succeeds and a refused port returns an error.
+2. **Browse:** metadata, a streamed read, and a filtered/ordered read.
+3. **Run:** a script whose failing second statement stops the run while the
+   first result stays separate.
+4. **Edit/save:** a planned change, insert and delete. Row-count and
+   foreign-key failures roll back atomically, and the data is read back
+   through a fresh connection.
+5. **Export:** exact CSV bytes, and SQL INSERTs replayed into another table.
+6. **Identity:** the same-named table in the other database is unchanged.
+7. **Cancel:** a long read is cancelled, followed by a fresh read on the same
+   connection.
+8. **Disconnect:** closing a tab session with an open transaction leaves no
+   committed row.
+
+It does not prove desktop routing, stale UI completions, MariaDB or ODBC
+providers. Validation on 2026-11-09 (commit after `5070f94`, macOS 27.2 arm64)
+used a local PostgreSQL 15.19 cluster and a `mysql:8.4` (8.4.13) container. Both
+tests passed. A mutated expectation made both fail, confirming that the
+assertions were exercised.
 
 `cargo test --workspace --locked` runs deterministic unit tests and SQLite
 integration tests. Live tests often return early when their `FASTDB_TEST_*`

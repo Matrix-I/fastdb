@@ -220,6 +220,14 @@ A separate PostgreSQL 18 container passed all four PostgreSQL integration tests:
 binary decoding against server text, incremental streaming of 20,000 rows,
 query cancellation and connection reuse across short-lived caller runtimes.
 
+### Workflow acceptance (2026-11-09)
+
+`FASTDB_TEST_PG_PORT=… FASTDB_TEST_MYSQL_PORT=… cargo test -p db-wire --test
+workflow_test -- --nocapture` passed against PostgreSQL 15.19 (local cluster)
+and MySQL 8.4.13 (`mysql:8.4` container). The tests cover the connect, browse,
+run, edit/save/read-back, export, cancel and disconnect data paths; see
+[workflow acceptance](WORKFLOW_ACCEPTANCE.md). Desktop acceptance is separate.
+
 See [local server setup](../ci/provider-containers/README.md) for images, ports,
 architecture requirements and the Db2 image's setup workaround.
 
