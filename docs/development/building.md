@@ -60,5 +60,14 @@ Packaging scripts live in [`ci/`](../../ci/):
 ```
 
 ```bash
-./ci/build-linux.sh   # dist/linux/*.deb and an AppImage
+./ci/build-linux.sh   # Linux only: dist/linux/fastdb-linux-x86_64, a .deb and an AppImage
 ```
+
+`ci/package-deb.sh BINARY VERSION OUT_DIR` packages an existing binary; its
+`Depends` field comes from `dpkg-shlibdeps`. `ci/test-package-deb.sh BINARY`
+checks the package on Debian/Ubuntu (needs `dpkg-dev`, `binutils`,
+`desktop-file-utils`).
+
+Releases are built by [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
+when a `vX.Y.Z` or `vX.Y.Z-rc.N` tag is pushed; see
+[`docs/RELEASE_PLAN.md`](../RELEASE_PLAN.md).

@@ -16,22 +16,27 @@ builds every asset, signs the checksum manifest with minisign and creates a
 
 ## Jobs
 
-1. `version`: the tag (without `-rc.N`) must equal the workspace `Cargo.toml`
-   version; outputs the version and the prerelease flag.
+1. `version`: the tag must equal the workspace `Cargo.toml` version exactly
+   (an RC tag needs `X.Y.Z-rc.N` in `Cargo.toml`, so RC builds never claim the
+   final version) and the tagged commit must be on `main`. Outputs the version,
+   the Debian version (`X.Y.Z~rc.N` for an RC) and the prerelease flag.
 2. `macos` (`macos-15`): `cargo test --workspace --locked`, then
    `./bundle_macos.sh --no-install`; uploads `FastDB.dmg`,
    `FastDB-macos-aarch64.zip` and `fastdb-macos-aarch64`. The app version comes
    from `Cargo.toml`, as the bundle script already does.
-3. `linux` (`ubuntu-24.04`): `cargo build --release --locked`, then
+3. `linux` (`ubuntu-24.04`): `cargo test --workspace --locked`,
+   `cargo build --release --locked`, then
    `ci/package-deb.sh` and `ci/test-package-deb.sh`; uploads
-   `fastdb-linux-x86_64` and `fastdb_<version>_amd64.deb`.
+   `fastdb-linux-x86_64` and `fastdb_<tag version>_amd64.deb` (renamed from
+   the `~rc` file name, which GitHub may rewrite).
 4. `deb` (`ubuntu:24.04` container): `apt install` the package, check the
    installed binary matches, `ldd` resolves every library, and `apt remove`
    leaves nothing behind.
 5. `release`: checks the exact asset set, writes and verifies
    `SHA256SUMS.txt`, signs it, verifies the signature against
    `resources/minisign.pub`, and runs `gh release create --draft --verify-tag
-   --generate-notes`. Only this job gets `contents: write` and the secrets, and
+   --generate-notes`. A re-run updates its own draft with `--clobber` and
+   refuses to touch a published release. Only this job gets `contents: write` and the secrets, and
    it uses no third-party actions.
 
 ## Script changes
@@ -53,8 +58,12 @@ builds every asset, signs the checksum manifest with minisign and creates a
 - Run `ci/test-package-deb.sh` in a local `ubuntu:24.04` container with a
   stand-in ELF binary.
 - The workflow itself can only be exercised by pushing a tag. The first real
-  run should be a `v0.2.0-rc.1` tag, which produces a draft prerelease. The
-  user must create the `release` environment and secrets first.
+  run can be a `vX.Y.Z-rc.N` tag (with that version in `Cargo.toml`), which
+  produces a draft prerelease. The user must create the `release` environment
+  and secrets first.
+- Not done: Cargo caching in release jobs (cold builds keep untrusted cache
+  out of the signing pipeline), and a check that `ci.yml` passed for the tagged
+  commit (step 1 of the release checklist; the environment approval is the gate).
 
 ## Docs
 

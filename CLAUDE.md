@@ -70,7 +70,5 @@ Follow the per-release checklist in `docs/RELEASE_PLAN.md` (section 3.2). In sho
 1. `main` is green in CI.
 2. Bump `version` in the root `Cargo.toml` (`[workspace.package]`); commit `chore(release): vX.Y.Z`.
 3. Smoke test the built `.app` launched from Finder.
-4. Tag with `git tag -a vX.Y.Z -m "Release vX.Y.Z - <summary>"` and push the tag. The in-app updater reads GitHub Releases and parses the tag as semver, so tags must be `vX.Y.Z`.
-5. Build with `./ci/build-macos.sh` (and `./ci/build-linux.sh`), then publish the GitHub Release with the artifacts and `SHA256SUMS.txt`. Write the notes with the template in `docs/RELEASE_PLAN.md` (section 3.3), changes taken from `git log <prev-tag>..vX.Y.Z`. Every release must include the macOS Gatekeeper note (`xattr -dr com.apple.quarantine /Applications/FastDB.app`) until the app is notarized.
-
-The `release.yml` workflow named in the release plan does not exist yet; Linux artifacts are built manually for now.
+4. Tag with `git tag -a vX.Y.Z -m "Release vX.Y.Z - <summary>"` and push the tag. The in-app updater reads GitHub Releases and parses the tag as semver, so tags must be `vX.Y.Z` and equal the `Cargo.toml` version (a `vX.Y.Z-rc.N` prerelease needs `X.Y.Z-rc.N` in `Cargo.toml`); the release workflow also requires the tagged commit to be on `main`.
+5. The tag push runs `.github/workflows/release.yml`: it builds the macOS and Linux assets, signs `SHA256SUMS.txt` with minisign (the `release` environment needs reviewer approval and the `MINISIGN_SECRET_KEY`/`MINISIGN_PASSWORD` secrets) and creates a draft release. Review it, then publish. Write the notes with the template in `docs/RELEASE_PLAN.md` (section 3.3), changes taken from `git log <prev-tag>..vX.Y.Z`. Every release must include the macOS Gatekeeper note (`xattr -dr com.apple.quarantine /Applications/FastDB.app`) until the app is notarized.

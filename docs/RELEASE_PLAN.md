@@ -67,9 +67,9 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
 - [x] `ci/build-macos.sh`: sign ad-hoc (`codesign --force --deep --sign -`).
 - [x] `ci/build-macos.sh`: stage the DMG with an `Applications` symlink.
 - [ ] `ci/build-macos.sh`: produce `FastDB-$VERSION-macos-arm64.zip` and write `SHA256SUMS.txt`.
-- [ ] `ci/build-linux.sh`: fail instead of falling back when not on Linux; add `fastdb-$VERSION-linux-x86_64.tar.gz` next to the `.deb` and AppImage.
+- [x] `ci/build-linux.sh`: fails when not on Linux, reads the version from `Cargo.toml` and packages the `.deb` through `ci/package-deb.sh`. It writes `fastdb-linux-x86_64` next to the `.deb` and AppImage; no tarball.
 - [x] Add `/dist` to `.gitignore`.
-- [ ] Add a `.github/workflows/release.yml` triggered on `v*` tags that runs the Linux script on `ubuntu-latest` (same apt packages as `linux-app` in `ci.yml`) and attaches its artifacts to the draft release. macOS stays a local build for now, as in laplace, since there is no signing certificate to put in CI.
+- [x] Add `.github/workflows/release.yml` (2026-11-09, modeled on litty-terminal): a `vX.Y.Z` or `vX.Y.Z-rc.N` tag builds the macOS bundle on `macos-15` and the Linux binary and `.deb` on `ubuntu-24.04`, installs the `.deb` in a clean container, signs `SHA256SUMS.txt` with minisign in the `release` environment and creates a draft release. See [the plan](plans/2026-11-09-release-workflow.md).
 - [x] Add a `LICENSE` file matching the workspace MIT declaration.
 - [x] README: add macOS preview installation instructions with the `xattr -dr com.apple.quarantine /Applications/FastDB.app` notice and a link to `releases/latest`.
 
@@ -81,9 +81,9 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
    - connect to PostgreSQL, MySQL and SQLite; restart and check the saved connections are still there;
    - check the keychain prompt appears once and the password is remembered;
    - run a large query and scroll the result grid.
-4. **Tag**: `git tag -a vX.Y.Z -m "Release vX.Y.Z - <one-line summary>"` and push the tag.
-5. **Build**: `./ci/build-macos.sh` locally; the `release.yml` workflow builds Linux on the tag push.
-6. **Publish**: create the GitHub Release on the tag, attach the macOS artifacts and `SHA256SUMS.txt`, check the Linux artifacts from the workflow, and write the notes from `git log <prev-tag>..vX.Y.Z` using the template in 3.3. The Gatekeeper note is required in every release until the app is notarized.
+4. **Tag**: `git tag -a vX.Y.Z -m "Release vX.Y.Z - <one-line summary>"` and push the tag. The tag must equal the `Cargo.toml` version and point at a commit on `main`. For a release candidate, set `X.Y.Z-rc.N` in `Cargo.toml` and tag `vX.Y.Z-rc.N`; it becomes a draft prerelease.
+5. **Build**: the `release.yml` workflow runs on the tag push. It checks that the tag matches `Cargo.toml`, builds and tests the macOS and Linux assets, signs `SHA256SUMS.txt` after a reviewer approves the `release` environment, and creates a draft release with all assets.
+6. **Publish**: review the draft release and its assets, and replace the generated notes with the template in 3.3, changes taken from `git log <prev-tag>..vX.Y.Z`. The Gatekeeper note is required in every release until the app is notarized. Then publish the draft.
 7. **Verify** by downloading the DMG from the release page on a clean user account and installing it.
 
 ### 3.3 Release notes template
@@ -132,7 +132,7 @@ Intel Macs are out of scope for v0.1.0; a universal binary (`lipo` over `x86_64-
 ## 5. Later
 
 - Developer ID signing and notarization (`notarytool`), which also fixes the keychain re-prompt and removes the `xattr` step. Requires an Apple Developer account.
-- Build macOS in `release.yml` once signing secrets exist.
+- Developer ID signing in `release.yml` once an Apple certificate exists; the workflow currently signs ad-hoc.
 - [x] In-app auto-update checker and installer downloader (GitHub Releases API).
 - Homebrew cask.
 
