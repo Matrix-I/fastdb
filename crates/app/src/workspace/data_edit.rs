@@ -83,7 +83,19 @@ impl Workspace {
         }
         let tab = &mut self.tabs[self.active_tab];
         let is_deleted = matches!(tab.grid.changeset.resolve_row(row), RowRef::Fetched(f) if tab.grid.changeset.is_deleted(f));
-        if is_deleted || row >= tab.grid.row_count() || !tab.grid.display_columns().contains(&col) {
+        let compact_row = tab
+            .record_view
+            .as_ref()
+            .is_some_and(|view| view.shows_compact_row(&tab.grid, row));
+        let visible = if compact_row {
+            tab.grid
+                .pager
+                .as_ref()
+                .is_some_and(|pager| col < pager.columns.len())
+        } else {
+            tab.grid.display_columns().contains(&col)
+        };
+        if is_deleted || row >= tab.grid.row_count() || !visible {
             return;
         }
         if tab.is_script()
@@ -108,6 +120,13 @@ impl Workspace {
             tab.last_error =
                 Some("Use Value editor to edit binary bytes without text conversion".into());
             return;
+        }
+        if tab
+            .record_view
+            .as_ref()
+            .is_some_and(|view| view.compact && !compact_row)
+        {
+            tab.leave_record_view();
         }
         let text = tab.grid.cell_value(row, col).unwrap_or_default();
         tab.grid.selection = ui_grid::GridSelection::single(row, col);
@@ -151,6 +170,13 @@ impl Workspace {
         };
         let unchanged_text =
             tab.grid.cell_value(edit.row, edit.col).as_deref() == Some(edit.text.as_str());
+        let record_view = tab
+            .record_view
+            .as_mut()
+            .filter(|view| view.shows_compact_row(&tab.grid, edit.row));
+        let record_value = record_view
+            .as_ref()
+            .map(|_| super::record_view::preview(edit.text.as_bytes()));
         tab.grid
             .stage(|changeset| match changeset.resolve_row(edit.row) {
                 RowRef::New(i) => {
@@ -174,6 +200,9 @@ impl Workspace {
                     }
                 }
             });
+        if let Some((view, value)) = record_view.zip(record_value) {
+            view.update_compact_cell(edit.col, value, tab.grid.changeset_revision());
+        }
     }
 
     pub(super) fn set_grid_empty_value(
@@ -450,6 +479,9 @@ impl Workspace {
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.grid.editing_cell = None;
+            if tab.record_view.as_ref().is_some_and(|view| view.compact) {
+                tab.leave_record_view();
+            }
             let had_rows = !tab.grid.changeset.inserted_rows.is_empty();
             tab.grid.stage(|changeset| changeset.clear());
             if had_rows {
@@ -468,7 +500,11 @@ impl Workspace {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
-        tab.grid.step_staged_edits(redo);
+        if tab.grid.step_staged_edits(redo)
+            && tab.record_view.as_ref().is_some_and(|view| view.compact)
+        {
+            tab.leave_record_view();
+        }
     }
 
     pub(super) fn table_edit_statements(&self, index: usize) -> Result<Vec<String>, String> {

@@ -6,6 +6,10 @@ fn strip_label(path: &'static str, height: f32) -> gpui::Svg {
 
 type StripAction = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>) + 'static>;
 
+fn value_panel_visible(layout: &WorkspaceLayout, compact_record: Option<bool>) -> bool {
+    layout.show_right_panels && !layout.focus_data && compact_record != Some(false)
+}
+
 impl Workspace {
     /// Shared table/SQL results, with independent presentation and single-record selection.
     pub(super) fn render_data_panel(
@@ -18,9 +22,10 @@ impl Workspace {
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
         let view_mode = tab.view_mode;
-        let record_mode = tab.record_view.is_some();
-        let show_right_panels =
-            self.layout.show_right_panels && !self.layout.focus_data && !record_mode;
+        let record = tab.record_view.as_ref().map(|view| view.compact);
+        let record_mode = record.is_some();
+        let compact_record = record == Some(true);
+        let show_right_panels = value_panel_visible(&self.layout, record);
         let mut data_row = div().flex().flex_row().flex_1().w_full().overflow_hidden();
 
         let tab_id = tab.id;
@@ -100,8 +105,14 @@ impl Workspace {
                     "icons/label_text.svg",
                     24.0,
                     view_mode == DataViewMode::Text,
-                    Box::new(|this, _| {
+                    Box::new(move |this, _| {
+                        if compact_record {
+                            this.commit_cell_edit();
+                        }
                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
+                            if t.record_view.as_ref().is_some_and(|view| view.compact) {
+                                t.leave_record_view();
+                            }
                             t.view_mode = DataViewMode::Text;
                         }
                     }),
@@ -115,6 +126,9 @@ impl Workspace {
                     37.0,
                     record_mode,
                     Box::new(move |this, cx| {
+                        if compact_record {
+                            this.commit_cell_edit();
+                        }
                         if let Some(t) = this.tabs.get_mut(this.active_tab) {
                             if t.record_view.is_some() {
                                 t.leave_record_view();
@@ -582,6 +596,25 @@ mod tests {
     use super::format_text_presentation;
     use db_wire::{ColumnMeta, DataType, QueryResultPager};
     use ui_grid::Changeset;
+
+    #[test]
+    fn panels_toggle_shows_the_focused_value_in_compact_record() {
+        let mut layout = super::WorkspaceLayout {
+            resizing_column: None,
+            resizing_panel: None,
+            navigator_width: 0.0,
+            value_panel_width: 0.0,
+            show_right_panels: false,
+            focus_data: false,
+        };
+        assert!(!super::value_panel_visible(&layout, Some(true)));
+        layout.show_right_panels = true;
+        assert!(super::value_panel_visible(&layout, Some(true)));
+        assert!(super::value_panel_visible(&layout, None));
+        assert!(!super::value_panel_visible(&layout, Some(false)));
+        layout.focus_data = true;
+        assert!(!super::value_panel_visible(&layout, Some(true)));
+    }
 
     #[test]
     fn text_table_uses_a_single_monospace_family() {

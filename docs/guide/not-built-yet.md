@@ -8,7 +8,7 @@
 
 - **Navigator search acceptance.** The single search field, mode menu, tooltips and mode-specific results are implemented; manual acceptance of connection, schema/object, saved-file filtering and selection remains pending.
 
-- **Record presentation acceptance.** Record now combines with Grid/Text in both table and SQL results; transposed grid/text layout, switching and scrolling await manual GUI acceptance.
+- **Record presentation acceptance.** Record now combines with Grid/Text in both table and SQL results; transposed grid/text layout, Tab toggling, Escape handling, inline editing and the Value panel in the table grid row preview, switching and scrolling await manual GUI acceptance.
 
 - **Plain-text result acceptance.** Table tabs and SQL query results share a monospace text table; visual alignment and horizontal scrolling await manual GUI acceptance.
 

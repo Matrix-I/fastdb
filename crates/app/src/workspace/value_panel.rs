@@ -155,6 +155,8 @@ impl Workspace {
         {
             self.commit_cell_edit();
         }
+        self.navigator_filter.field_focused = false;
+        self.navigator_filter.menu_open = false;
         self.input.is_filter_focused = false;
         self.blur_fetch_size();
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {

@@ -2,6 +2,30 @@ use ui_core::history::UndoKey;
 
 use super::*;
 
+fn is_record_tab(event: &KeyDownEvent) -> bool {
+    event.keystroke.key == "tab" && !event.keystroke.modifiers.modified() && !event.is_held
+}
+
+fn closes_record_view(compact: bool, event: &KeyDownEvent) -> bool {
+    if compact {
+        is_record_tab(event)
+    } else {
+        event.keystroke.key == "escape"
+    }
+}
+
+fn opens_record_view(tab: &TabState, event: &KeyDownEvent) -> bool {
+    is_record_tab(event)
+        && tab.table_name.is_some()
+        && tab.active_subtab == TableSubTab::Data
+        && tab.view_mode == DataViewMode::Grid
+        && tab
+            .grid
+            .selection
+            .focus
+            .is_some_and(|cell| cell.row < tab.grid.row_count())
+}
+
 impl Workspace {
     /// Handles every key press for the window: app shortcuts, the connection form,
     /// the filter bar and the SQL editor
@@ -192,6 +216,10 @@ impl Workspace {
             && self.menus.column_menu.is_none()
             && self.menus.nav_context_menu.is_none()
             && self.layout.focus_data
+            && !self.tabs.get(self.active_tab).is_some_and(|tab| {
+                tab.active_subtab == TableSubTab::Data
+                    && tab.record_view.as_ref().is_some_and(|view| view.compact)
+            })
             && !self.form.show_connection_modal
             && self.script_action.is_none()
             && self.script_chooser.is_none()
@@ -483,10 +511,15 @@ impl Workspace {
                 }
                 self.input.cursor_visible = true;
                 cx.notify();
-            } else if tab.record_view.is_some() {
-                // The read-only view does not route shortcuts to the hidden grid.
-                if event.keystroke.key == "escape" {
+            } else if let Some(view) = &tab.record_view {
+                // Only the editable preview routes undo and redo to the hidden grid.
+                if closes_record_view(view.compact, event) {
                     tab.leave_record_view();
+                    cx.notify();
+                } else if view.compact
+                    && let Some(undo_key) = UndoKey::from_keystroke(&event.keystroke)
+                {
+                    self.step_pending_edits(undo_key == UndoKey::Redo);
                     cx.notify();
                 } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                     && event.keystroke.key.eq_ignore_ascii_case("c")
@@ -494,6 +527,10 @@ impl Workspace {
                 {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
+            } else if opens_record_view(tab, event) {
+                let tab_id = tab.id;
+                self.open_compact_record_view(tab_id, cx);
+                cx.stop_propagation();
             } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                 && event.keystroke.key.eq_ignore_ascii_case("v")
             {
@@ -559,9 +596,19 @@ impl Workspace {
             "tab" => {
                 let next = self.tabs.get(self.active_tab).and_then(|t| {
                     let edit = t.grid.editing_cell.as_ref()?;
-                    t.grid
-                        .adjacent_column(edit.col, !keystroke.modifiers.shift)
-                        .map(|col| (edit.row, col))
+                    let forward = !keystroke.modifiers.shift;
+                    let col = if t.record_view.as_ref().is_some_and(|view| view.compact) {
+                        if forward {
+                            edit.col.checked_add(1).filter(|col| {
+                                *col < t.grid.pager.as_ref().map_or(0, |pager| pager.columns.len())
+                            })
+                        } else {
+                            edit.col.checked_sub(1)
+                        }
+                    } else {
+                        t.grid.adjacent_column(edit.col, forward)
+                    }?;
+                    Some((edit.row, col))
                 });
                 self.commit_cell_edit();
                 if let Some((row, col)) = next {
@@ -591,5 +638,72 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use db_wire::{ColumnMeta, QueryResultPager};
+    use gpui::{KeyDownEvent, Keystroke};
+    use mem_engine::DataType;
+    use ui_core::theme::Theme;
+    use ui_grid::{GridSelection, VirtualDataGrid};
+
+    use super::{DataViewMode, TabState, TableSubTab, closes_record_view, opens_record_view};
+
+    #[test]
+    fn only_tab_closes_the_compact_record_from_the_keyboard() {
+        let mut event = KeyDownEvent {
+            keystroke: Keystroke::parse("escape").unwrap(),
+            is_held: false,
+        };
+        assert!(!closes_record_view(true, &event));
+        assert!(closes_record_view(false, &event));
+
+        event.keystroke = Keystroke::parse("tab").unwrap();
+        assert!(closes_record_view(true, &event));
+        assert!(!closes_record_view(false, &event));
+
+        event.is_held = true;
+        assert!(!closes_record_view(true, &event));
+        event.is_held = false;
+        event.keystroke = Keystroke::parse("shift-tab").unwrap();
+        assert!(!closes_record_view(true, &event));
+    }
+
+    #[test]
+    fn tab_opens_record_only_for_a_loaded_selection_in_the_table_grid() {
+        let mut event = KeyDownEvent {
+            keystroke: Keystroke::parse("tab").unwrap(),
+            is_held: false,
+        };
+        let cache = Arc::new(sql_intel::SchemaCache::new().unwrap());
+        let theme = Theme::dark();
+        let mut tab = TabState::table(1, "public", "example", theme.clone(), cache);
+        let pager =
+            Arc::new(QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int8)]).unwrap());
+        pager.append_row([Some(b"1".as_slice())]).unwrap();
+        pager.append_row([Some(b"2".as_slice())]).unwrap();
+        tab.grid = VirtualDataGrid::new(Some(pager), theme);
+
+        assert!(!opens_record_view(&tab, &event));
+        tab.grid.selection = GridSelection::single(2, 0);
+        assert!(!opens_record_view(&tab, &event));
+        tab.grid.selection = GridSelection::single(1, 0);
+        assert!(opens_record_view(&tab, &event));
+        event.is_held = true;
+        assert!(!opens_record_view(&tab, &event));
+        event.is_held = false;
+        event.keystroke = Keystroke::parse("shift-tab").unwrap();
+        assert!(!opens_record_view(&tab, &event));
+        event.keystroke = Keystroke::parse("tab").unwrap();
+
+        tab.view_mode = DataViewMode::Text;
+        assert!(!opens_record_view(&tab, &event));
+        tab.view_mode = DataViewMode::Grid;
+        tab.active_subtab = TableSubTab::Properties;
+        assert!(!opens_record_view(&tab, &event));
     }
 }
