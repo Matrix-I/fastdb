@@ -36,10 +36,9 @@ Source: `main` at `de2c054`. P2 work waits until this verification is done.
   PostgreSQL 15.19 and MySQL 8.4.13 on 2026-11-09. The P0-05 desktop cases
   (C02/C04, B01–B03, G01–G03, S01/S05/S06, T02/T03, X01–X06, L01–L04) still
   decide the checkbox.
-- **The full automated suite must be re-run on the release commit.** Run
-  `cargo test --workspace --locked` with `FASTDB_REQUIRE_DB_TESTS=1` and live
-  PostgreSQL/MySQL, plus `./ci/test-tls.sh`. The evidence below is from
-  `84dcfb0` and does not cover later commits.
+- **The full automated suite passed on `0d03b04` (2026-11-09).** See
+  [Automated re-run on 0d03b04](#automated-re-run-on-0d03b04). Re-run it if
+  code changes before the release tag.
 - **These release gates are still open:**
   - Version bump in `Cargo.toml` and in `ci/build-*.sh`, which hard-code 0.1.0.
   - A real 0.2.0 bundle, launched from Finder.
@@ -55,7 +54,26 @@ Source: `main` at `de2c054`. P2 work waits until this verification is done.
   - Smart commit is not implemented.
   - MariaDB, Oracle, SQL Server and Db2 are disabled.
 
-## Automated evidence
+## Automated re-run on 0d03b04
+
+Date: 2026-11-09. Environment: macOS arm64, Podman. GitHub CI for `0d03b04`
+completed successfully.
+
+- `FASTDB_REQUIRE_DB_TESTS=1 FASTDB_TEST_PG_PORT=55439 FASTDB_TEST_PG_USER=postgres FASTDB_TEST_MYSQL_PORT=55440 FASTDB_TEST_MYSQL_USER=root FASTDB_TEST_MYSQL_PASSWORD=<fixture password> cargo test --workspace --locked`:
+  exit 0; 38 suites, 658 passed, 0 failed, 0 ignored. Disposable PostgreSQL 16
+  and MySQL 8.4 containers were used (MySQL with the `fastdb_test` database, as
+  in CI) and removed afterwards.
+- `./ci/test-tls.sh`: 6 live TLS tests and 2 SSH-over-TLS tests passed. As in
+  the earlier audit, Podman could not mount the default macOS temporary
+  directory (`mkdir /var/folders: permission denied`), and `TMPDIR` was not
+  honored. The passing run put a `mktemp` shim on `PATH` that created the
+  certificate directory under `target/`. The script itself was unchanged.
+- The same early-return caveat applies: SQL Server, Oracle, Db2 and native
+  Keychain (`FASTDB_TEST_KEYCHAIN=1` not set) are not certified by these counts.
+- `cargo fmt` and `cargo clippy` were not re-run here. They are covered by CI
+  for this commit.
+
+## Automated evidence (2026-11-05 audit)
 
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`: passed.
