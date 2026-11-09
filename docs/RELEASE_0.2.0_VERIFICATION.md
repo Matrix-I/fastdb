@@ -40,7 +40,10 @@ Source: `main` at `de2c054`. P2 work waits until this verification is done.
   [Automated re-run on 0d03b04](#automated-re-run-on-0d03b04). Re-run it if
   code changes before the release tag.
 - **These release gates are still open:**
-  - Version bump in `Cargo.toml` and in `ci/build-*.sh`, which hard-code 0.1.0.
+  - ~~Version bump in `Cargo.toml` and in `ci/build-*.sh`~~: done in
+    `chore(release): v0.2.0`. fmt, clippy `-D warnings`, `cargo test
+    --workspace --locked` (658 passed) and `ci/test_bundle_macos.py` (7 passed)
+    were re-run after the bump.
   - A real 0.2.0 bundle, launched from Finder.
   - Keychain behavior across updates.
   - A clean-user DMG install.
