@@ -1602,7 +1602,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "db-wire"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2121,7 +2121,7 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fastdb-app"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "block",
@@ -3938,7 +3938,7 @@ checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "mem-engine"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4954,7 +4954,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "platform-hal"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "directories",
@@ -6607,7 +6607,7 @@ dependencies = [
 
 [[package]]
 name = "sql-intel"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -7609,7 +7609,7 @@ dependencies = [
 
 [[package]]
 name = "ui-core"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7617,7 +7617,7 @@ dependencies = [
 
 [[package]]
 name = "ui-editor"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "gpui",
  "platform-hal",
@@ -7628,7 +7628,7 @@ dependencies = [
 
 [[package]]
 name = "ui-grid"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "gpui",
  "itoa",
@@ -8927,7 +8927,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "chrono",
