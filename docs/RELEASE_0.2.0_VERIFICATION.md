@@ -19,6 +19,42 @@ current manual pass. Its source review identified incomplete P1-08 desktop
 transfer and configurable CSV mapping/encoding/NULL-token controls; these need
 implementation or explicit release deferral rather than a passing checkbox.
 
+## Update 2026-11-09: points still to verify before release
+
+Source: `main` at `de2c054`. P2 work waits until this verification is done.
+
+- **P1-08 gaps are now implemented**, so they need GUI checks, not a release
+  deferral. The runbook covers them in X04 (transfer entries, destination picker,
+  read-query guard), X05 (full export Cancel and live count) and X06 (encoding,
+  NULL token, manual mapping, conversions, skip invalid values, cancel without
+  losing the outcome).
+- **Work merged on 2026-11-06/07 has no GUI evidence yet.** The runbook covers it
+  in W01–W07: the workspace header, navigator search modes, table tab
+  transactions, the Transaction log, script result sizing, Record/Text and the
+  connection dialog tabs.
+- **P0-05 data paths are automated.** `workflow_test` passed live against
+  PostgreSQL 15.19 and MySQL 8.4.13 on 2026-11-09. The P0-05 desktop cases
+  (C02/C04, B01–B03, G01–G03, S01/S05/S06, T02/T03, X01–X06, L01–L04) still
+  decide the checkbox.
+- **The full automated suite must be re-run on the release commit.** Run
+  `cargo test --workspace --locked` with `FASTDB_REQUIRE_DB_TESTS=1` and live
+  PostgreSQL/MySQL, plus `./ci/test-tls.sh`. The evidence below is from
+  `84dcfb0` and does not cover later commits.
+- **These release gates are still open:**
+  - Version bump in `Cargo.toml` and in `ci/build-*.sh`, which hard-code 0.1.0.
+  - A real 0.2.0 bundle, launched from Finder.
+  - Keychain behavior across updates.
+  - A clean-user DMG install.
+  - A Linux build on Linux.
+  - Release `panic = "abort"` recovery.
+- **Known limits to record in the release notes if accepted:**
+  - Transfer/import write only into existing tables.
+  - Mapping choices are not saved between runs.
+  - The read-query guard refuses `FOR UPDATE`.
+  - Value editing caps at 256 KiB.
+  - Smart commit is not implemented.
+  - MariaDB, Oracle, SQL Server and Db2 are disabled.
+
 ## Automated evidence
 
 - `cargo fmt --all -- --check`: passed.
