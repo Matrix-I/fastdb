@@ -1,5 +1,7 @@
 # Not built yet
 
+- **Navigator bulk actions.** Shift+click range selection and Escape clearing are implemented; the user accepted the selection behavior. Context-menu actions still apply only to the clicked target; bulk context-menu actions are not implemented.
+
 - **Transaction log acceptance.** The split transaction toolbar selector (`T`/arrow for the mode menu, `Auto`/`Manual` label for the session-only Transaction log) and bounded disk-backed log modal have automated coverage; manual GUI acceptance is pending.
 
 - **Table transactions acceptance.** Table tabs own dedicated physical sessions with Auto-Commit and Manual modes, Save/Commit/Rollback transaction boundaries, read-your-writes, and batch savepoint recovery; manual GUI verification is pending.
