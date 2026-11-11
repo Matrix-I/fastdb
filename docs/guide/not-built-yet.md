@@ -12,7 +12,6 @@
 
 - **Transfer formats and analysis.** HTML, Markdown and JSON export of loaded results and focused ER SVG export are wired; desktop acceptance is pending. JSON import and full-source export, spreadsheet transfer, format options and result aggregates/charts remain open.
 
-- **Data and schema search.** PostgreSQL, MySQL and SQLite support scoped definition and table data search. MySQL and SQLite display captured row previews. PostgreSQL opens a verified row version. Further PostgreSQL definition families and desktop acceptance remain open.
 
 - **Record presentation acceptance.** Record now combines with Grid/Text in both table and SQL results; transposed grid/text layout, Tab toggling, Escape handling, inline editing and the Value panel in the table grid row preview, switching and scrolling await manual GUI acceptance.
 

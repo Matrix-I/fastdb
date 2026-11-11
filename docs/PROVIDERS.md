@@ -408,13 +408,21 @@ Catalog sections retain their existing dedicated read-only PG connection,
 server/client deadlines and connection-generation guards. Refresh retries failed
 metadata; unavailable readers are not called. UI acceptance is pending.
 
+## PostgreSQL definition search
+
+The exact schema scope covers views and materialized views, functions and
+procedures, non-internal triggers, rules, indexes, table and domain constraints,
+row-level security policies and extended statistics. Policy source includes
+command, mode, roles and any explicit predicates. Statistics are scoped by the
+statistics object’s schema. Definitions are read in a dedicated read-only
+transaction with a shared match limit and a bounded source preview.
+
 ## SQLite definition search
 
 The navigator searches stored CREATE statements for tables, views, indexes
 and triggers in the saved database's `main` schema. It uses a dedicated
 read-only handle for files and the owning handle for in-memory databases.
 Search uses ASCII case folding, a bounded result list and cancellation.
-Desktop acceptance is pending.
 
 SQLite data search uses the same catalog worker for ordinary tables in
 `main`. Table metadata and matches come from one read transaction.
@@ -425,8 +433,7 @@ Selecting a result displays the bounded preview captured during the scan.
 The navigator reads visible view SELECT text, stored function and procedure
 bodies, and trigger bodies from the selected MySQL database. Visibility follows
 the connection user's catalog privileges. The read-only scan uses bound values,
-a shared result limit and server-side cancellation. Desktop acceptance is
-pending.
+a shared result limit and server-side cancellation.
 
 Table data search resolves and scans one base table at a time in a read-only
 transaction. Results include bounded previews captured by the search query,

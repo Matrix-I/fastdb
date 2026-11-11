@@ -194,13 +194,14 @@ fn search_sql(qualified: &str, columns: &[String]) -> String {
 ```
 
 - [x] Wire the existing trait methods, enable MySQL in the data picker and footer, and initialize the picker from the saved database. Label MySQL results as captured previews.
-- [ ] Run the live regression. Ready to commit the driver, app and tests — `feat(db-wire): search MySQL table data`.
+- [x] Run the live regression.
 
 ## Task 2 — Verification and documentation
 
 - [x] Update the roadmap, provider guide and navigator guide.
-- [ ] Inspect the native query plan on a large fixture. Review the diff, run formatter, Clippy, workspace tests and app build, and smoke-test startup.
-- [ ] Obtain independent review and document manual GUI acceptance.
+- [x] Inspect the native query plan on a large fixture. Review the diff, run formatter, Clippy, workspace tests and app build, and smoke-test startup.
+- [x] Obtain independent review.
+- [x] Complete manual desktop acceptance. The user confirmed testing passed.
 
 ## Verification evidence
 
@@ -212,6 +213,16 @@ fn search_sql(qualified: &str, columns: &[String]) -> String {
   The search runner now reuses the dedicated MySQL control connection and
   discards the interrupted connection. Follow-up review found no remaining
   issue on that path. Pool saturation was reviewed by inspection.
-- The live MySQL rerun and native query plan remain pending. The local Podman
-  VM failed to start, first at gvproxy readiness and then with vfkit terminated.
-  Desktop search acceptance remains manual.
+- MySQL Community Server 8.4.11 ran from the macOS ARM64 archive in a
+  disposable local fixture. All seven tests in
+  `cargo test -p db-wire --test mysql_test --locked` passed with
+  `FASTDB_TEST_MYSQL_PORT` set. This includes bounded captured previews,
+  literal terms, active metadata-lock cancellation and a successful search
+  after cancellation.
+- On a 100,000-row fixture with three searchable columns, MySQL
+  `EXPLAIN ANALYZE` showed the matching scan stopping at 51,000 rows
+  after returning 51 hits in 29.2 ms. The no-match search scanned 100,000
+  rows in 57.7 ms. Both were single scans without a result sort. The
+  no-match cardinality estimate remained high because the literal infix
+  predicate has no selectivity estimate. Metadata used dictionary indexes
+  for the exact schema and table and sorted three column rows in 0.097 ms.

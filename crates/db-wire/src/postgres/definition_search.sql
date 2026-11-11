@@ -1,4 +1,24 @@
-WITH candidates AS (
+WITH policy_definitions AS NOT MATERIALIZED (
+    SELECT p.oid,
+           format('CREATE POLICY %I ON %s AS %s FOR %s TO %s%s%s;',
+               p.polname, p.polrelid::regclass,
+               CASE WHEN p.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END,
+               CASE p.polcmd
+                   WHEN 'r' THEN 'SELECT'
+                   WHEN 'a' THEN 'INSERT'
+                   WHEN 'w' THEN 'UPDATE'
+                   WHEN 'd' THEN 'DELETE'
+                   ELSE 'ALL'
+               END,
+               (SELECT string_agg(
+                    CASE WHEN role = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(role)) END,
+                    ', ' ORDER BY role)
+                FROM unnest(p.polroles) AS roles(role)),
+               coalesce(' USING (' || pg_get_expr(p.polqual, p.polrelid) || ')', ''),
+               coalesce(' WITH CHECK (' || pg_get_expr(p.polwithcheck, p.polrelid) || ')', '')
+           ) AS definition
+    FROM pg_policy p
+), candidates AS (
     SELECT c.oid, c.relname::text AS name,
            CASE WHEN c.relkind = 'm' THEN 'materialized view' ELSE 'view' END AS kind,
            ''::text AS relation
@@ -51,10 +71,7 @@ WITH candidates AS (
             WHEN 'constraint' THEN pg_get_constraintdef(oid)
             WHEN 'statistics' THEN pg_get_statisticsobjdef(oid)
             WHEN 'policy' THEN (
-                SELECT concat_ws(E'\n',
-                    'USING (' || pg_get_expr(p.polqual, p.polrelid) || ')',
-                    'WITH CHECK (' || pg_get_expr(p.polwithcheck, p.polrelid) || ')')
-                FROM pg_policy p WHERE p.oid = candidates.oid
+                SELECT p.definition FROM policy_definitions p WHERE p.oid = candidates.oid
             )
             ELSE pg_get_viewdef(oid, false)
         END
@@ -75,10 +92,7 @@ CROSS JOIN LATERAL (
                WHEN 'constraint' THEN pg_get_constraintdef(oid)
                WHEN 'statistics' THEN pg_get_statisticsobjdef(oid)
                WHEN 'policy' THEN (
-                   SELECT concat_ws(E'\n',
-                       'USING (' || pg_get_expr(p.polqual, p.polrelid) || ')',
-                       'WITH CHECK (' || pg_get_expr(p.polwithcheck, p.polrelid) || ')')
-                   FROM pg_policy p WHERE p.oid = matches.oid
+                   SELECT p.definition FROM policy_definitions p WHERE p.oid = matches.oid
                )
                ELSE pg_get_viewdef(oid, false)
            END AS definition
