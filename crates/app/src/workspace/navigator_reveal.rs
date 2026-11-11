@@ -21,7 +21,7 @@ fn reveal_relation(state: &mut NavigatorState, relation: &TableSummary) {
     state
         .nav_tables_expanded
         .insert(RelationGroup::from_type(&relation.table_type).expansion_key(&relation.schema));
-    state.selected_relation = Some((relation.schema.clone(), relation.name.clone()));
+    state.select_relation(Some((relation.schema.clone(), relation.name.clone())));
 }
 
 impl Workspace {

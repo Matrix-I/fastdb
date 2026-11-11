@@ -332,7 +332,7 @@ impl Workspace {
                             .navigator_mut()
                             .nav_subfolder_expanded
                             .clear();
-                        this.connections.navigator_mut().selected_relation = None;
+                        this.connections.navigator_mut().select_relation(None);
 
                         for t in this.connections.active().tables.clone() {
                             this.connections
