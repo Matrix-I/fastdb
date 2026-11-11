@@ -61,4 +61,4 @@ broader. The manual desktop workflow requires a dedicated display host.
 
 - The engine and driver crates against `postgres:16` and `mysql:8.4` service containers, with `FASTDB_REQUIRE_DB_TESTS` set.
 - A full workspace build and test on macOS.
-- A Linux build of the app.
+- A full workspace clippy, build and test on Linux.
