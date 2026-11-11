@@ -410,6 +410,12 @@ metadata; unavailable readers are not called. UI acceptance is pending.
 
 ## PostgreSQL definition search
 
+Source audit (2026-11-12): definition-search APIs remain implemented for
+PostgreSQL, MySQL and SQLite, but their navigator UI entry points have been
+removed. The descriptions below document driver capabilities. Current desktop
+data search opens from an individual table footer; multi-table scope is not
+exposed. Historical live-test evidence is not a new verification run.
+
 The exact schema scope covers views and materialized views, functions and
 procedures, non-internal triggers, rules, indexes, table and domain constraints,
 row-level security policies and extended statistics. Policy source includes
@@ -419,7 +425,7 @@ transaction with a shared match limit and a bounded source preview.
 
 ## SQLite definition search
 
-The navigator searches stored CREATE statements for tables, views, indexes
+The SQLite driver searches stored CREATE statements for tables, views, indexes
 and triggers in the saved database's `main` schema. It uses a dedicated
 read-only handle for files and the owning handle for in-memory databases.
 Search uses ASCII case folding, a bounded result list and cancellation.
@@ -430,7 +436,7 @@ Selecting a result displays the bounded preview captured during the scan.
 
 ## MySQL definition and table data search
 
-The navigator reads visible view SELECT text, stored function and procedure
+The MySQL driver reads visible view SELECT text, stored function and procedure
 bodies, and trigger bodies from the selected MySQL database. Visibility follows
 the connection user's catalog privileges. The read-only scan uses bound values,
 a shared result limit and server-side cancellation.

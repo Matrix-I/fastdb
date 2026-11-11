@@ -1,5 +1,15 @@
 # MySQL definition search implementation plan
 
+## Status audit — 2026-11-12
+
+Source baseline: `76e8815`. The provider driver and native regression tests
+are implemented. Implementation boxes confirmed from source are checked;
+unchecked reproduction, review, verification and commit steps are not inferred
+from source alone. Existing measurement/acceptance evidence below remains
+historical, not a fresh test run. Navigator definition/multi-table search
+entries have since been removed; current data search opens from a table footer.
+See the [current P2 checklist](2026-11-10-p2-search-plans-transfer.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: development-superpowers:subagent-driven-development or executing-plans-strict. Steps use `- [ ]`.
 
 **Goal / Architecture / Tech Stack / Branch:** Add native MySQL definition search through the existing trait and GPUI navigator. Rust, mysql_async and MySQL 8. Existing worktree on main, with no commit authorized.
@@ -86,7 +96,7 @@ fn mysql_search_definitions_matches_literal_native_source() {
 }
 ```
 
-- [ ] Add `mod definition_search;` to MySQL and override:
+- [x] Add `mod definition_search;` to MySQL and override:
 
 ```rust
 async fn search_definitions(
@@ -96,7 +106,7 @@ async fn search_definitions(
 }
 ```
 
-- [ ] Add `crates/db-wire/src/mysql/definition_search.rs`.
+- [x] Add `crates/db-wire/src/mysql/definition_search.rs`.
 
 ```rust
 use super::*;
@@ -304,7 +314,7 @@ async fn query_definitions(
 
 ## Task 2 — Verification and documentation
 
-- [ ] Update the navigator guide, provider guide, gaps and roadmap with MySQL source scope and GUI status.
+- [x] Update the navigator guide, provider guide, gaps and roadmap with MySQL source scope and GUI status.
 - [ ] Inspect real MySQL query plans, run the full test gate and smoke the app process. Report any missing live environment or manual GUI evidence.
 - [ ] Obtain independent implementation review and repeat the final gate after edits.
 - [ ] Ready to commit: docs — `docs: describe MySQL definition search`.

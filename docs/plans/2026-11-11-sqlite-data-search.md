@@ -1,5 +1,15 @@
 # SQLite table data search implementation plan
 
+## Status audit — 2026-11-12
+
+Source baseline: `76e8815`. The provider driver and native regression tests
+are implemented. Implementation boxes confirmed from source are checked;
+unchecked reproduction, review, verification and commit steps are not inferred
+from source alone. Existing measurement/acceptance evidence below remains
+historical, not a fresh test run. Navigator definition/multi-table search
+entries have since been removed; current data search opens from a table footer.
+See the [current P2 checklist](2026-11-10-p2-search-plans-transfer.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: development-superpowers:subagent-driven-development or executing-plans-strict. Steps use `- [ ]`.
 
 **Goal / Architecture / Tech Stack / Branch:** Extend P2-04 to SQLite table values through the shared GPUI scope picker and native rusqlite driver. Worktree is on main. Commit policy is explicit authorization only.
@@ -66,9 +76,9 @@ async fn sqlite_data_search_returns_captured_keyless_and_without_rowid_matches()
 }
 ```
 
-- [ ] Extract a private SQLite `run_catalog_read` worker from the definition adapter. It takes the database, owned handle, cancellation receiver, operation label and synchronous query callback. Keep the existing read-only flags, bounded waits and progress cleanup.
-- [ ] Store existing PostgreSQL fields as `DataRowIdentity::Postgres(PostgresRowLocator)`. Add `DataRowIdentity::Sqlite(DataRowPreview)` and return its captured preview on selection.
-- [ ] Add the SQLite search module below and wire both existing driver methods.
+- [x] Extract a private SQLite `run_catalog_read` worker from the definition adapter. It takes the database, owned handle, cancellation receiver, operation label and synchronous query callback. Keep the existing read-only flags, bounded waits and progress cleanup.
+- [x] Store existing PostgreSQL fields as `DataRowIdentity::Postgres(PostgresRowLocator)`. Add `DataRowIdentity::Sqlite(DataRowPreview)` and return its captured preview on selection.
+- [x] Add the SQLite search module below and wire both existing driver methods.
 
 ```rust
 use super::*;
@@ -249,7 +259,7 @@ fn display_text(row: &rusqlite::Row<'_>, index: usize) -> Result<Option<String>>
 
 ## Task 2 — Verification and docs
 
-- [ ] Update navigator guide, provider guide, remaining features and roadmap.
+- [x] Update navigator guide, provider guide, remaining features and roadmap.
 - [ ] Review full diff and untracked files. Run formatter, workspace Clippy, workspace tests and app build. Inspect EXPLAIN QUERY PLAN on a large SQLite fixture and smoke the app process.
 - [ ] Obtain independent review and rerun final gate after changes. Report manual GUI acceptance pending.
 

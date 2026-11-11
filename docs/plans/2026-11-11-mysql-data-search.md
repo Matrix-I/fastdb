@@ -1,5 +1,15 @@
 # MySQL table data search implementation plan
 
+## Status audit — 2026-11-12
+
+Source baseline: `76e8815`. The provider driver and native regression tests
+are implemented. Implementation boxes confirmed from source are checked;
+unchecked reproduction, review, verification and commit steps are not inferred
+from source alone. Existing measurement/acceptance evidence below remains
+historical, not a fresh test run. Navigator definition/multi-table search
+entries have since been removed; current data search opens from a table footer.
+See the [current P2 checklist](2026-11-10-p2-search-plans-transfer.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: development-superpowers:subagent-driven-development or executing-plans-strict. Steps use `- [ ]`.
 
 **Goal / Architecture / Tech Stack / Branch:** Add MySQL data search to the existing GPUI scope picker using Rust and mysql_async. The worktree is on main and no commit is authorized.
@@ -68,8 +78,8 @@ fn mysql_data_search_matches_literals_and_opens_captured_rows() {
 }
 ```
 
-- [ ] Extract the existing MySQL definition search timeout/cancel runner as `run_catalog_search`, accepting a static label and a boxed async operation over the checked-out connection. Preserve existing behavior for definition search.
-- [ ] Add the SQLite-equivalent captured preview variant `DataRowIdentity::MySql(DataRowPreview)` and the following driver module.
+- [x] Extract the existing MySQL definition search timeout/cancel runner as `run_catalog_search`, accepting a static label and a boxed async operation over the checked-out connection. Preserve existing behavior for definition search.
+- [x] Add the SQLite-equivalent captured preview variant `DataRowIdentity::MySql(DataRowPreview)` and the following driver module.
 
 ```rust
 use super::*;

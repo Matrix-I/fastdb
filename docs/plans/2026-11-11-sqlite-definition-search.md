@@ -1,5 +1,15 @@
 # SQLite Definition Search Implementation Plan
 
+## Status audit — 2026-11-12
+
+Source baseline: `76e8815`. The provider driver and native regression tests
+are implemented. Implementation boxes confirmed from source are checked;
+unchecked reproduction, review, verification and commit steps are not inferred
+from source alone. Existing measurement/acceptance evidence below remains
+historical, not a fresh test run. Navigator definition/multi-table search
+entries have since been removed; current data search opens from a table footer.
+See the [current P2 checklist](2026-11-10-p2-search-plans-transfer.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: development-superpowers:subagent-driven-development or executing-plans-strict. Steps use `- [ ]`.
 
 **Goal / Architecture / Tech Stack / Branch:** Add SQLite definition search via the existing Rust driver trait and GPUI modal. Use rusqlite on a dedicated read-only worker. Current worktree is on main, with no commit authorized.
@@ -72,7 +82,7 @@ async fn sqlite_definition_search_matches_native_source_and_respects_scope() {
 }
 ```
 
-- [ ] Add `DefinitionKind::Table` and `mod definition_search;` in SQLite. Override the existing trait method with:
+- [x] Add `DefinitionKind::Table` and `mod definition_search;` in SQLite. Override the existing trait method with:
 
 ```rust
 async fn search_definitions(
@@ -82,7 +92,7 @@ async fn search_definitions(
 }
 ```
 
-- [ ] Add `crates/db-wire/src/sqlite/definition_search.rs`.
+- [x] Add `crates/db-wire/src/sqlite/definition_search.rs`.
 
 ```rust
 use super::*;
@@ -313,7 +323,7 @@ fn find(conn: &Connection, needle: &str) -> Result<Vec<DefinitionHit>> {
 
 ## Task 2 — Verification & Docs
 
-- [ ] Update `docs/guide/navigator-and-tables.md`, `docs/guide/not-built-yet.md`, `docs/PROVIDERS.md` and `docs/ROADMAP.md` with provider scope and manual acceptance.
+- [x] Update `docs/guide/navigator-and-tables.md`, `docs/guide/not-built-yet.md`, `docs/PROVIDERS.md` and `docs/ROADMAP.md` with provider scope and manual acceptance.
 - [ ] Review full diff and untracked files, then run formatter, workspace Clippy, workspace tests and app build. Inspect SQLite EXPLAIN QUERY PLAN on a catalog fixture.
 - [ ] Launch the built app for a startup smoke test. Report manual modal verification as pending. Obtain independent code review, apply findings and repeat final gate if edited.
 - [ ] Ready to commit docs — `docs: describe SQLite definition search`.
