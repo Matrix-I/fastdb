@@ -314,6 +314,14 @@ impl Workspace {
         }
     }
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
+        if self
+            .drop_object_modal
+            .as_ref()
+            .is_some_and(|modal| modal.busy)
+        {
+            return;
+        }
+        self.drop_object_modal = None;
         self.object_browser = None;
         self.object_search = None;
         self.definition_search = None;

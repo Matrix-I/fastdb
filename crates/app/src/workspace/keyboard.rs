@@ -101,6 +101,10 @@ impl Workspace {
             return;
         }
 
+        if self.drop_object_modal.is_some() && !self.updates.read(cx).is_open() {
+            self.drop_object_key(&event.keystroke, cx);
+            return;
+        }
         if self.navigator_filter_key(&event.keystroke, cx) {
             return;
         }

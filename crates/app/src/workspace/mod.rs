@@ -27,6 +27,7 @@ mod diagram_gestures;
 mod diagram_model;
 mod diagram_panel;
 mod diagram_positions;
+mod drop_object_modal;
 mod execution_log;
 mod export;
 mod fetch_plan;
@@ -213,6 +214,7 @@ pub struct Workspace {
     object_browser: Option<object_browser::ObjectBrowser>,
     object_search: Option<object_search::ObjectSearch>,
     definition_search: Option<definition_search::DefinitionSearch>,
+    drop_object_modal: Option<drop_object_modal::DropObjectModal>,
     pub schema_action_modal: Option<schema_action_modal::SchemaActionModal>,
     pub import_modal: Option<import_modal::ImportModal>,
     pub params_modal: Option<params_modal::ParameterBindingModal>,
@@ -304,6 +306,7 @@ impl Workspace {
             object_browser: None,
             object_search: None,
             definition_search: None,
+            drop_object_modal: None,
             schema_action_modal: None,
             import_modal: None,
             params_modal: None,
@@ -606,6 +609,9 @@ impl Render for Workspace {
         }
         if self.object_search.is_some() {
             root = root.child(self.render_object_search(cx));
+        }
+        if self.drop_object_modal.is_some() {
+            root = root.child(self.render_drop_object_modal(cx));
         }
         if self.schema_action_modal.is_some() {
             root = root.child(self.render_schema_action_modal(cx));

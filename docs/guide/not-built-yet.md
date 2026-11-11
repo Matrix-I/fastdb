@@ -6,6 +6,8 @@
 
 - **Workspace header acceptance.** Separate title/toolbar/tab rows, always-visible transaction controls (Commit/Rollback disabled in Auto-Commit) and button-anchored menus are implemented; native dragging/zoom, narrow-window scrolling and popup placement await manual GUI acceptance. Smart commit remains unavailable.
 
+- **Navigator context menu acceptance.** Manual verification of menu placement, node-specific actions and metadata refresh is pending. PostgreSQL schema and database deletion dialogs also await desktop acceptance.
+
 - **Navigator search acceptance.** The single search field, mode menu, tooltips and mode-specific results are implemented; manual acceptance of connection, schema/object, saved-file filtering and selection remains pending.
 
 - **Scoped database search.** The Connections panel omits definition search and multi-table data search. Search table data is available from the open table’s footer.

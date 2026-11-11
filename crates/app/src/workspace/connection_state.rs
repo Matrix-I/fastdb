@@ -148,6 +148,7 @@ impl Default for NavigatorState {
 }
 
 pub(super) struct ConnectionSession {
+    pub(super) connection_config: Option<ConnectionConfig>,
     pub metadata_generation: u64,
     pub diagram: Arc<super::diagram_model::DiagramModel>,
     pub kind: DbDriverKind,
@@ -169,6 +170,7 @@ impl Default for ConnectionSession {
             schema_tree: Arc::new(std::collections::BTreeMap::new()),
             properties: HashMap::new(),
             driver: None,
+            connection_config: None,
             schema_cache: Arc::new(SchemaCache::new().expect("schema cache")),
             tables: Vec::new(),
             table_columns: Arc::default(),
