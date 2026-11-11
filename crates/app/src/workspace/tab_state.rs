@@ -449,6 +449,16 @@ impl TabState {
         self.active_result = 0;
     }
 
+    pub(super) fn invalidate_dropped_object_results(&mut self) {
+        self.schema_stale = true;
+        self.fetch.has_more = false;
+        self.query_edit_driver = None;
+        for result in &mut self.results {
+            result.fetch.has_more = false;
+            result.query_edit_driver = None;
+        }
+    }
+
     pub(super) fn new_script_result(&mut self, sql: String) {
         self.close_record_view();
         let fetch_size = self.fetch.size;
@@ -1167,6 +1177,27 @@ mod script_result_tests {
                 .unwrap()
                 .contains("Save or Cancel")
         );
+    }
+
+    #[test]
+    fn dropping_an_object_invalidates_both_current_and_retained_results() {
+        let mut tab = tab();
+        let driver: Arc<dyn db_wire::DatabaseDriver> =
+            Arc::new(db_wire::SqliteDriver::new_memory());
+        for sql in ["SELECT 1", "SELECT 2"] {
+            tab.new_script_result(sql.into());
+            tab.fetch.has_more = true;
+            tab.query_edit_driver = Some(Arc::downgrade(&driver));
+        }
+
+        tab.invalidate_dropped_object_results();
+        assert!(tab.schema_stale);
+        assert!(!tab.fetch.has_more);
+        assert!(tab.query_edit_driver.is_none());
+        tab.select_result(0);
+        assert_eq!(tab.script_sql.as_deref(), Some("SELECT 1"));
+        assert!(!tab.fetch.has_more);
+        assert!(tab.query_edit_driver.is_none());
     }
 
     #[test]

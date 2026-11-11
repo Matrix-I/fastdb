@@ -251,6 +251,8 @@ impl Workspace {
                             conn_id.clone(),
                             ConnectionSession {
                                 kind: config.driver,
+                                connection_config: (config.driver == DbDriverKind::Postgres)
+                                    .then(|| config.clone()),
                                 driver: Some(driver),
                                 ..ConnectionSession::default()
                             },
@@ -456,6 +458,7 @@ impl Workspace {
         }
         if let Some(session) = self.connections.sessions.get_mut(conn_id) {
             session.driver = None;
+            session.connection_config = None;
             session.metadata_generation = session.metadata_generation.wrapping_add(1);
         }
     }

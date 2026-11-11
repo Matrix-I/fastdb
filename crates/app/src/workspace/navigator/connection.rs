@@ -11,9 +11,9 @@ impl Workspace {
         let conn_id = conn.id.clone();
         let is_this_active = self.connections.active_connection_id.as_deref() == Some(&conn_id);
         let is_this_connected = self.is_connection_live(&conn_id);
-        let read_only = self
-            .connections
-            .session(&conn_id)
+        let session = self.connections.session(&conn_id);
+        let live_config = session.connection_config.as_ref();
+        let read_only = session
             .driver
             .as_ref()
             .map_or(conn.read_only, |driver| driver.is_read_only());
@@ -24,9 +24,12 @@ impl Workspace {
             && self.connections.active().driver.is_some()
             && is_this_active;
 
-        let drv_name = conn.driver.clone();
+        let drv_name = live_config.map_or(conn.driver.as_str(), |config| config.driver.name());
+        let database = live_config.map_or(&conn.database, |config| &config.database);
         let conn_name = conn.name.clone();
-        let conn_addr = if conn.driver == "Sqlite" {
+        let conn_addr = if let Some(config) = live_config {
+            format!("{}:{}", config.host, config.port)
+        } else if conn.driver == "Sqlite" {
             conn.database.clone()
         } else {
             format!("{}:{}", conn.host, conn.port)
@@ -92,7 +95,7 @@ impl Workspace {
                             cx,
                             move |this, cx| this.toggle_or_connect(&conn_id_for_chev, cx),
                         ))
-                        .child(dbeaver_driver_icon(&drv_name, is_this_connected))
+                        .child(dbeaver_driver_icon(drv_name, is_this_connected))
                         .when(read_only, |row| {
                             row.child(
                                 div()
@@ -156,6 +159,15 @@ impl Workspace {
                     .pl(px(14.0))
                     .rounded_sm()
                     .hover(|s| s.bg(theme.bg_surface_hover))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        Self::nav_context_menu_listener(
+                            NavContextTarget::Databases {
+                                conn_id: conn_id.clone(),
+                            },
+                            cx,
+                        ),
+                    )
                     .child(
                         div()
                             .flex()
@@ -192,6 +204,15 @@ impl Workspace {
                         .pl(px(26.0))
                         .rounded_sm()
                         .hover(|s| s.bg(theme.bg_surface_hover))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            Self::nav_context_menu_listener(
+                                NavContextTarget::Database {
+                                    conn_id: conn_id.clone(),
+                                },
+                                cx,
+                            ),
+                        )
                         .child(
                             div()
                                 .flex()
@@ -216,7 +237,7 @@ impl Workspace {
                                     div()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(theme.text_accent)
-                                        .child(conn.database.clone()),
+                                        .child(database.clone()),
                                 ),
                         ),
                 );
@@ -234,6 +255,15 @@ impl Workspace {
                             .pl(px(38.0))
                             .rounded_sm()
                             .hover(|s| s.bg(theme.bg_surface_hover))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                Self::nav_context_menu_listener(
+                                    NavContextTarget::Schemas {
+                                        conn_id: conn_id.clone(),
+                                    },
+                                    cx,
+                                ),
+                            )
                             .child(
                                 div()
                                     .flex()
@@ -283,7 +313,13 @@ impl Workspace {
                             {
                                 continue;
                             }
-                            nav_tree = self.append_schema_node(nav_tree, schema_name, s_tables, cx);
+                            nav_tree = self.append_schema_node(
+                                nav_tree,
+                                &conn_id,
+                                schema_name,
+                                s_tables,
+                                cx,
+                            );
                         }
                     }
                 }

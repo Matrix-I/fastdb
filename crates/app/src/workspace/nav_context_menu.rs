@@ -6,6 +6,19 @@ pub enum NavContextTarget {
     Connection {
         conn_id: String,
     },
+    Databases {
+        conn_id: String,
+    },
+    Database {
+        conn_id: String,
+    },
+    Schemas {
+        conn_id: String,
+    },
+    Schema {
+        conn_id: String,
+        schema: String,
+    },
     Table {
         conn_id: String,
         schema: String,
@@ -54,6 +67,10 @@ impl NavContextMenu {
     pub fn conn_id(&self) -> &str {
         match &self.target {
             NavContextTarget::Connection { conn_id }
+            | NavContextTarget::Databases { conn_id }
+            | NavContextTarget::Database { conn_id }
+            | NavContextTarget::Schemas { conn_id }
+            | NavContextTarget::Schema { conn_id, .. }
             | NavContextTarget::Table { conn_id, .. }
             | NavContextTarget::View { conn_id, .. }
             | NavContextTarget::Folder { conn_id, .. }
@@ -64,12 +81,33 @@ impl NavContextMenu {
     }
 }
 
+impl NavContextTarget {
+    fn refresh_enabled(&self, connected: bool, connecting: bool) -> Option<bool> {
+        match self {
+            Self::Connection { .. }
+            | Self::Databases { .. }
+            | Self::Database { .. }
+            | Self::Schemas { .. }
+            | Self::Schema { .. }
+            | Self::Folder {
+                is_views: false, ..
+            }
+            | Self::Table { .. } => Some(connected && !connecting),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NavMenuAction {
     EditConnection,
     Connect,
     Disconnect,
     Delete,
+    DeleteDatabase,
+    DeleteSchema {
+        schema: String,
+    },
     Refresh,
     OpenSqlEditor,
 
@@ -157,6 +195,17 @@ impl Workspace {
         self.menus.nav_context_menu = Some(NavContextMenu { target, position });
     }
 
+    pub(super) fn nav_context_menu_listener(
+        target: NavContextTarget,
+        cx: &Context<Self>,
+    ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+            cx.stop_propagation();
+            this.open_nav_target_context_menu(target.clone(), event.position);
+            cx.notify();
+        })
+    }
+
     pub(super) fn render_nav_context_menu(
         &mut self,
         menu: NavContextMenu,
@@ -227,6 +276,11 @@ impl Workspace {
                 cx.notify();
             }));
 
+        let refresh_enabled = menu
+            .target
+            .refresh_enabled(is_connected, self.form.is_connecting);
+        let mut has_actions = true;
+
         match menu.target {
             NavContextTarget::Connection { .. } => {
                 panel = panel
@@ -272,16 +326,69 @@ impl Workspace {
                         true,
                         NavMenuAction::Delete,
                         cx,
-                    ))
-                    .child(separator())
-                    .child(item(
-                        "nav-menu-refresh",
-                        "icons/refresh.svg",
-                        "Refresh",
-                        is_connected && !self.form.is_connecting,
-                        NavMenuAction::Refresh,
+                    ));
+            }
+            NavContextTarget::Databases { .. } | NavContextTarget::Schemas { .. } => {
+                has_actions = false;
+            }
+            NavContextTarget::Database { .. } => {
+                panel = panel.child(item(
+                    "nav-menu-sql-editor",
+                    "icons/sql_script.svg",
+                    "SQL Editor",
+                    is_connected && !self.form.is_connecting,
+                    NavMenuAction::OpenSqlEditor,
+                    cx,
+                ));
+                if self.connections.session(&conn_id).kind == DbDriverKind::Postgres {
+                    panel = panel.child(item(
+                        "nav-menu-database-delete",
+                        "icons/delete.svg",
+                        "Delete…",
+                        self.can_drop_postgres_object(&conn_id),
+                        NavMenuAction::DeleteDatabase,
                         cx,
                     ));
+                }
+            }
+            NavContextTarget::Schema { schema, .. } => {
+                let can_create = self
+                    .connections
+                    .session(&conn_id)
+                    .driver
+                    .as_ref()
+                    .is_some_and(|driver| !driver.is_read_only());
+                panel = panel
+                    .child(item(
+                        "nav-menu-schema-create-table",
+                        "icons/table.svg",
+                        "Create Table…",
+                        can_create,
+                        NavMenuAction::CreateTable {
+                            schema: schema.clone(),
+                        },
+                        cx,
+                    ))
+                    .child(item(
+                        "nav-menu-schema-create-view",
+                        "icons/table.svg",
+                        "Create View…",
+                        can_create,
+                        NavMenuAction::CreateView {
+                            schema: schema.clone(),
+                        },
+                        cx,
+                    ));
+                if self.connections.session(&conn_id).kind == DbDriverKind::Postgres {
+                    panel = panel.child(item(
+                        "nav-menu-schema-delete",
+                        "icons/delete.svg",
+                        "Delete…",
+                        self.can_drop_postgres_object(&conn_id),
+                        NavMenuAction::DeleteSchema { schema },
+                        cx,
+                    ));
+                }
             }
             NavContextTarget::Table { schema, table, .. } => {
                 panel = panel
@@ -495,6 +602,20 @@ impl Workspace {
             }
         }
 
+        if let Some(enabled) = refresh_enabled {
+            if has_actions {
+                panel = panel.child(separator());
+            }
+            panel = panel.child(item(
+                "nav-menu-refresh",
+                "icons/refresh.svg",
+                "Refresh",
+                enabled,
+                NavMenuAction::Refresh,
+                cx,
+            ));
+        }
+
         deferred(
             anchored()
                 .position(menu.position)
@@ -515,10 +636,13 @@ impl Workspace {
             NavMenuAction::Connect => self.connect_saved_by_id(conn_id, cx),
             NavMenuAction::Disconnect => self.disconnect_by_id(conn_id, cx),
             NavMenuAction::Delete => self.delete_saved_connection(conn_id, cx),
+            NavMenuAction::DeleteDatabase => self.open_drop_database(conn_id, cx),
+            NavMenuAction::DeleteSchema { schema } => self.open_drop_schema(conn_id, schema, cx),
             NavMenuAction::Refresh => {
-                // Refresh acts on the active connection, so switch to a parked one first
-                self.connect_saved_by_id(conn_id, cx);
-                self.refresh_connection(cx);
+                if self.is_connection_live(conn_id) && !self.form.is_connecting {
+                    self.connect_saved_by_id(conn_id, cx);
+                    self.refresh_connection(cx);
+                }
             }
             // Opening the script switches to its connection
             NavMenuAction::OpenSqlEditor => self.open_sql_script(Some(conn_id), cx),
@@ -691,5 +815,68 @@ impl Workspace {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NavContextTarget;
+
+    #[test]
+    fn refresh_is_available_on_navigator_branches_and_tables_only_when_connected() {
+        let conn_id = "owner".to_owned();
+        let schema = "custom schema".to_owned();
+        let table = "orders".to_owned();
+        for target in [
+            NavContextTarget::Connection {
+                conn_id: conn_id.clone(),
+            },
+            NavContextTarget::Databases {
+                conn_id: conn_id.clone(),
+            },
+            NavContextTarget::Database {
+                conn_id: conn_id.clone(),
+            },
+            NavContextTarget::Schemas {
+                conn_id: conn_id.clone(),
+            },
+            NavContextTarget::Schema {
+                conn_id: conn_id.clone(),
+                schema: schema.clone(),
+            },
+            NavContextTarget::Folder {
+                conn_id: conn_id.clone(),
+                schema: schema.clone(),
+                is_views: false,
+            },
+            NavContextTarget::Table {
+                conn_id: conn_id.clone(),
+                schema: schema.clone(),
+                table: table.clone(),
+            },
+        ] {
+            assert_eq!(
+                target.refresh_enabled(true, false),
+                Some(true),
+                "{target:?}"
+            );
+            assert_eq!(
+                target.refresh_enabled(false, false),
+                Some(false),
+                "{target:?}"
+            );
+            assert_eq!(
+                target.refresh_enabled(true, true),
+                Some(false),
+                "{target:?}"
+            );
+        }
+        let column = NavContextTarget::Column {
+            conn_id,
+            schema,
+            table,
+            column: "id".to_owned(),
+        };
+        assert_eq!(column.refresh_enabled(true, false), None);
     }
 }

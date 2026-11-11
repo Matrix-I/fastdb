@@ -3,6 +3,7 @@ impl Workspace {
     pub(super) fn append_schema_node(
         &self,
         mut nav_tree: Stateful<Div>,
+        conn_id: &str,
         schema_name: &String,
         s_tables: &[TableSummary],
         cx: &mut Context<Self>,
@@ -29,6 +30,16 @@ impl Workspace {
                 .pl(px(50.0))
                 .rounded_sm()
                 .hover(|s| s.bg(theme.bg_surface_hover))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    Self::nav_context_menu_listener(
+                        NavContextTarget::Schema {
+                            conn_id: conn_id.to_owned(),
+                            schema: schema_name.clone(),
+                        },
+                        cx,
+                    ),
+                )
                 .child(
                     div()
                         .flex()
