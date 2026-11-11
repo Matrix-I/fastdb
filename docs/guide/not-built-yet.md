@@ -8,6 +8,8 @@
 
 - **Navigator search acceptance.** The single search field, mode menu, tooltips and mode-specific results are implemented; manual acceptance of connection, schema/object, saved-file filtering and selection remains pending.
 
+- **Scoped database search.** The Connections panel omits definition search and multi-table data search. Search table data is available from the open table’s footer.
+
 - **Query plan coverage.** SQLite estimated plans are wired; desktop acceptance is pending. MySQL/MariaDB and ODBC plans, expensive-node navigation, saved plan comparison and remaining metadata/DDL coverage are open.
 
 - **Transfer formats and analysis.** HTML, Markdown and JSON export of loaded results and focused ER SVG export are wired; desktop acceptance is pending. JSON import and full-source export, spreadsheet transfer, format options and result aggregates/charts remain open.
