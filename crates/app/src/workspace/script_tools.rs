@@ -120,7 +120,7 @@ fn rail_explanation(label: &str) -> String {
         "Indent" => "Indent the current or selected lines by four spaces",
         "Outdent" => "Remove one level of indentation from the current or selected lines",
         "History" => "Show recent queries for this connection and insert a previous query",
-        "Explain" => "Show the PostgreSQL query plan without executing SQL",
+        "Explain" => "Show the query plan without executing the statement",
         "Analyze (executes SQL)" => {
             "Analyze: executes SQL, including writes, and shows actual timings"
         }

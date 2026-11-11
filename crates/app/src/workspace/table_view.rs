@@ -536,6 +536,21 @@ impl Workspace {
             .text_color(theme.text_muted)
             .child(self.render_edit_toolbar(cx))
             .child(self.render_export_toolbar(tab_idx, cx))
+            .when(
+                tab.table_name.is_some()
+                    && tab.connection_id.is_some()
+                    && tab.connection_id == self.connections.active_connection_id
+                    && matches!(
+                        self.connections.active().kind,
+                        DbDriverKind::Postgres | DbDriverKind::Sqlite | DbDriverKind::MySql
+                    )
+                    && self.connections.active().driver.is_some(),
+                |footer| {
+                    footer.child(super::script_tools::tool("Search table data…").on_click(
+                        cx.listener(move |this, _, _, cx| this.open_table_data_search(tab_idx, cx)),
+                    ))
+                },
+            )
             .child(
                 ui_editor::line_input::pick_surface(
                     div(),

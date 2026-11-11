@@ -197,7 +197,7 @@ impl Workspace {
 
         if is_explain {
             let kind = self.tab_provider(tab_idx);
-            match db_wire::query_plan::explain_sql(kind, &substituted_sql, explain_analyze) {
+            match super::query_plan::explain_statement(kind, &substituted_sql, explain_analyze) {
                 Ok(explain_stmt) => {
                     let Some(driver) = self.tab_session(tab_idx).driver.clone() else {
                         let owner = self.tabs[tab_idx].connection_id.clone();

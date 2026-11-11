@@ -93,6 +93,7 @@ pub(super) fn install(cx: &mut Context<Workspace>) -> Monitor {
                             || this.form.show_connection_modal
                             || this.show_about_dialog
                             || this.object_search.is_some()
+                            || this.definition_search.is_some()
                             || this.script_chooser.is_some()
                             || this.script_action.is_some()
                             || this.updates.read(cx).is_open()

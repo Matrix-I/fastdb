@@ -8,7 +8,7 @@ See the **[full roadmap and source audit](../ROADMAP.md)** for UI-only findings,
 - [x] Complete PostgreSQL binary decoding (no false `NULL`s)
 - [x] Basic table navigator, data tabs and supported read-only Properties
 - [ ] Complete Properties readers and wire or disable no-op toolbar controls
-- [x] Multi-table ER diagram with relationships and navigation (manual GUI acceptance pending; export/manual positioning remain open)
+- [x] Multi-table ER diagram with relationships and navigation (saved positioning and SVG export implemented; manual GUI acceptance pending)
 - [x] Virtualized grid with auto-fit and resizable columns
 - [x] CI with live PostgreSQL and MySQL
 - [x] SQL editor tabs with statement-at-cursor execution and autocompletion

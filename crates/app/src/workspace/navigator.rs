@@ -30,6 +30,32 @@ impl Workspace {
                     .child("Connections"),
             )
             .child(self.render_navigator_filter(cx))
+            .when(
+                matches!(
+                    self.connections.active().kind,
+                    DbDriverKind::Postgres | DbDriverKind::Sqlite | DbDriverKind::MySql
+                ) && self.connections.active().driver.is_some(),
+                |panel| {
+                    panel.child(
+                        script_tools::tool("Search definitions…").on_click(
+                            cx.listener(|this, _, _, cx| this.open_definition_search(cx)),
+                        ),
+                    )
+                },
+            )
+            .when(
+                matches!(
+                    self.connections.active().kind,
+                    DbDriverKind::Postgres | DbDriverKind::Sqlite | DbDriverKind::MySql
+                ) && self.connections.active().driver.is_some(),
+                |panel| {
+                    panel.child(
+                        script_tools::tool("Search table data…").on_click(
+                            cx.listener(|this, _, _, cx| this.open_scoped_data_search(cx)),
+                        ),
+                    )
+                },
+            )
             .when(self.active_reveal_target().is_some(), |panel| {
                 panel.child(script_tools::tool("Reveal active object").on_click(
                     cx.listener(|this, _, window, cx| this.reveal_active_object(window, cx)),

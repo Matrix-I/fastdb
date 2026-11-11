@@ -10,7 +10,7 @@ const COMMAND_CAPACITY: usize = 1;
 const STATE_TIMEOUT: Duration = Duration::from_secs(2);
 const CANCEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const CANCEL_COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
-const DISCONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+pub(super) const DISCONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 
 enum CloseReason {
     Idle,
@@ -311,7 +311,7 @@ async fn close_connection(mut connection: mysql_async::Conn, reason: CloseReason
     Ok(())
 }
 
-async fn kill_connection(opts: Opts, id: u32) -> Result<()> {
+pub(super) async fn kill_connection(opts: Opts, id: u32) -> Result<()> {
     let mut control = tokio::time::timeout(CANCEL_CONNECT_TIMEOUT, mysql_async::Conn::new(opts))
         .await
         .map_err(|_| anyhow::anyhow!("MySQL cancellation connection timed out"))??;

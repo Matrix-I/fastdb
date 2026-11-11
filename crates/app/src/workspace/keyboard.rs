@@ -141,6 +141,13 @@ impl Workspace {
             }
             return;
         }
+        if self.definition_search.is_some()
+            && !self.updates.read(cx).is_open()
+            && self.column_pending.is_none()
+        {
+            self.definition_search_key(&event.keystroke, cx);
+            return;
+        }
         if self.object_search.is_some()
             && !self.updates.read(cx).is_open()
             && self.column_pending.is_none()

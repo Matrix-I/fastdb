@@ -242,3 +242,124 @@ fn mysql_table_save_roundtrips_exact_binary() {
         result.unwrap();
     });
 }
+
+#[test]
+fn mysql_search_definitions_matches_literal_native_source() {
+    use db_wire::objects::DefinitionKind;
+    use futures::FutureExt;
+    let Some(mut config) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let schema = format!("fastdb_definitions_{}", std::process::id());
+        let admin = MySqlDriver::new(config.clone());
+        admin.execute_query(&format!("CREATE DATABASE {schema}")).await.unwrap();
+        config.database = schema.clone();
+        let driver = MySqlDriver::new(config);
+        let result = std::panic::AssertUnwindSafe(async {
+            for sql in [
+                "CREATE TABLE sample (label VARCHAR(40))",
+                "CREATE VIEW marker AS SELECT 'Needle_%' AS label",
+                "CREATE VIEW decoy AS SELECT 'needleAB' AS label",
+                "CREATE PROCEDURE source_proc() SELECT 'Needle_%' AS label",
+                "CREATE TRIGGER source_trig BEFORE INSERT ON sample FOR EACH ROW SET NEW.label = 'Needle_%'",
+            ] {
+                driver.execute_query(sql).await.unwrap();
+            }
+            let (cancel, signal) = flume::bounded(1);
+            let hits = driver.search_definitions(&schema, "needle_%", signal.clone()).await.unwrap().unwrap();
+            assert_eq!(hits.iter().map(|hit| hit.kind).collect::<Vec<_>>(),
+                       [DefinitionKind::Routine, DefinitionKind::Trigger, DefinitionKind::View]);
+            assert_eq!(hits[1].object.qualifier, "sample");
+            assert_eq!(hits[2].object.name, "marker");
+            assert!(hits.iter().all(|hit| hit.source.as_deref().unwrap().contains("Needle_%")));
+            for index in 0..52 {
+                driver.execute_query(&format!("CREATE VIEW bulk_{index} AS SELECT 'bulk marker'")).await.unwrap();
+            }
+            let capped = driver.search_definitions(&schema, "bulk marker", signal.clone()).await.unwrap().unwrap();
+            assert_eq!(capped.len(), db_wire::objects::DEFINITION_SEARCH_LIMIT + 1);
+            let wide = "x".repeat(db_wire::objects::DEFINITION_SOURCE_LIMIT as usize);
+            driver.execute_query(&format!("CREATE PROCEDURE wide_proc() SELECT 'wide marker {wide}'")).await.unwrap();
+            let wide = driver.search_definitions(&schema, "wide marker", signal.clone()).await.unwrap().unwrap();
+            assert_eq!(wide.len(), 1);
+            assert!(wide[0].source.is_none());
+            cancel.send(()).unwrap();
+            assert!(driver.search_definitions(&schema, "needle", signal).await.unwrap_err().to_string().contains("cancelled"));
+        }).catch_unwind().await;
+        admin.execute_query(&format!("DROP DATABASE {schema}")).await.unwrap();
+        if let Err(panic) = result { std::panic::resume_unwind(panic); }
+    });
+}
+
+#[test]
+fn mysql_data_search_matches_literals_and_opens_captured_rows() {
+    use futures::FutureExt;
+    use mysql_async::prelude::Queryable;
+    let Some(mut config) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let schema = format!("fastdb_data_search_{}", std::process::id());
+        let admin = MySqlDriver::new(config.clone());
+        admin.execute_query(&format!("CREATE DATABASE {schema}")).await.unwrap();
+        config.database = schema.clone();
+        let opts = mysql_async::OptsBuilder::default()
+            .ip_or_hostname(config.host.clone()).tcp_port(config.port)
+            .user(Some(config.user.clone())).pass(config.password.clone())
+            .db_name(Some(schema.clone())).prefer_socket(false);
+        let driver = MySqlDriver::new(config);
+        let result = std::panic::AssertUnwindSafe(async {
+            for sql in [
+                "CREATE TABLE `odd``name` (value VARCHAR(80), blank TEXT, payload BLOB)",
+                "INSERT INTO `odd``name` VALUES ('Needle_% literal', NULL, X'00'), ('needleAB', '', X'6e6565646c655f25')",
+                "CREATE VIEW scope_view AS SELECT value FROM `odd``name`",
+            ] { driver.execute_query(sql).await.unwrap(); }
+            let (cancel, signal) = flume::bounded(1);
+            let hits = driver.search_table_data(&schema, "odd`name", "needle_%", signal.clone()).await.unwrap().unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].column, "value");
+            driver.execute_query("DELETE FROM `odd``name`").await.unwrap();
+            let row = driver.read_data_search_row(&hits[0].locator, signal.clone()).await.unwrap().unwrap();
+            assert_eq!(row.columns, [("value".into(), Some("Needle_% literal".into())), ("blank".into(), None)]);
+            assert_eq!(row.omitted_columns, 1);
+            assert!(driver.search_table_data(&schema, "scope_view", "needle", signal.clone()).await.unwrap_err().to_string().contains("base table"));
+            let columns = (0..33).map(|index| format!("c{index} TEXT")).collect::<Vec<_>>().join(", ");
+            driver.execute_query(&format!("CREATE TABLE wide ({columns})")).await.unwrap();
+            driver.execute_query("INSERT INTO wide (c0, c32) WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 60) SELECT REPEAT('x',600), 'bulk marker' FROM n").await.unwrap();
+            let capped = driver.search_table_data(&schema, "wide", "bulk marker", signal.clone()).await.unwrap().unwrap();
+            assert_eq!(capped.len(), db_wire::objects::DATA_SEARCH_LIMIT + 1);
+            let preview = driver.read_data_search_row(&capped[0].locator, signal.clone()).await.unwrap().unwrap();
+            assert_eq!(preview.columns.len(), 32);
+            assert_eq!(preview.omitted_columns, 1);
+            assert_eq!(preview.columns[0].1.as_ref().unwrap().len(), 512);
+            assert_eq!(preview.columns[31], ("c32".into(), Some("bulk marker".into())));
+            let mut blocker = mysql_async::Conn::new(opts).await.unwrap();
+            blocker.query_drop("LOCK TABLES wide WRITE").await.unwrap();
+            let (send_cancel, active_signal) = flume::bounded(1);
+            let search = driver.search_table_data(&schema, "wide", "bulk marker", active_signal);
+            let monitor = async {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let (processes, _, _) = admin.execute_query(
+                            "SHOW FULL PROCESSLIST"
+                        ).await.unwrap();
+                        if (0..processes.total_rows()).any(|row| {
+                            cell_text(&processes, row, 3).as_deref() == Some(&schema)
+                                && cell_text(&processes, row, 6).is_some_and(|state| state.contains("metadata lock"))
+                        }) { break; }
+                    }
+                }).await.expect("search must reach the metadata lock");
+                send_cancel.send_async(()).await.unwrap();
+            };
+            let (outcome, ()) = tokio::join!(search, monitor);
+            blocker.query_drop("UNLOCK TABLES").await.unwrap();
+            blocker.disconnect().await.unwrap();
+            assert_eq!(outcome.unwrap_err().to_string(), "Data search cancelled");
+            assert_eq!(driver.search_table_data(&schema, "wide", "bulk marker", signal.clone()).await.unwrap().unwrap().len(), 51);
+            cancel.send(()).unwrap();
+            assert!(driver.search_table_data(&schema, "odd`name", "needle", signal).await.unwrap_err().to_string().contains("cancelled"));
+        }).catch_unwind().await;
+        admin.execute_query(&format!("DROP DATABASE {schema}")).await.unwrap();
+        if let Err(panic) = result { std::panic::resume_unwind(panic); }
+    });
+}

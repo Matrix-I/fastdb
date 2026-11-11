@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod data_search;
+mod definition_search;
 mod script;
 
 use crate::stream::{RowSink, report_error};
@@ -55,6 +57,7 @@ fn authorize_read_only(context: AuthContext<'_>) -> Authorization {
                 pragma.as_str(),
                 "table_info"
                     | "table_xinfo"
+                    | "table_list"
                     | "foreign_key_list"
                     | "index_list"
                     | "index_info"
@@ -240,6 +243,55 @@ impl DatabaseDriver for SqliteDriver {
             })
             .await
             .map_err(|error| anyhow::anyhow!("SQLite session worker failed: {error}"))?
+    }
+
+    async fn search_definitions(
+        &self,
+        schema: &str,
+        needle: &str,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DefinitionHit>>> {
+        definition_search::search(
+            self.session_database.clone(),
+            self.conn.clone(),
+            schema,
+            needle,
+            cancel,
+        )
+        .await
+    }
+
+    async fn search_table_data(
+        &self,
+        schema: &str,
+        table: &str,
+        needle: &str,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DataSearchHit>>> {
+        data_search::search(
+            self.session_database.clone(),
+            self.conn.clone(),
+            schema,
+            table,
+            needle,
+            cancel,
+        )
+        .await
+    }
+
+    async fn read_data_search_row(
+        &self,
+        locator: &crate::objects::DataRowLocator,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<crate::objects::DataRowPreview>> {
+        anyhow::ensure!(
+            !cancel.is_disconnected() && cancel.try_recv().is_err(),
+            "Data search cancelled"
+        );
+        let crate::objects::DataRowIdentity::Sqlite(row) = &locator.0 else {
+            anyhow::bail!("Search result belongs to another provider");
+        };
+        Ok(Some(row.clone()))
     }
 
     fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {

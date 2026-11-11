@@ -8,6 +8,12 @@
 
 - **Navigator search acceptance.** The single search field, mode menu, tooltips and mode-specific results are implemented; manual acceptance of connection, schema/object, saved-file filtering and selection remains pending.
 
+- **Query plan coverage.** SQLite estimated plans are wired; desktop acceptance is pending. MySQL/MariaDB and ODBC plans, expensive-node navigation, saved plan comparison and remaining metadata/DDL coverage are open.
+
+- **Transfer formats and analysis.** HTML, Markdown and JSON export of loaded results and focused ER SVG export are wired; desktop acceptance is pending. JSON import and full-source export, spreadsheet transfer, format options and result aggregates/charts remain open.
+
+- **Data and schema search.** PostgreSQL, MySQL and SQLite support scoped definition and table data search. MySQL and SQLite display captured row previews. PostgreSQL opens a verified row version. Further PostgreSQL definition families and desktop acceptance remain open.
+
 - **Record presentation acceptance.** Record now combines with Grid/Text in both table and SQL results; transposed grid/text layout, Tab toggling, Escape handling, inline editing and the Value panel in the table grid row preview, switching and scrolling await manual GUI acceptance.
 
 - **Plain-text result acceptance.** Table tabs and SQL query results share a monospace text table; visual alignment and horizontal scrolling await manual GUI acceptance.
@@ -21,7 +27,7 @@ The [audited roadmap](../ROADMAP.md) separates working paths, partial features, 
 
 - **Additional Properties mutations.** Virtual keys/relationships are not implemented. PostgreSQL catalog sections are read-only; other providers explicitly show unsupported sections.
 - **Advanced column editing.** PostgreSQL ordinary-column drafts, preview/Persist and Revert are implemented; identity/generated/storage/collation/permissions transitions and other-provider mutation support remain open. The [GUI/business analysis](../DBEAVER_WORKFLOWS.md) specifies this workflow and broader screen coverage.
-- **Core DBeaver workflows.** ER diagram export (the focused four-sided layout, saved table positioning, whole-card dragging, content-fit card widths, separate connector lanes, clickable arrows and mapped-column highlights without PK/FK text badges or column data types await manual GUI acceptance), schema-aware XML editing, backup/restore, and session/lock monitoring remain open (CSV data import, streaming table transfer, full-source export, workspace session restoration and preferences are implemented; desktop acceptance pending). See the roadmap for scope and acceptance criteria.
+- **Core DBeaver workflows.** ER diagram desktop acceptance (including SVG export), schema-aware XML editing, backup/restore, and session/lock monitoring remain open (CSV data import, streaming table transfer, full-source export, workspace session restoration and preferences are implemented; desktop acceptance pending). See the roadmap for scope and acceptance criteria.
 - **Advanced grid productivity.** Loaded-result Find, Record, column display controls, multiple sort keys, validated plain TSV paste, and explicit NULL/default actions are available. FK navigation opens referenced or referencing rows in a filtered tab. PostgreSQL supports scalar non-key updates through Load editable result for a verified direct SELECT with a complete primary key. Broader SQL forms/providers, query-result row insertion/deletion and desktop acceptance remain open.
 - **Execution feedback limits.** Execution logs and timeout choices live only in open SQL tabs. ODBC informational notices and structured error positions are not exposed; MySQL/MariaDB positions are limited to native error text. Desktop acceptance of Execution log/Timeout is pending manual verification.
 - **Advanced script execution.** Transaction chaining remains unsupported for PostgreSQL. Dedicated ODBC tabs, supported database/schema selectors and vendor batch delimiters are implemented with automated fixtures. Live ODBC parity, separate MariaDB validation and desktop acceptance remain open.

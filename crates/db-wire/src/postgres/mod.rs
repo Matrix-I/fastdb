@@ -1,6 +1,7 @@
 pub mod binary_decoder;
 mod catalog;
 mod column;
+mod data_search;
 mod metadata;
 mod objects;
 mod query_edit;
@@ -425,6 +426,37 @@ impl DatabaseDriver for PostgresDriver {
         object: &crate::objects::ObjectSummary,
     ) -> Result<Option<String>> {
         self.read_object_source(kind, object).await.map(Some)
+    }
+
+    async fn search_definitions(
+        &self,
+        schema: &str,
+        needle: &str,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DefinitionHit>>> {
+        self.find_definitions(schema, needle, cancel)
+            .await
+            .map(Some)
+    }
+
+    async fn search_table_data(
+        &self,
+        schema: &str,
+        table: &str,
+        needle: &str,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DataSearchHit>>> {
+        self.find_table_data(schema, table, needle, cancel)
+            .await
+            .map(Some)
+    }
+
+    async fn read_data_search_row(
+        &self,
+        locator: &crate::objects::DataRowLocator,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<crate::objects::DataRowPreview>> {
+        self.read_search_match(locator, cancel).await.map(Some)
     }
 
     async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
