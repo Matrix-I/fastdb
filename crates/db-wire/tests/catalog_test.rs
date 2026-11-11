@@ -174,7 +174,10 @@ fn postgres_definition_search_preserves_schema_literals_and_overload_identity() 
                 CREATE DOMAIN "{schema}".label_type AS text CONSTRAINT domain_check CHECK (VALUE <> 'family_% marker');
                 CREATE TABLE {other}.entries (label text CONSTRAINT label_check CHECK (label <> 'family_% marker'));
                 CREATE POLICY label_policy ON "{schema}".entries USING (label <> 'family_% marker') WITH CHECK (label <> 'family_% marker');
+                CREATE POLICY "delete policy" ON "{schema}".entries AS RESTRICTIVE FOR DELETE TO PUBLIC;
                 CREATE STATISTICS "{schema}".label_stats ON (label = 'family_% marker') FROM "{schema}".entries;
+                CREATE STATISTICS "{schema}".in_scope_stats ON (label = 'cross scope marker') FROM {other}.entries;
+                CREATE STATISTICS {other}.out_of_scope_stats ON (label = 'cross scope marker') FROM "{schema}".entries;
                 CREATE AGGREGATE "{schema}".total(integer) (SFUNC = int4pl, STYPE = integer);
                 DO $$ BEGIN
                     EXECUTE format('CREATE VIEW "{schema}".wide AS SELECT %L::text AS label', repeat('wide source', 6200));
@@ -218,6 +221,15 @@ fn postgres_definition_search_preserves_schema_literals_and_overload_identity() 
                     && hit.source.as_deref().is_some_and(|source| clauses.iter().all(|clause| source.contains(clause)))),
                     "missing {name}: {families:?}");
             }
+            let policy = driver.search_definitions(&schema, "as restrictive for delete to public", signal.clone()).await?.unwrap();
+            assert_eq!(policy.len(), 1, "{policy:?}");
+            assert_eq!(policy[0].kind, DefinitionKind::Policy);
+            assert_eq!(policy[0].object.name, "delete policy");
+            assert!(policy[0].source.as_deref().is_some_and(|source| source.starts_with("CREATE POLICY \"delete policy\"")));
+            let cross_scope = driver.search_definitions(&schema, "cross scope marker", signal.clone()).await?.unwrap();
+            assert_eq!(cross_scope.len(), 1, "{cross_scope:?}");
+            assert_eq!(cross_scope[0].kind, DefinitionKind::Statistics);
+            assert_eq!(cross_scope[0].object.name, "in_scope_stats");
             assert!(internal.is_empty(), "{internal:?}");
             let oversized = driver.search_definitions(&schema, "wide source", signal.clone()).await?.unwrap();
             assert_eq!(oversized.len(), 1);
