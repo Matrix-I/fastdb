@@ -122,6 +122,8 @@ pub(super) struct NavigatorState {
     pub nav_table_expanded: HashSet<String>,
     pub nav_subfolder_expanded: HashSet<String>,
     pub selected_relation: Option<(String, String)>,
+    pub selected_relations: HashSet<(String, String)>,
+    selection_anchor: Option<(String, String)>,
 }
 impl Default for NavigatorState {
     fn default() -> Self {
@@ -143,7 +145,136 @@ impl Default for NavigatorState {
             nav_table_expanded: HashSet::new(),
             nav_subfolder_expanded: HashSet::new(),
             selected_relation: None,
+            selected_relations: HashSet::new(),
+            selection_anchor: None,
         }
+    }
+}
+
+impl NavigatorState {
+    pub(super) fn select_relation(&mut self, relation: Option<(String, String)>) {
+        self.selected_relations.clear();
+        self.selected_relations.extend(relation.iter().cloned());
+        self.selection_anchor = relation.clone();
+        self.selected_relation = relation;
+    }
+
+    pub(super) fn select_relation_range(
+        &mut self,
+        target: (String, String),
+        visible: &[(String, String)],
+        extend: bool,
+    ) {
+        let bounds = extend
+            .then(|| {
+                let anchor = self.selection_anchor.as_ref()?;
+                Some((
+                    visible.iter().position(|relation| relation == anchor)?,
+                    visible.iter().position(|relation| relation == &target)?,
+                ))
+            })
+            .flatten();
+        if let Some((start, end)) = bounds {
+            self.selected_relations = visible[start.min(end)..=start.max(end)]
+                .iter()
+                .cloned()
+                .collect();
+            self.selected_relation = Some(target);
+        } else {
+            self.select_relation(Some(target));
+        }
+    }
+}
+
+#[cfg(test)]
+mod navigator_selection_tests {
+    use super::NavigatorState;
+
+    fn key(name: &str) -> (String, String) {
+        ("public".into(), name.into())
+    }
+
+    #[test]
+    fn shift_selects_in_both_directions_and_keeps_the_plain_click_anchor() {
+        let visible: Vec<_> = ["a", "b", "c", "d"].map(key).into();
+        let mut state = NavigatorState::default();
+        state.select_relation_range(key("b"), &visible, false);
+        state.select_relation_range(key("d"), &visible, true);
+        assert_eq!(
+            state.selected_relations,
+            [key("b"), key("c"), key("d")].into()
+        );
+        assert_eq!(state.selected_relation, Some(key("d")));
+        state.select_relation_range(key("a"), &visible, true);
+        assert_eq!(state.selected_relations, [key("a"), key("b")].into());
+        state.select_relation_range(key("c"), &visible, false);
+        assert_eq!(state.selected_relations, [key("c")].into());
+    }
+
+    #[test]
+    fn missing_or_hidden_anchor_falls_back_to_single_selection() {
+        let mut state = NavigatorState::default();
+        let visible = [key("a"), key("c")];
+        state.select_relation_range(key("c"), &visible, true);
+        assert_eq!(state.selected_relations, [key("c")].into());
+        state.select_relation(Some(key("b")));
+        state.select_relation_range(key("a"), &visible, true);
+        assert_eq!(state.selected_relations, [key("a")].into());
+        state.select_relation_range(key("a"), &visible, true);
+        assert_eq!(state.selected_relations, [key("a")].into());
+        state.select_relation(None);
+        assert!(state.selected_relations.is_empty());
+        assert!(state.selection_anchor.is_none());
+        state.select_relation_range(key("c"), &[], true);
+        assert_eq!(state.selected_relations, [key("c")].into());
+    }
+
+    #[test]
+    fn switching_connections_preserves_each_range_and_anchor() {
+        let mut manager = super::ConnectionManager::new(Vec::new(), Some("one".into()));
+        let visible = [key("a"), key("b"), key("c")];
+        manager.navigator_mut().select_relation(Some(key("a")));
+        manager
+            .navigator_mut()
+            .select_relation_range(key("c"), &visible, true);
+        manager.active_connection_id = Some("two".into());
+        assert!(manager.navigator().selected_relations.is_empty());
+        manager.navigator_mut().select_relation(Some(key("c")));
+        manager.active_connection_id = Some("one".into());
+        assert_eq!(
+            manager.navigator().selected_relations,
+            visible.clone().into()
+        );
+        manager
+            .navigator_mut()
+            .select_relation_range(key("b"), &visible, true);
+        assert_eq!(
+            manager.navigator().selected_relations,
+            [key("a"), key("b")].into()
+        );
+        manager.active_connection_id = Some("two".into());
+        assert_eq!(manager.navigator().selected_relations, [key("c")].into());
+        manager
+            .navigator_mut()
+            .select_relation_range(key("b"), &visible, true);
+        assert_eq!(
+            manager.navigator().selected_relations,
+            [key("b"), key("c")].into()
+        );
+    }
+
+    #[test]
+    fn range_uses_only_visible_rows_and_qualified_relation_names() {
+        let mut state = NavigatorState::default();
+        let first = ("alpha".into(), "same".into());
+        let last = ("beta".into(), "same".into());
+        let visible = [first.clone(), key("view"), last.clone()];
+        state.select_relation(Some(first.clone()));
+        state.select_relation_range(last, &visible, true);
+        assert_eq!(state.selected_relations, visible.into());
+        state.select_relation(Some(first.clone()));
+        assert_eq!(state.selected_relations, [first].into());
+        assert!(NavigatorState::default().selected_relations.is_empty());
     }
 }
 

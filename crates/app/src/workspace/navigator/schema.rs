@@ -1,5 +1,15 @@
 use super::*;
 impl Workspace {
+    pub(super) fn visible_navigator_relations(&self) -> Vec<(String, String)> {
+        let filtering = self.navigator_relation_filter_active();
+        visible_relations(
+            self.connections.navigator(),
+            &self.connections.active().schema_tree,
+            filtering,
+            |schema, name| self.navigator_relation_matches(schema, name),
+        )
+    }
+
     pub(super) fn append_schema_node(
         &self,
         mut nav_tree: Stateful<Div>,
@@ -186,6 +196,37 @@ impl Workspace {
     }
 }
 
+fn visible_relations(
+    state: &super::connection_state::NavigatorState,
+    schemas: &std::collections::BTreeMap<String, Vec<TableSummary>>,
+    filtering: bool,
+    matches: impl Fn(&str, &str) -> bool,
+) -> Vec<(String, String)> {
+    let mut visible = Vec::new();
+    for (schema, tables) in schemas {
+        if !filtering && !state.nav_schema_expanded.contains(schema) {
+            continue;
+        }
+        for group in RelationGroup::ALL {
+            if !filtering
+                && !state
+                    .nav_tables_expanded
+                    .contains(&group.expansion_key(schema))
+            {
+                continue;
+            }
+            visible.extend(
+                tables
+                    .iter()
+                    .filter(|table| RelationGroup::from_type(&table.table_type) == group)
+                    .filter(|table| matches(schema, &table.name))
+                    .map(|table| (schema.clone(), table.name.clone())),
+            );
+        }
+    }
+    visible
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::workspace) enum RelationGroup {
     Tables,
@@ -227,6 +268,60 @@ impl RelationGroup {
 #[cfg(test)]
 mod tests {
     use super::RelationGroup;
+    #[test]
+    fn visible_ranges_follow_tree_order_expansion_and_search() {
+        use crate::workspace::connection_state::NavigatorState;
+        use db_wire::TableSummary;
+        let table = |schema: &str, name: &str, kind: &str| TableSummary {
+            schema: schema.into(),
+            name: name.into(),
+            table_type: kind.into(),
+            estimated_rows: None,
+        };
+        let schemas = [
+            (
+                "public".into(),
+                vec![
+                    table("public", "view", "VIEW"),
+                    table("public", "a", "TABLE"),
+                    table("public", "b", "TABLE"),
+                ],
+            ),
+            ("sales".into(), vec![table("sales", "c", "TABLE")]),
+        ]
+        .into();
+        let mut state = NavigatorState::default();
+        let key = |schema: &str, name: &str| (schema.to_owned(), name.to_owned());
+        assert_eq!(
+            super::visible_relations(&state, &schemas, false, |_, _| true),
+            vec![key("public", "a"), key("public", "b")]
+        );
+        state.nav_schema_expanded.insert("sales".into());
+        state
+            .nav_tables_expanded
+            .insert(RelationGroup::Tables.expansion_key("sales"));
+        state
+            .nav_tables_expanded
+            .insert(RelationGroup::Views.expansion_key("public"));
+        assert_eq!(
+            super::visible_relations(&state, &schemas, false, |_, _| true),
+            vec![
+                key("public", "a"),
+                key("public", "b"),
+                key("public", "view"),
+                key("sales", "c")
+            ]
+        );
+        state.nav_schema_expanded.clear();
+        state.nav_tables_expanded.clear();
+        assert!(super::visible_relations(&state, &schemas, false, |_, _| true).is_empty());
+        assert_eq!(
+            super::visible_relations(&state, &schemas, true, |_, name| name != "b"),
+            vec![key("public", "a"), key("public", "view"), key("sales", "c")]
+        );
+        assert!(super::visible_relations(&state, &schemas, true, |_, _| false).is_empty());
+    }
+
     #[test]
     fn relation_folders_preserve_native_kinds_and_independent_expansion() {
         use RelationGroup::*;

@@ -2,6 +2,17 @@ use ui_core::history::UndoKey;
 
 use super::*;
 
+fn clear_navigator_selection_on_escape(
+    navigator: &mut super::connection_state::NavigatorState,
+    key: &Keystroke,
+) -> bool {
+    if key.key != "escape" || navigator.selected_relations.is_empty() {
+        return false;
+    }
+    navigator.select_relation(None);
+    true
+}
+
 fn is_record_tab(event: &KeyDownEvent) -> bool {
     event.keystroke.key == "tab" && !event.keystroke.modifiers.modified() && !event.is_held
 }
@@ -270,6 +281,20 @@ impl Workspace {
         if self.script_chooser.is_some() {
             self.handle_script_chooser_key(&event.keystroke, cx);
             return;
+        }
+
+        if !self.form.show_connection_modal
+            && self.column_pending.is_none()
+            && self.menus.grid_context_menu.is_none()
+            && self.menus.column_menu.is_none()
+            && self.menus.nav_context_menu.is_none()
+            && self.menus.tx_menu.is_none()
+            && clear_navigator_selection_on_escape(
+                self.connections.navigator_mut(),
+                &event.keystroke,
+            )
+        {
+            cx.notify();
         }
 
         if !self.form.show_connection_modal
@@ -663,6 +688,38 @@ mod tests {
     use ui_grid::{GridSelection, VirtualDataGrid};
 
     use super::{DataViewMode, TabState, TableSubTab, closes_record_view, opens_record_view};
+
+    #[test]
+    fn escape_clears_navigator_selection_and_its_range_anchor() {
+        use crate::workspace::connection_state::NavigatorState;
+        let key = |name: &str| ("public".to_owned(), name.to_owned());
+        let visible = [key("a"), key("b"), key("c")];
+        let mut state = NavigatorState::default();
+        state.select_relation(Some(key("a")));
+        state.select_relation_range(key("c"), &visible, true);
+        assert!(!super::clear_navigator_selection_on_escape(
+            &mut state,
+            &Keystroke::parse("enter").unwrap()
+        ));
+        assert_eq!(state.selected_relations.len(), 3);
+        assert!(super::clear_navigator_selection_on_escape(
+            &mut state,
+            &Keystroke::parse("escape").unwrap()
+        ));
+        assert!(state.selected_relation.is_none());
+        assert!(state.selected_relations.is_empty());
+        assert!(!super::clear_navigator_selection_on_escape(
+            &mut state,
+            &Keystroke::parse("escape").unwrap()
+        ));
+        state.select_relation_range(key("b"), &visible, true);
+        assert_eq!(state.selected_relations, [key("b")].into());
+        assert!(super::clear_navigator_selection_on_escape(
+            &mut state,
+            &Keystroke::parse("escape").unwrap()
+        ));
+        assert!(state.selected_relations.is_empty());
+    }
 
     #[test]
     fn only_tab_closes_the_compact_record_from_the_keyboard() {

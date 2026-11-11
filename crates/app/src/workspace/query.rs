@@ -40,8 +40,9 @@ impl Workspace {
     ) {
         self.connect_saved_by_id(connection_id, cx);
         if self.connections.active_connection_id.as_deref() == Some(connection_id) {
-            self.connections.navigator_mut().selected_relation =
-                Some((schema.to_string(), table.to_string()));
+            self.connections
+                .navigator_mut()
+                .select_relation(Some((schema.to_string(), table.to_string())));
         }
 
         if let Some(idx) = table_tab_index(&self.tabs, connection_id, schema, table) {
