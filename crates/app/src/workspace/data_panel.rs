@@ -194,11 +194,14 @@ impl Workspace {
                             let view = cx.entity().downgrade();
                             let cell_view = view.clone();
                             let on_cell_mouse_down: ui_grid::CellMouseDownHandler = std::rc::Rc::new(move |row, col, event, window, app| {
+                                if event.button == MouseButton::Right {
+                                    app.stop_propagation();
+                                }
                                 let _ = cell_view.update(app, |this, cx| {
                                     this.input.grid_drag = None;
                                     window.focus(&this.focus_handle);
                                     if event.button == MouseButton::Right {
-                                        this.open_grid_context_menu(active_tab_idx, row, col, event.position, cx);
+                                        this.open_grid_context_menu(active_tab_idx, Some(ui_grid::GridCoord { row, col }), event.position, cx);
                                         return;
                                     }
                                     this.select_grid_cell(row, col, event.modifiers.shift, cx);
@@ -229,7 +232,7 @@ impl Workspace {
                             let cell_editor = self.cell_editor_renderer(cx);
                             let tab = &mut self.tabs[active_tab_idx];
 
-                            tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), Some(on_cell_mouse_move), on_header_menu, cell_editor, move |col_idx, cur_width| {
+                            let grid = tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), Some(on_cell_mouse_move), on_header_menu, cell_editor, move |col_idx, cur_width| {
                                 let is_active = active_resizing_col == Some(col_idx);
                                 let bg_color = if is_active {
                                     Rgba { a: 0.85, ..theme_border_focused }
@@ -287,7 +290,21 @@ impl Workspace {
                                         },
                                     )
                                     .into_any_element()
-                            }).into_any_element()
+                            });
+                            div()
+                                .id("result-grid-panel")
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .size_full()
+                                .overflow_hidden()
+                                .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    this.input.grid_drag = None;
+                                    window.focus(&this.focus_handle);
+                                    this.open_grid_context_menu(active_tab_idx, None, event.position, cx);
+                                }))
+                                .child(grid)
+                                .into_any_element()
                         }
                         DataViewMode::Text => {
                             let tab = &self.tabs[active_tab_idx];
