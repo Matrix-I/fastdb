@@ -20,7 +20,10 @@ impl Workspace {
         let theme = &theme;
         let is_running_query = self.operations.is_running();
         let caret_visible = self.input.cursor_visible;
-        let supports_plan = self.tab_provider(tab_idx) == DbDriverKind::Postgres;
+        let supports_plan = matches!(
+            self.tab_provider(tab_idx),
+            DbDriverKind::Postgres | DbDriverKind::Sqlite
+        );
         let toolbar = div()
             .id("script-toolbar")
             .overflow_y_scroll()
@@ -330,9 +333,9 @@ impl Workspace {
                     .text_size(px(11.0))
                     .text_color(theme.text_secondary)
                     .child(if show_plan {
-                        "Query plan · Show raw JSON"
+                        "Query plan · Show raw result"
                     } else {
-                        "Raw JSON · Show query plan"
+                        "Raw result · Show query plan"
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {

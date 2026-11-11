@@ -246,8 +246,10 @@ wrapped in a subquery. Analyze can change data and run functions with side
 effects, just like executing the statement normally. Results use the standard
 streaming/cancellation path. The tree displays inclusive estimated costs relative
 to the root, row estimates, actual per-loop times/rows, loops, conditions and
-buffer counts; raw JSON remains available for all other fields. Other providers
-currently expose plans only through manually entered provider-specific SQL.
+buffer counts; raw JSON remains available for all other fields. SQLite offers
+Explain using `EXPLAIN QUERY PLAN` on the same tab session. The viewer displays
+operator hierarchy and raw native rows. SQLite does not report cost or actual
+execution metrics for this command. Other providers still require native SQL.
 
 PostgreSQL integration tests also accept `FASTDB_TEST_PG_PASSWORD` when the local
 test server requires password authentication. Leave it unset for trust/peer setups.
@@ -405,6 +407,31 @@ Optional batches load concurrently; there are no new catalog SQL queries.
 Catalog sections retain their existing dedicated read-only PG connection,
 server/client deadlines and connection-generation guards. Refresh retries failed
 metadata; unavailable readers are not called. UI acceptance is pending.
+
+## SQLite definition search
+
+The navigator searches stored CREATE statements for tables, views, indexes
+and triggers in the saved database's `main` schema. It uses a dedicated
+read-only handle for files and the owning handle for in-memory databases.
+Search uses ASCII case folding, a bounded result list and cancellation.
+Desktop acceptance is pending.
+
+SQLite data search uses the same catalog worker for ordinary tables in
+`main`. Table metadata and matches come from one read transaction.
+Selecting a result displays the bounded preview captured during the scan.
+
+## MySQL definition and table data search
+
+The navigator reads visible view SELECT text, stored function and procedure
+bodies, and trigger bodies from the selected MySQL database. Visibility follows
+the connection user's catalog privileges. The read-only scan uses bound values,
+a shared result limit and server-side cancellation. Desktop acceptance is
+pending.
+
+Table data search resolves and scans one base table at a time in a read-only
+transaction. Results include bounded previews captured by the search query,
+including for tables without a primary key. Cancelling an active request uses
+a separate control connection with the same credentials and transport.
 
 ## Extended catalog explorer
 

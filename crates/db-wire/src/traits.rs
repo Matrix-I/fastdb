@@ -410,6 +410,39 @@ pub trait DatabaseDriver: Send + Sync {
         Ok(None)
     }
 
+    /// Read-only literal definition search within one exact schema.
+    /// At most one match beyond the display limit is returned. A message or
+    /// disconnection on the run-owned channel requests cancellation.
+    async fn search_definitions(
+        &self,
+        _schema: &str,
+        _needle: &str,
+        _cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DefinitionHit>>> {
+        Ok(None)
+    }
+
+    /// Read-only literal search in one exact table. None means unsupported.
+    /// Returns at most one extra hit beyond the display limit.
+    async fn search_table_data(
+        &self,
+        _schema: &str,
+        _table: &str,
+        _needle: &str,
+        _cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DataSearchHit>>> {
+        Ok(None)
+    }
+
+    /// Opens the matching row preview. Providers with version locators reject changed rows.
+    async fn read_data_search_row(
+        &self,
+        _locator: &crate::objects::DataRowLocator,
+        _cancel: flume::Receiver<()>,
+    ) -> Result<Option<crate::objects::DataRowPreview>> {
+        Ok(None)
+    }
+
     /// Executes a schema DDL statement. Providers with transactional DDL run inside a transaction.
     async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {
         self.execute_query(sql).await.map(|_| ())

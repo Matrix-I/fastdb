@@ -316,6 +316,7 @@ impl Workspace {
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
         self.object_browser = None;
         self.object_search = None;
+        self.definition_search = None;
         self.schema_action_modal = None;
         self.params_modal = None;
         self.snippet_modal = None;

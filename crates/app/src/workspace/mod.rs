@@ -22,6 +22,7 @@ use connection_state::{ConnectionFormState, ConnectionManager, ConnectionSession
 mod data_edit;
 mod data_panel;
 mod ddl;
+mod definition_search;
 mod diagram_gestures;
 mod diagram_model;
 mod diagram_panel;
@@ -211,6 +212,7 @@ pub struct Workspace {
     /// "Choose SQL script" dialog, if open
     object_browser: Option<object_browser::ObjectBrowser>,
     object_search: Option<object_search::ObjectSearch>,
+    definition_search: Option<definition_search::DefinitionSearch>,
     pub schema_action_modal: Option<schema_action_modal::SchemaActionModal>,
     pub import_modal: Option<import_modal::ImportModal>,
     pub params_modal: Option<params_modal::ParameterBindingModal>,
@@ -301,6 +303,7 @@ impl Workspace {
             allow_quit: false,
             object_browser: None,
             object_search: None,
+            definition_search: None,
             schema_action_modal: None,
             import_modal: None,
             params_modal: None,
@@ -597,6 +600,9 @@ impl Render for Workspace {
         // 4. Modal Dialog: Database Connection Setup
         if self.object_browser.is_some() {
             root = root.child(self.render_object_browser(cx));
+        }
+        if self.definition_search.is_some() {
+            root = root.child(self.render_definition_search(cx));
         }
         if self.object_search.is_some() {
             root = root.child(self.render_object_search(cx));

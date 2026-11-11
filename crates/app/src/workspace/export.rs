@@ -1,3 +1,6 @@
+mod json;
+mod markup;
+
 use super::*;
 use db_wire::{QueryResultPager, export::*, sql::SqlDialect};
 use std::io::{BufWriter, Write};
@@ -15,6 +18,9 @@ pub(super) struct ExportState {
 pub(super) enum ExportFormat {
     Csv,
     Sql,
+    Html,
+    Markdown,
+    Json,
 }
 
 impl ExportFormat {
@@ -22,6 +28,9 @@ impl ExportFormat {
         match self {
             Self::Csv => "csv",
             Self::Sql => "sql",
+            Self::Html => "html",
+            Self::Markdown => "md",
+            Self::Json => "json",
         }
     }
 }
@@ -129,6 +138,14 @@ fn write_export(
         let mut writer = BufWriter::new(temporary.as_file_mut());
         let count = match format {
             ExportFormat::Csv => export_to_csv_rows(pager, &mut writer, rows)?,
+            ExportFormat::Json => json::write_json(pager, &mut writer, rows, dialect.0)?,
+
+            ExportFormat::Html => {
+                markup::Markup::Html.write(pager, &mut writer, rows, dialect.0)?
+            }
+            ExportFormat::Markdown => {
+                markup::Markup::Markdown.write(pager, &mut writer, rows, dialect.0)?
+            }
             // Single-row INSERTs also work with Oracle and older Db2 servers.
             ExportFormat::Sql => {
                 export_to_sql_inserts_for_target(target, dialect, pager, &mut writer, 1, rows)?
@@ -228,12 +245,7 @@ impl Workspace {
         .detach();
     }
 
-    pub(super) fn export_all_result(
-        &mut self,
-        index: usize,
-        format: ExportFormat,
-        cx: &mut Context<Self>,
-    ) {
+    fn export_all_result(&mut self, index: usize, format: ExportFormat, cx: &mut Context<Self>) {
         if !self.can_export(index) {
             return;
         }
@@ -263,6 +275,7 @@ impl Workspace {
         let full_format = match format {
             ExportFormat::Csv => db_wire::transfer::export::FullExportFormat::Csv,
             ExportFormat::Sql => db_wire::transfer::export::FullExportFormat::Sql,
+            ExportFormat::Html | ExportFormat::Markdown | ExportFormat::Json => return,
         };
         let source_sql = if tab.schema_name.is_some() && tab.table_name.is_some() {
             table_source_sql(&target, None, &tab.filter_sql)
@@ -443,6 +456,9 @@ impl Workspace {
         for (label, format, is_all) in [
             ("Export CSV", ExportFormat::Csv, false),
             ("Export SQL", ExportFormat::Sql, false),
+            ("Export JSON", ExportFormat::Json, false),
+            ("Export HTML", ExportFormat::Html, false),
+            ("Export Markdown", ExportFormat::Markdown, false),
             ("Export All (CSV)", ExportFormat::Csv, true),
             ("Export All (SQL)", ExportFormat::Sql, true),
         ] {
@@ -611,6 +627,154 @@ mod tests {
             ),
             "\"items\""
         );
+    }
+
+    #[test]
+    fn json_export_preserves_native_values_and_rejects_duplicate_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("result.json");
+        let dialect = SqlDialect(DbDriverKind::Postgres);
+        let pager = QueryResultPager::new(vec![
+            ColumnMeta::new("exact", DataType::Numeric),
+            ColumnMeta::new("float", DataType::Float8),
+            ColumnMeta::new("active", DataType::Bool),
+            ColumnMeta::new("text\"", DataType::Text),
+            ColumnMeta::new("bytes", DataType::Bytea),
+            ColumnMeta::new("document", DataType::Json),
+            ColumnMeta::new("missing", DataType::Text),
+        ])
+        .unwrap();
+        pager
+            .append_row([
+                Some("9007199254740993.000000000001"),
+                Some("Infinity"),
+                Some("true"),
+                Some(""),
+                Some(r"\x6162"),
+                Some("null"),
+                None,
+            ])
+            .unwrap();
+        assert_eq!(
+            write_export(&output, ExportFormat::Json, &pager, 1, dialect, "ignored").unwrap(),
+            1
+        );
+        let json = std::fs::read_to_string(&output).unwrap();
+        assert!(json.contains(r#""exact":9007199254740993.000000000001"#));
+        let values: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(values[0]["active"], true);
+        assert_eq!(values[0]["float"], "Infinity");
+        assert_eq!(values[0]["text\""], "");
+        assert_eq!(values[0]["bytes"], r"\x6162");
+        assert_eq!(values[0]["document"], "null");
+        assert!(values[0]["missing"].is_null());
+
+        let empty_output = dir.path().join("empty.json");
+        assert_eq!(
+            write_export(
+                &empty_output,
+                ExportFormat::Json,
+                &pager,
+                0,
+                dialect,
+                "ignored"
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(std::fs::read_to_string(empty_output).unwrap(), "[]\n");
+
+        let duplicate = QueryResultPager::new(vec![
+            ColumnMeta::new("id", DataType::Int8),
+            ColumnMeta::new("id", DataType::Text),
+        ])
+        .unwrap();
+        let error = write_export(
+            &output,
+            ExportFormat::Json,
+            &duplicate,
+            0,
+            dialect,
+            "ignored",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("duplicate column name"));
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), json);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn markup_exports_escape_data_and_distinguish_null_empty_and_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let pager = QueryResultPager::new(vec![
+            ColumnMeta::new("<header>|", DataType::Text),
+            ColumnMeta::new("empty", DataType::Text),
+            ColumnMeta::new("bytes", DataType::Bytea),
+        ])
+        .unwrap();
+        pager
+            .append_row([Some(b"<script>|*&\nnext".as_slice()), None, Some(b"ab")])
+            .unwrap();
+        pager
+            .append_row([Some(b"NULL".as_slice()), Some(b""), Some(b"")])
+            .unwrap();
+        let dialect = SqlDialect(DbDriverKind::Sqlite);
+        let html = dir.path().join("rows.html");
+        let markdown = dir.path().join("rows.md");
+        assert_eq!(
+            write_export(&html, ExportFormat::Html, &pager, 1, dialect, "ignored").unwrap(),
+            1
+        );
+        assert_eq!(
+            write_export(
+                &markdown,
+                ExportFormat::Markdown,
+                &pager,
+                2,
+                dialect,
+                "ignored"
+            )
+            .unwrap(),
+            2
+        );
+        let html = std::fs::read_to_string(html).unwrap();
+        assert!(html.contains("<th>&lt;header&gt;|</th>"));
+        assert!(html.contains("&lt;script&gt;|*&amp;\nnext"));
+        assert!(html.contains("<td><em>NULL</em></td><td>\\x6162</td>"));
+        assert!(!html.contains("<script>"));
+        assert!(!html.contains("<td>NULL</td>"));
+        let markdown = std::fs::read_to_string(markdown).unwrap();
+        assert_eq!(
+            markdown,
+            concat!(
+                "| &#60;header&#62;&#124; | empty | bytes |\n",
+                "| --- | --- | --- |\n",
+                "| &#60;script&#62;&#124;&#42;&#38;<br>next | *NULL* | &#92;x6162 |\n",
+                "| NULL |  | &#92;x |\n",
+            )
+        );
+    }
+
+    #[test]
+    fn markup_failure_leaves_previous_destination_and_removes_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.html");
+        std::fs::write(&path, "previous").unwrap();
+        let pager = QueryResultPager::new(vec![ColumnMeta::new("bytes", DataType::Bytea)]).unwrap();
+        pager.append_row([Some(r"\x6162")]).unwrap();
+        pager.append_row([Some(r"\xZZ")]).unwrap();
+        let error = write_export(
+            &path,
+            ExportFormat::Html,
+            &pager,
+            2,
+            SqlDialect(DbDriverKind::Postgres),
+            "ignored",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("hex digit"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "previous");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

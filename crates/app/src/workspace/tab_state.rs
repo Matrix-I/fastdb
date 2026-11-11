@@ -587,9 +587,8 @@ impl TabState {
                         .grid
                         .pager
                         .as_ref()
-                        .and_then(|p| p.get_cell(0, 0))
                         .ok_or_else(|| anyhow::anyhow!("EXPLAIN returned no plan"))
-                        .and_then(|bytes| db_wire::query_plan::QueryPlan::parse(&bytes));
+                        .and_then(|pager| super::query_plan::parse_plan(pager));
                     match parsed {
                         Ok(plan) => {
                             self.query_plan = Some(plan);

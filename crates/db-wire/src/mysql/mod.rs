@@ -9,6 +9,8 @@ use platform_hal::socket::{DbKind, detect_local_unix_socket};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod data_search;
+mod definition_search;
 mod read_only;
 mod script;
 
@@ -548,6 +550,40 @@ impl DatabaseDriver for MySqlDriver {
             Ok(())
         })
         .await
+    }
+
+    async fn search_definitions(
+        &self,
+        schema: &str,
+        needle: &str,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DefinitionHit>>> {
+        self.find_definitions(schema, needle, cancel).await
+    }
+
+    async fn search_table_data(
+        &self,
+        schema: &str,
+        table: &str,
+        needle: &str,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<Vec<crate::objects::DataSearchHit>>> {
+        self.find_table_data(schema, table, needle, cancel).await
+    }
+
+    async fn read_data_search_row(
+        &self,
+        locator: &crate::objects::DataRowLocator,
+        cancel: flume::Receiver<()>,
+    ) -> Result<Option<crate::objects::DataRowPreview>> {
+        anyhow::ensure!(
+            !cancel.is_disconnected() && cancel.try_recv().is_err(),
+            "Data search cancelled"
+        );
+        let crate::objects::DataRowIdentity::MySql(row) = &locator.0 else {
+            anyhow::bail!("Search result belongs to another provider");
+        };
+        Ok(Some(row.clone()))
     }
 
     async fn execute_schema_ddl(&self, sql: &str) -> Result<()> {

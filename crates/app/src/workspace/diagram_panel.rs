@@ -1,3 +1,5 @@
+mod svg;
+
 use super::diagram_model::{
     CARD_PADDING, DiagramModel, HEADER, HEADER_FONT, NAME_FONT, ROW, single_line_label,
 };
@@ -5,6 +7,45 @@ use super::script_tools::tool;
 use super::*;
 
 impl Workspace {
+    fn export_diagram_svg(&mut self, id: u64, graph: Arc<DiagramModel>, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        if tab.export.busy || graph.nodes.is_empty() {
+            return;
+        }
+        tab.export.busy = true;
+        tab.export.message = Some("Choose a diagram export destination…".into());
+        let dialog =
+            cx.prompt_for_new_path(&platform_hal::paths::downloads_dir(), Some("diagram.svg"));
+        cx.spawn(async move |this, cx| {
+            let message = match dialog.await {
+                Ok(Ok(Some(path))) => Some(
+                    cx.background_executor()
+                        .spawn(async move {
+                            match svg::write_svg(&path, &graph) {
+                                Ok(()) => format!("Exported diagram to {}", path.display()),
+                                Err(error) => format!("Diagram export failed: {error}"),
+                            }
+                        })
+                        .await,
+                ),
+                Ok(Ok(None)) => None,
+                Ok(Err(error)) => Some(format!("Cannot open export dialog: {error}")),
+                Err(_) => Some("Export dialog closed unexpectedly".into()),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) {
+                    tab.export.busy = false;
+                    tab.export.message = message;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn finish_diagram_drag(&mut self, id: u64, pointer: Point<Pixels>, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id)
             && tab.diagram.drag.is_some()
@@ -71,6 +112,7 @@ impl Workspace {
         );
         let fit_graph = graph.clone();
         let focus_graph = graph.clone();
+        let export_graph = graph.clone();
         let theme = self.theme.clone();
         let tab = &self.tabs[index];
         let id = tab.id;
@@ -150,6 +192,15 @@ impl Workspace {
                         cx.notify();
                     })),
                 );
+        let toolbar = if graph.nodes.is_empty() || tab.export.busy {
+            toolbar
+        } else {
+            toolbar.child(
+                tool("Export SVG…").on_click(cx.listener(move |this, _, _, cx| {
+                    this.export_diagram_svg(id, export_graph.clone(), cx);
+                })),
+            )
+        };
         let viewport_owner = cx.entity().downgrade();
         let line_graph = graph.clone();
         let line_scroll = scroll.clone();
@@ -469,6 +520,9 @@ impl Workspace {
                     .text_color(theme.text_secondary)
                     .child(notice.clone()),
             );
+        }
+        if let Some(message) = &self.tabs[index].export.message {
+            panel = panel.child(div().px_2().text_size(px(11.0)).child(message.clone()));
         }
         if let Some(error) = &self.tabs[index].diagram.layout_error {
             panel = panel.child(
