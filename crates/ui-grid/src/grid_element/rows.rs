@@ -1,4 +1,13 @@
 use super::*;
+
+fn blank_row_indices(
+    total_rows: u64,
+    viewport_height: f32,
+    row_height: f32,
+) -> std::ops::Range<u64> {
+    total_rows..total_rows.max((viewport_height / row_height) as u64)
+}
+
 impl VirtualDataGrid {
     pub(super) fn render_rows(
         &self,
@@ -38,6 +47,51 @@ impl VirtualDataGrid {
         let (visible_cols, cols_offset) =
             visible_columns(&display_widths, scroll_x, self.viewport_width);
 
+        let blank_rules = {
+            let visible_cols = visible_cols.clone();
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let data_height = total_rows as f32 * row_height;
+                    let blank_height = f32::from(bounds.size.height) - data_height;
+                    if blank_height <= 0.0 {
+                        return;
+                    }
+
+                    let blank_top = bounds.top() + px(data_height);
+                    let rule = px(1.0);
+                    let mut right_edge = bounds.left() + px(gutter_width);
+                    let mut paint_column = |edge| {
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(edge - rule, blank_top),
+                                size(rule, px(blank_height)),
+                            ),
+                            theme_border,
+                        ));
+                    };
+                    paint_column(right_edge);
+                    right_edge += px(cols_offset);
+                    for position in visible_cols {
+                        right_edge += px(display_widths[position]);
+                        paint_column(right_edge);
+                    }
+                    for row in blank_row_indices(total_rows, bounds.size.height.into(), row_height)
+                    {
+                        let y = bounds.top() + px((row + 1) as f32 * row_height) - rule;
+                        window.paint_quad(fill(
+                            Bounds::new(point(bounds.left(), y), size(bounds.size.width, rule)),
+                            theme_border,
+                        ));
+                    }
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        };
+
         let body = div()
             .id("grid-data-body-container")
             .flex()
@@ -46,6 +100,8 @@ impl VirtualDataGrid {
             .w(px(total_width))
             .h_full()
             .overflow_hidden()
+            .relative()
+            .child(blank_rules)
             .child(
                 uniform_list(
                     "grid-data-body",
@@ -183,5 +239,17 @@ impl VirtualDataGrid {
             );
 
         body.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blank_row_indices;
+
+    #[test]
+    fn blank_row_rules_fit_the_viewport_without_adding_data_rows() {
+        assert_eq!(blank_row_indices(2, 75.0, 20.0), 2..3);
+        assert_eq!(blank_row_indices(0, 60.0, 20.0), 0..3);
+        assert_eq!(blank_row_indices(4, 75.0, 20.0), 4..4);
     }
 }

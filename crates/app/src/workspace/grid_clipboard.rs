@@ -25,10 +25,26 @@ impl CopyFormat {
 #[derive(Clone)]
 pub(super) struct GridContextMenu {
     tab_id: u64,
-    pager: Arc<db_wire::QueryResultPager>,
+    pager: Option<Arc<db_wire::QueryResultPager>>,
     position: Point<Pixels>,
-    cell: ui_grid::GridCoord,
+    cell: Option<ui_grid::GridCoord>,
     revision: u64,
+}
+
+impl GridContextMenu {
+    fn matches_result(&self, tab: &TabState) -> bool {
+        tab.id == self.tab_id
+            && tab
+                .grid
+                .pager
+                .as_ref()
+                .zip(self.pager.as_ref())
+                .is_some_and(|(current, original)| Arc::ptr_eq(current, original))
+    }
+
+    fn can_refresh(&self, tab: &TabState) -> bool {
+        tab.id == self.tab_id && tab.table_name.is_some() && tab.active_subtab == TableSubTab::Data
+    }
 }
 
 struct SelectionSnapshot {
@@ -152,29 +168,34 @@ impl Workspace {
     pub(super) fn open_grid_context_menu(
         &mut self,
         index: usize,
-        row: u64,
-        col: usize,
+        cell: Option<ui_grid::GridCoord>,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.commit_cell_edit();
+        if cell.is_some() {
+            self.commit_cell_edit();
+        }
         let Some(tab) = self.tabs.get_mut(index) else {
             return;
         };
-        let Some(pager) = tab.grid.pager.clone() else {
-            return;
-        };
-        if row >= tab.grid.row_count() || col >= pager.columns.len() {
-            return;
-        }
-        let selected = tab
-            .grid
-            .selection_display_range()
-            .is_some_and(|(first, last, columns)| {
-                (first..=last).contains(&row) && tab.grid.display_columns()[columns].contains(&col)
-            });
-        if !selected {
-            tab.grid.selection = GridSelection::single(row, col);
+        let pager = tab.grid.pager.clone();
+        if let Some(ui_grid::GridCoord { row, col }) = cell {
+            let Some(pager) = pager.as_ref() else {
+                return;
+            };
+            if row >= tab.grid.row_count() || col >= pager.columns.len() {
+                return;
+            }
+            let selected =
+                tab.grid
+                    .selection_display_range()
+                    .is_some_and(|(first, last, columns)| {
+                        (first..=last).contains(&row)
+                            && tab.grid.display_columns()[columns].contains(&col)
+                    });
+            if !selected {
+                tab.grid.selection = GridSelection::single(row, col);
+            }
         }
         tab.editor_focused = false;
         self.input.is_filter_focused = false;
@@ -186,7 +207,7 @@ impl Workspace {
             tab_id: tab.id,
             pager,
             position,
-            cell: ui_grid::GridCoord { row, col },
+            cell,
             revision: tab.grid.changeset_revision(),
         });
         cx.notify();
@@ -268,10 +289,7 @@ impl Workspace {
             let grid = &self.tabs[i].grid;
             grid.editing_cell.is_none()
                 && grid.selection_display_range().is_some()
-                && grid
-                    .pager
-                    .as_ref()
-                    .is_some_and(|p| Arc::ptr_eq(p, &menu.pager))
+                && menu.matches_result(&self.tabs[i])
         });
         let theme = self.theme.clone();
         let mut panel = div()
@@ -308,20 +326,13 @@ impl Workspace {
                 })
                 .child(label);
             if enabled {
-                let pager = menu.pager.clone();
-                let tab_id = menu.tab_id;
+                let menu = menu.clone();
                 item = item
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_surface_selected))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.menus.grid_context_menu = None;
-                        if let Some(i) = this.tabs.iter().position(|t| t.id == tab_id)
-                            && this.tabs[i]
-                                .grid
-                                .pager
-                                .as_ref()
-                                .is_some_and(|p| Arc::ptr_eq(p, &pager))
-                        {
+                        if let Some(i) = this.tabs.iter().position(|tab| menu.matches_result(tab)) {
                             this.copy_grid_selection(i, format, cx);
                         }
                         cx.notify();
@@ -329,12 +340,16 @@ impl Workspace {
             }
             panel = panel.child(item);
         }
-        if enabled && index == Some(self.active_tab) && self.can_edit_active_rows() {
+        if enabled
+            && index == Some(self.active_tab)
+            && self.can_edit_active_rows()
+            && let Some(cell) = menu.cell
+        {
             let new_row = matches!(
                 self.tabs[self.active_tab]
                     .grid
                     .changeset
-                    .resolve_row(menu.cell.row),
+                    .resolve_row(cell.row),
                 ui_grid::RowRef::New(_)
             );
             for (label, default) in [("Set SQL NULL", false), ("Use database default", true)] {
@@ -346,24 +361,22 @@ impl Workspace {
                     move |this, _, _, cx| {
                         this.menus.grid_context_menu = None;
                         if this.tabs.get(this.active_tab).is_some_and(|tab| {
-                            tab.id == menu.tab_id
+                            menu.matches_result(tab)
                                 && tab.grid.changeset_revision() == menu.revision
-                                && tab
-                                    .grid
-                                    .pager
-                                    .as_ref()
-                                    .is_some_and(|pager| Arc::ptr_eq(pager, &menu.pager))
                         }) {
-                            this.set_grid_empty_value(menu.cell, default, cx);
+                            this.set_grid_empty_value(cell, default, cx);
                         }
                         cx.notify();
                     },
                 )));
             }
         }
-        if enabled && let Some(index) = index.filter(|&index| index == self.active_tab) {
+        if enabled
+            && let Some(index) = index.filter(|&index| index == self.active_tab)
+            && let Some(cell) = menu.cell
+        {
             for (index, reference) in self
-                .grid_references(index, menu.cell)
+                .grid_references(index, cell)
                 .into_iter()
                 .take(8)
                 .enumerate()
@@ -383,17 +396,10 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.menus.grid_context_menu = None;
                                 if this.tabs.get(this.active_tab).is_some_and(|tab| {
-                                    tab.id == picker_menu.tab_id
+                                    picker_menu.matches_result(tab)
                                         && tab.grid.changeset_revision() == picker_menu.revision
-                                        && tab.grid.pager.as_ref().is_some_and(|pager| {
-                                            Arc::ptr_eq(pager, &picker_menu.pager)
-                                        })
                                 }) {
-                                    this.choose_grid_reference(
-                                        picker_menu.cell,
-                                        picker_reference.clone(),
-                                        cx,
-                                    );
+                                    this.choose_grid_reference(cell, picker_reference.clone(), cx);
                                 }
                                 cx.notify();
                             })),
@@ -412,20 +418,35 @@ impl Workspace {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.menus.grid_context_menu = None;
                             if this.tabs.get(this.active_tab).is_some_and(|tab| {
-                                tab.id == menu.tab_id
+                                menu.matches_result(tab)
                                     && tab.grid.changeset_revision() == menu.revision
-                                    && tab
-                                        .grid
-                                        .pager
-                                        .as_ref()
-                                        .is_some_and(|pager| Arc::ptr_eq(pager, &menu.pager))
                             }) {
-                                this.open_grid_reference(menu.cell, reference.clone(), cx);
+                                this.open_grid_reference(cell, reference.clone(), cx);
                             }
                             cx.notify();
                         })),
                 );
             }
+        }
+        if self
+            .tabs
+            .get(self.active_tab)
+            .is_some_and(|tab| menu.can_refresh(tab))
+        {
+            let refresh_menu = menu.clone();
+            panel = panel.child(super::script_tools::tool("Refresh").on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.menus.grid_context_menu = None;
+                    if this
+                        .tabs
+                        .get(this.active_tab)
+                        .is_some_and(|tab| refresh_menu.can_refresh(tab))
+                    {
+                        this.run_active_query(cx);
+                    }
+                    cx.notify();
+                },
+            )));
         }
         deferred(
             anchored()
@@ -445,6 +466,35 @@ mod tests {
     use std::{io::Write, sync::Arc};
     use ui_core::theme::Theme;
     use ui_grid::{GridCoord, GridSelection, VirtualDataGrid};
+
+    #[test]
+    fn grid_refresh_targets_only_the_active_table_data_tab() {
+        use super::{GridContextMenu, TabState, TableSubTab};
+        let mut tab = TabState::table(
+            7,
+            "main",
+            "items",
+            Theme::dark(),
+            Arc::new(sql_intel::SchemaCache::new().unwrap()),
+        );
+        let menu = GridContextMenu {
+            tab_id: 7,
+            pager: None,
+            position: Default::default(),
+            cell: None,
+            revision: 0,
+        };
+
+        assert!(menu.can_refresh(&tab));
+        tab.id = 8;
+        assert!(!menu.can_refresh(&tab));
+        tab.id = 7;
+        tab.active_subtab = TableSubTab::Properties;
+        assert!(!menu.can_refresh(&tab));
+        tab.active_subtab = TableSubTab::Data;
+        tab.table_name = None;
+        assert!(!menu.can_refresh(&tab));
+    }
 
     fn grid() -> VirtualDataGrid {
         let pager = Arc::new(
