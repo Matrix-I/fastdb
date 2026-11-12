@@ -294,7 +294,7 @@ async fn sqlite_index_details_preserve_native_order_and_partial_source() {
     let driver = SqliteDriver::new(config.clone()).unwrap();
     driver
         .execute_schema_ddl(
-            "CREATE TABLE items (a TEXT, b INTEGER, PRIMARY KEY (b,a)) WITHOUT ROWID;
+            "CREATE TABLE items (a TEXT, b INTEGER, c TEXT, PRIMARY KEY (b,a), UNIQUE(c,a)) WITHOUT ROWID;
          CREATE UNIQUE INDEX folded ON items (lower(a), b DESC) WHERE b > 0;",
         )
         .await
@@ -330,6 +330,18 @@ async fn sqlite_index_details_preserve_native_order_and_partial_source() {
         ["\"b\" COLLATE BINARY ASC", "\"a\" COLLATE BINARY ASC"]
     );
     assert!(pk.unique);
+    let constraints: Vec<_> = details
+        .constraints
+        .iter()
+        .map(|c| (c.kind.as_str(), c.columns.as_slice()))
+        .collect();
+    assert_eq!(
+        constraints,
+        [
+            ("PRIMARY KEY", ["b".to_owned(), "a".to_owned()].as_slice()),
+            ("UNIQUE", ["c".to_owned(), "a".to_owned()].as_slice()),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -533,9 +545,13 @@ async fn sqlite_rejected_foreign_key_details_preserve_index_details_and_estimate
         .2;
     assert_eq!(indexed.indexes.len(), 1);
     assert_eq!(indexed.estimated_rows, Some(1));
+    assert_eq!(indexed.constraints.len(), 1);
+    assert_eq!(indexed.constraints[0].kind, "UNIQUE");
+    assert_eq!(indexed.constraints[0].columns, ["tag"]);
     assert!(
         details
             .iter()
-            .all(|(_, _, details)| details.constraints.is_empty())
+            .flat_map(|(_, _, details)| &details.constraints)
+            .all(|constraint| constraint.kind != "FOREIGN KEY")
     );
 }
