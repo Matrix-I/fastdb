@@ -2,7 +2,7 @@
 WITH visible_relations AS (
     SELECT c.*, n.nspname,
            format('%I.%I', n.nspname, c.relname) AS target,
-           CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END AS object_type
+           CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END AS object_type
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
@@ -18,8 +18,8 @@ WITH visible_relations AS (
     WHERE NOT r.relispartition AND a.attnum > 0 AND NOT a.attisdropped
 ), reconstruction AS (
     SELECT r.*, CASE
-        WHEN r.relkind NOT IN ('r', 'p', 'v', 'm') OR r.relpersistence = 't'
-            THEN 'temporary or foreign tables are not supported.'
+        WHEN r.relkind NOT IN ('r', 'p', 'v', 'm', 'f') OR r.relpersistence = 't'
+            THEN 'temporary tables are not supported.'
         WHEN EXISTS (
             SELECT p.attname FROM parent_columns p
             JOIN pg_attribute a ON a.attrelid = r.oid AND a.attname = p.attname
@@ -129,20 +129,35 @@ WITH visible_relations AS (
             (SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) FROM pg_attribute a
              WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped) || ') AS ' || pg_get_viewdef(r.oid, false)
         ELSE 'CREATE ' || CASE WHEN r.relpersistence = 'u' THEN 'UNLOGGED ' ELSE '' END ||
-            'TABLE ' || r.target ||
+            r.object_type || ' ' || r.target ||
             CASE WHEN r.reloftype <> 0 THEN ' OF ' || format_type(r.reloftype, NULL) ELSE '' END || E' (\n' ||
             COALESCE((SELECT string_agg(c.definition, E',\n' ORDER BY c.attnum NULLS LAST, c.constraint_name) FROM definitions c WHERE c.attrelid = r.oid), '') || E'\n)' ||
             COALESCE((SELECT ' INHERITS (' || h.parents || ')' FROM inheritance h WHERE h.inhrelid = r.oid), '') ||
             CASE WHEN r.relkind = 'p' THEN ' PARTITION BY ' || pg_get_partkeydef(r.oid) ELSE '' END ||
             COALESCE((SELECT ' USING ' || quote_ident(am.amname) FROM pg_am am WHERE am.oid = r.relam AND r.relkind = 'r'), '') ||
-            COALESCE((SELECT ' TABLESPACE ' || quote_ident(ts.spcname) FROM pg_tablespace ts WHERE ts.oid = r.reltablespace), '') || ';'
+            COALESCE((SELECT ' TABLESPACE ' || quote_ident(ts.spcname) FROM pg_tablespace ts WHERE ts.oid = r.reltablespace), '') ||
+            CASE WHEN r.relkind = 'f' THEN format(' SERVER %I', srv.srvname) ||
+                COALESCE((SELECT ' OPTIONS (' || string_agg(format('%I %L', o.option_name, o.option_value), ', ' ORDER BY o.option_name) || ')'
+                          FROM pg_options_to_table(ft.ftoptions) o), '')
+            ELSE '' END || ';'
         END
-    FROM relations r WHERE NOT r.unsupported
+    FROM relations r
+    LEFT JOIN pg_foreign_table ft ON ft.ftrelid = r.oid
+    LEFT JOIN pg_foreign_server srv ON srv.oid = ft.ftserver
+    WHERE NOT r.unsupported
     UNION ALL
     SELECT r.oid, 25, '', 'ALTER ' || r.object_type || ' ' || r.target || ' SET (' ||
         (SELECT string_agg(format('%I = %L', split_part(opt, '=', 1), substr(opt, strpos(opt, '=') + 1)), ', ' ORDER BY opt)
          FROM unnest(r.reloptions) opt) || ');'
     FROM relations r WHERE NOT r.unsupported AND array_length(r.reloptions, 1) > 0
+    UNION ALL
+    SELECT r.oid, 26, a.attname, 'ALTER FOREIGN TABLE ONLY ' || r.target || ' ALTER COLUMN ' ||
+        quote_ident(a.attname) || ' OPTIONS (' ||
+        (SELECT string_agg(format('%I %L', o.option_name, o.option_value), ', ' ORDER BY o.option_name)
+         FROM pg_options_to_table(a.attfdwoptions) o) || ');'
+    FROM relations r JOIN pg_attribute a ON a.attrelid = r.oid
+    WHERE NOT r.unsupported AND r.relkind = 'f' AND a.attnum > 0 AND NOT a.attisdropped
+      AND cardinality(a.attfdwoptions) > 0
     UNION ALL
     SELECT r.oid, 26, a.attname, 'ALTER VIEW ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
         ' SET DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid, false) || ';'

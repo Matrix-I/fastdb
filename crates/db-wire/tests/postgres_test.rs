@@ -8,6 +8,62 @@ use std::sync::Arc;
 // separate so one test cannot remove catalogs while the other deparses them.
 static CATALOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn postgres_foreign_table_source_replays_native_options_and_partition() {
+    use futures::FutureExt as _;
+    let Some(config) = test_config() else { return };
+    let guard = CATALOG_TEST_LOCK.lock().unwrap();
+    let outcome = db_wire::get_runtime().block_on(async {
+        let driver = PostgresDriver::new(config);
+        let schema = format!("fastdb_fdw_{}", uuid::Uuid::new_v4().simple());
+        let server = format!("\"{schema} server\"");
+        driver.execute_schema_ddl(&format!(r#"
+            CREATE SCHEMA {schema};
+            CREATE FOREIGN DATA WRAPPER {schema};
+            CREATE SERVER {server} FOREIGN DATA WRAPPER {schema};
+            CREATE TABLE {schema}.parent (id integer NOT NULL) PARTITION BY RANGE (id);
+            CREATE FOREIGN TABLE {schema}."remote table" (
+                id integer OPTIONS ("remote name" 'x=y') NOT NULL,
+                label text DEFAULT 'a',
+                CONSTRAINT positive CHECK (id > 0)
+            ) SERVER {server} OPTIONS ("remote table" 'a''b=c');
+            CREATE FOREIGN TABLE {schema}.leaf PARTITION OF {schema}.parent
+                FOR VALUES FROM (1) TO (10) SERVER {server};
+            COMMENT ON FOREIGN TABLE {schema}."remote table" IS 'Foreign fixture';
+        "#)).await.unwrap();
+        let outcome = std::panic::AssertUnwindSafe(async {
+            let details = driver.list_table_details().await.unwrap();
+            for name in ["remote table", "leaf"] {
+                let (_, _, details) = details.iter().find(|(s,t,_)| s == &schema && t == name).unwrap();
+                let ddl = details.ddl.as_deref().unwrap();
+                assert!(ddl.contains("CREATE FOREIGN TABLE"), "{ddl}");
+                assert!(ddl.contains(&format!("SERVER {server}")), "{ddl}");
+                if name == "remote table" {
+                    assert!(ddl.contains(r#""remote table" 'a''b=c'"#));
+                    assert!(ddl.contains(r#""remote name" 'x=y'"#));
+                    assert!(ddl.contains("COMMENT ON FOREIGN TABLE"));
+                } else {
+                    assert!(ddl.contains("ATTACH PARTITION"));
+                }
+                let target = db_wire::sql::SqlDialect(DbDriverKind::Postgres).qualified_table(&schema, name);
+                driver.execute_schema_ddl(&format!("DROP FOREIGN TABLE {target}")).await.unwrap();
+                driver.execute_schema_ddl(ddl).await.unwrap();
+                let restored = driver.list_table_details().await.unwrap();
+                assert_eq!(
+                    restored.iter().find(|(s,t,_)| s == &schema && t == name).unwrap().2.ddl.as_deref(),
+                    Some(ddl)
+                );
+            }
+        }).catch_unwind().await;
+        driver.execute_schema_ddl(&format!("DROP SCHEMA {schema} CASCADE; DROP SERVER {server}; DROP FOREIGN DATA WRAPPER {schema}")).await.unwrap();
+        outcome
+    });
+    drop(guard);
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 fn inherited_history_is_unavailable(setup: &str, reason: &str) {
     use futures::FutureExt as _;
     let Some(config) = test_config() else { return };
