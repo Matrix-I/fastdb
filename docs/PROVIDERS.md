@@ -485,7 +485,7 @@ Unlisted readers default to not implemented; unsupported is a separate state.
 | Provider | Available readers | Current limits |
 | :--- | :--- | :--- |
 | PostgreSQL | Columns, constraints, indexes, FK mappings, native table details, all seven optional catalog sections | Native detail/DDL relation-kind limits above still apply. |
-| MySQL | Columns, constraint names/types, index names, FK mappings, base-table statistics | Structured index/constraint details and extended sections remain open. PostgreSQL Rules/Policies are unsupported. |
+| MySQL | Columns, constraint names/types, index details, FK mappings, base-table statistics | Structured constraint details and extended sections remain open. PostgreSQL Rules/Policies are unsupported. |
 | MariaDB | Columns, constraint names/types, index names, FK mappings | Native details and extended sections are not implemented. PostgreSQL Rules/Policies are unsupported. |
 | SQLite | Columns, constraint summaries, index details, FK mappings and actions, stored row estimates | Partitions, Rules/Policies and database ACLs are unsupported. |
 | ODBC presets | Columns | Constraint/index/FK/detail and extended catalog readers are not implemented. No live validation is implied. |
@@ -498,12 +498,20 @@ values, views and unrepresentable totals remain unavailable. The read is
 bounded to 10,000 tables and does not run ANALYZE TABLE. Index names remain
 available through their separate reader.
 
+MySQL Indexes reads ordered key columns, prefix lengths, direction, method and
+uniqueness from INFORMATION_SCHEMA.STATISTICS. Functional key expressions and
+optimizer visibility are shown when the server supplies them. Validation status
+is unavailable. Older catalogs can supply ordinary keys with fewer fields.
+The details reader is bounded to 20,000 key rows, 2,048 bytes per expression
+and four seconds. An unavailable detail leaves the separate index summary and
+table statistics usable. The DDL tab contains the native source.
+
 Optional schema-reader outcomes are retained independently. Supported empty data
 is a success; failed reads do not become empty metadata. Native PostgreSQL 42501
 and MySQL access-denial codes become permission-denied states, preserving context;
 other native/ODBC errors remain explicit failures. Each optional batch has a
 five-second client deadline within the existing connection/refresh deadline.
-Optional batches load concurrently; there are no new catalog SQL queries.
+Optional batches load concurrently.
 Catalog sections retain their existing dedicated read-only PG connection,
 server/client deadlines and connection-generation guards. Refresh retries failed
 metadata; unavailable readers are not called. UI acceptance is pending.

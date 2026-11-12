@@ -18,7 +18,7 @@ pub(super) fn column_query(scoped: bool) -> String {
 fn field<T: FromValue>(row: &mysql_async::Row, index: usize) -> Result<T> {
     Ok(row
         .get_opt(index)
-        .context("MySQL column metadata field is missing")??)
+        .context("MySQL metadata field is missing")??)
 }
 
 pub(super) fn column(row: &mysql_async::Row) -> Result<ColumnMeta> {
@@ -107,9 +107,109 @@ pub(super) fn table_statistics(
     Ok(details)
 }
 
+pub(super) const MAX_INDEX_KEYS: usize = 20_000;
+const MAX_INDEX_EXPRESSION_BYTES: usize = 2_048;
+
+pub(super) fn index_query(has_expression: bool, has_visibility: bool) -> String {
+    let expression = if has_expression {
+        format!(
+            "CASE WHEN OCTET_LENGTH(expression) <= {MAX_INDEX_EXPRESSION_BYTES} THEN expression END"
+        )
+    } else {
+        "NULL".into()
+    };
+    let visibility = if has_visibility { "is_visible" } else { "NULL" };
+    format!(
+        "SELECT table_schema, table_name, index_name, seq_in_index, column_name,
+                sub_part, collation, non_unique, index_type, {expression}, {visibility}
+         FROM information_schema.statistics
+         WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+         LIMIT ?"
+    )
+}
+
+pub(super) fn add_indexes(
+    tables: &mut [(String, String, crate::TableDetails)],
+    rows: Vec<mysql_async::Row>,
+) -> Result<()> {
+    use crate::{IndexDetails, sql::SqlDialect};
+    use std::collections::BTreeMap;
+    anyhow::ensure!(
+        rows.len() <= MAX_INDEX_KEYS,
+        "MySQL index details exceed {MAX_INDEX_KEYS} keys"
+    );
+    let dialect = SqlDialect(crate::DbDriverKind::MySql);
+    let mut indexes = BTreeMap::<(usize, String), (IndexDetails, BTreeMap<u64, String>)>::new();
+    for row in rows {
+        let schema: String = field(&row, 0)?;
+        let table: String = field(&row, 1)?;
+        let Ok(table_index) =
+            tables.binary_search_by(|item| (&item.0, &item.1).cmp(&(&schema, &table)))
+        else {
+            continue;
+        };
+        let name: String = field(&row, 2)?;
+        let seq = field(&row, 3)?;
+        let mut key = match field::<Option<String>>(&row, 4)? {
+            Some(column) => dialect.quote_ident(&column),
+            None => field::<Option<String>>(&row, 9)?
+                .map(|expression| format!("({expression})"))
+                .unwrap_or_else(|| "Expression unavailable".into()),
+        };
+        if let Some(prefix) = field::<Option<u64>>(&row, 5)? {
+            key.push_str(&format!("({prefix})"));
+        }
+        match field::<Option<String>>(&row, 6)?.as_deref() {
+            Some("A") => key.push_str(" ASC"),
+            Some("D") => key.push_str(" DESC"),
+            _ => {}
+        }
+        let (_, keys) = match indexes.entry((table_index, name.clone())) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let visibility = match field::<Option<String>>(&row, 10)?.as_deref() {
+                    Some("YES") => "Visible",
+                    Some("NO") => "Invisible",
+                    _ => "Unavailable",
+                };
+                entry.insert((
+                    IndexDetails {
+                        name,
+                        method: field(&row, 8)?,
+                        columns: Vec::new(),
+                        unique: field::<u64>(&row, 7)? == 0,
+                        // MySQL optimizer visibility is independent of index validation.
+                        valid: false,
+                        definition: format!("Optimizer visibility: {visibility}"),
+                    },
+                    BTreeMap::new(),
+                ))
+            }
+        };
+        keys.insert(seq, key);
+    }
+    for ((table, _), (mut index, keys)) in indexes {
+        index.columns = keys.into_values().collect();
+        tables[table].2.indexes.push(index);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_catalog_queries_keep_visibility_without_functional_keys() {
+        let modern = index_query(true, true);
+        assert!(modern.contains("OCTET_LENGTH(expression)"));
+        assert!(modern.contains("is_visible"));
+        let visibility_only = index_query(false, true);
+        assert!(visibility_only.contains("index_type, NULL, is_visible"));
+        let legacy = index_query(false, false);
+        assert!(legacy.contains("index_type, NULL, NULL"));
+        assert!(legacy.ends_with("LIMIT ?"));
+    }
 
     #[test]
     fn statistics_preserve_zero_and_keep_missing_or_overflowing_values_unavailable() {

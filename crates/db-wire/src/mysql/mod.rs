@@ -206,6 +206,27 @@ impl MySqlDriver {
         .await
     }
 
+    async fn index_detail_rows(&self) -> Result<Vec<mysql_async::Row>> {
+        let params = (metadata::MAX_INDEX_KEYS + 1,);
+        const UNKNOWN_COLUMN: u16 = 1054;
+        for has_expression in [true, false] {
+            match self
+                .query_rows(metadata::index_query(has_expression, true), params)
+                .await
+            {
+                Err(error)
+                    if error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<mysql_async::ServerError>()
+                            .is_some_and(|error| error.code == UNKNOWN_COLUMN)
+                    }) => {}
+                result => return result,
+            }
+        }
+        self.query_rows(metadata::index_query(false, false), params)
+            .await
+    }
+
     /// Streams a query's rows into a new pager; runs on the shared runtime via the caller
     async fn stream_query(
         pool: Arc<ConnectionPool>,
@@ -806,16 +827,30 @@ impl DatabaseDriver for MySqlDriver {
         if self.config.driver != crate::DbDriverKind::MySql {
             return Ok(Vec::new());
         }
-        let rows = tokio::time::timeout(
+        // Leave room for the app's five-second optional-metadata deadline so
+        // slow index details cannot discard already loaded table statistics.
+        const INDEX_DETAILS_TIMEOUT: Duration = Duration::from_secs(4);
+        let statistics = tokio::time::timeout(
             Duration::from_secs(15),
             self.query_rows(
                 metadata::TABLE_STATISTICS.to_owned(),
                 (metadata::MAX_STATISTICS_TABLES + 1,),
             ),
-        )
-        .await
-        .context("MySQL table statistics timed out")??;
-        metadata::table_statistics(rows)
+        );
+        let index_details = tokio::time::timeout(INDEX_DETAILS_TIMEOUT, self.index_detail_rows());
+        let (statistics, indexes) = tokio::join!(statistics, index_details);
+        let mut tables =
+            metadata::table_statistics(statistics.context("MySQL table statistics timed out")??)?;
+        match indexes {
+            Ok(result) => {
+                if let Err(error) = result.and_then(|rows| metadata::add_indexes(&mut tables, rows))
+                {
+                    tracing::warn!(%error, "MySQL index details are unavailable");
+                }
+            }
+            Err(_) => tracing::warn!("MySQL index details timed out"),
+        }
+        Ok(tables)
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
