@@ -3,7 +3,8 @@ use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
     pub(in crate::workspace) fn render_indexes(&self, theme: &Theme) -> AnyElement {
-        let rows = if let Some(details) = &self.details {
+        let details = self.index_details();
+        let rows = if let Some(details) = details {
             details
                 .indexes
                 .iter()
@@ -51,7 +52,7 @@ impl TableProperties {
                 ("Definition (including predicate)", 620.0),
             ],
             rows,
-            if self.details.is_some() {
+            if details.is_some() {
                 "No indexes."
             } else {
                 "Indexes loaded: no objects found. Native definitions are unavailable."

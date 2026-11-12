@@ -36,7 +36,14 @@ fn declarations_match_implemented_provider_readers() {
         for feature in [F::Columns, F::Constraints, F::Indexes, F::ForeignKeys] {
             assert_eq!(mysql.support(feature), S::Available);
         }
-        assert_eq!(mysql.support(F::TableDetails), S::NotImplemented);
+        assert_eq!(
+            mysql.support(F::TableDetails),
+            if kind == DbDriverKind::MySql {
+                S::Available
+            } else {
+                S::NotImplemented
+            }
+        );
         assert_eq!(
             mysql.support(F::Catalog(CatalogSection::Triggers)),
             S::NotImplemented

@@ -404,3 +404,68 @@ fn mysql_relation_ddl_preserves_quoted_table_and_native_view_source() {
         if let Err(panic) = result { std::panic::resume_unwind(panic); }
     });
 }
+
+#[test]
+fn mysql_read_only_properties_load_native_table_statistics() {
+    let Some(mut config) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let admin = MySqlDriver::new(config.clone());
+        let schema = format!("fastdb_stats_{}", uuid::Uuid::new_v4().simple());
+        admin
+            .execute_query(&format!("CREATE DATABASE {schema}"))
+            .await
+            .unwrap();
+        config.database = schema.clone();
+        let writer = MySqlDriver::new(config.clone());
+        let result: anyhow::Result<_> =
+            async {
+                writer.execute_query(
+                "CREATE TABLE `metrics'table` (id INTEGER PRIMARY KEY, tag INT, INDEX (tag))
+                 ENGINE=InnoDB COMMENT='native stats fixture'",
+            ).await?;
+                writer
+                    .execute_query("INSERT INTO `metrics'table` VALUES (1, 10), (2, 20)")
+                    .await?;
+                writer
+                    .execute_query("ANALYZE TABLE `metrics'table`")
+                    .await?;
+                writer
+                    .execute_query("CREATE VIEW metrics_view AS SELECT id FROM `metrics'table`")
+                    .await?;
+                let reader = MySqlDriver::new(ConnectionConfig {
+                    read_only: true,
+                    ..config
+                });
+                reader.list_table_details().await
+            }
+            .await;
+        admin
+            .execute_query(&format!("DROP DATABASE {schema}"))
+            .await
+            .unwrap();
+        let details = result.unwrap();
+        let (_, _, table) = details
+            .iter()
+            .find(|(db, name, _)| db == &schema && name == "metrics'table")
+            .expect("native table statistics");
+        assert_eq!(table.comment.as_deref(), Some("native stats fixture"));
+        assert!(table.estimated_rows.is_some_and(|rows| rows > 0));
+        assert!(table.table_bytes.is_some_and(|bytes| bytes > 0));
+        assert!(table.index_bytes.is_some_and(|bytes| bytes > 0));
+        assert_eq!(
+            table.total_bytes,
+            table
+                .table_bytes
+                .zip(table.index_bytes)
+                .and_then(|(data, indexes)| data.checked_add(indexes))
+        );
+        assert!(table.last_analyze.is_none());
+        assert!(
+            !details
+                .iter()
+                .any(|(db, name, _)| db == &schema && name == "metrics_view")
+        );
+    });
+}

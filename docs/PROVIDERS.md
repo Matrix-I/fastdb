@@ -485,9 +485,18 @@ Unlisted readers default to not implemented; unsupported is a separate state.
 | Provider | Available readers | Current limits |
 | :--- | :--- | :--- |
 | PostgreSQL | Columns, constraints, indexes, FK mappings, native table details, all seven optional catalog sections | Native detail/DDL relation-kind limits above still apply. |
-| MySQL/MariaDB | Columns, constraint names/types, index names, FK mappings | Native details and extended sections are not implemented; PostgreSQL Rules/Policies are unsupported. |
-| SQLite | Columns, index names, FK mappings | Constraint/detail readers are not implemented; partitions, Rules/Policies and database ACLs are unsupported. |
+| MySQL | Columns, constraint names/types, index names, FK mappings, base-table statistics | Structured index/constraint details and extended sections remain open. PostgreSQL Rules/Policies are unsupported. |
+| MariaDB | Columns, constraint names/types, index names, FK mappings | Native details and extended sections are not implemented. PostgreSQL Rules/Policies are unsupported. |
+| SQLite | Columns, constraint summaries, index details, FK mappings and actions, stored row estimates | Partitions, Rules/Policies and database ACLs are unsupported. |
 | ODBC presets | Columns | Constraint/index/FK/detail and extended catalog readers are not implemented. No live validation is implied. |
+
+MySQL Statistics reads stored row estimates, data/index lengths and table
+comments from INFORMATION_SCHEMA.TABLES for visible base tables. MySQL can
+cache these statistics, and sizes follow the storage engine's accounting.
+The displayed data-plus-index value adds the two available lengths. Missing
+values, views and unrepresentable totals remain unavailable. The read is
+bounded to 10,000 tables and does not run ANALYZE TABLE. Index names remain
+available through their separate reader.
 
 Optional schema-reader outcomes are retained independently. Supported empty data
 is a success; failed reads do not become empty metadata. Native PostgreSQL 42501
