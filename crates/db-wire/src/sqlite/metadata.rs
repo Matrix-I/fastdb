@@ -13,6 +13,59 @@ WHERE c.hidden <> 1
 ORDER BY c.cid
 "#;
 
+// sqlite_schema omits WITHOUT ROWID primary-key entries. index_list also
+// includes the implicit UNIQUE/PK indexes whose names must not be filtered out.
+const INDEX_NAMES: &str = r#"
+SELECT 'main',
+       CASE WHEN length(CAST(m.name AS BLOB)) <= ?2 THEN m.name END,
+       CASE WHEN length(CAST(i.name AS BLOB)) <= ?2 THEN i.name END
+FROM main.sqlite_schema m JOIN pragma_index_list(m.name, 'main') i
+WHERE m.type = 'table' AND m.name NOT GLOB 'sqlite_*'
+ORDER BY m.name, i.name
+LIMIT ?1
+"#;
+
+const MAX_SCHEMA_INDEXES: usize = 100_000;
+const MAX_INDEX_NAME_BYTES: usize = 128 * 1024;
+const MAX_INDEX_METADATA_BYTES: usize = 16 * 1024 * 1024;
+
+pub(super) fn index_names(conn: &Connection) -> Result<Vec<(String, String, String)>> {
+    bounded_index_names(conn, MAX_SCHEMA_INDEXES)
+}
+
+fn bounded_index_names(conn: &Connection, limit: usize) -> Result<Vec<(String, String, String)>> {
+    crate::sql_observer::observe!(
+        "SQLite",
+        INDEX_NAMES,
+        |query| {
+            let mut statement = conn.prepare(query)?;
+            let mut rows = statement.query(rusqlite::params![limit + 1, MAX_INDEX_NAME_BYTES])?;
+            let mut result = Vec::new();
+            let mut bytes = 0;
+            while let Some(row) = rows.next()? {
+                anyhow::ensure!(
+                    result.len() < limit,
+                    "SQLite index metadata exceeds {limit} objects"
+                );
+                let table: String = row
+                    .get::<_, Option<String>>(1)?
+                    .context("SQLite index metadata name exceeds 128 KiB")?;
+                let index: String = row
+                    .get::<_, Option<String>>(2)?
+                    .context("SQLite index metadata name exceeds 128 KiB")?;
+                bytes += table.len() + index.len();
+                anyhow::ensure!(
+                    bytes <= MAX_INDEX_METADATA_BYTES,
+                    "SQLite index metadata exceeds 16 MiB"
+                );
+                result.push((row.get(0)?, table, index));
+            }
+            Ok(result)
+        },
+        |rows| Some(rows.len() as u64)
+    )
+}
+
 pub(super) fn columns(
     conn: &Connection,
     schema: &str,
@@ -106,7 +159,106 @@ impl SqliteDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::{COLUMNS, SqliteDriver};
+    use super::{
+        COLUMNS, INDEX_NAMES, MAX_INDEX_NAME_BYTES, MAX_SCHEMA_INDEXES, SqliteDriver,
+        bounded_index_names, index_names,
+    };
+
+    #[test]
+    fn index_reader_handles_quoted_names_and_reports_object_and_name_limits() {
+        let driver = SqliteDriver::new_memory();
+        let conn = driver.conn.lock();
+        conn.execute_batch("CREATE TABLE \"quoted\"\" 名\" (id INTEGER PRIMARY KEY, label TEXT UNIQUE); CREATE INDEX \"idx\"\"quoted\" ON \"quoted\"\" 名\"(label)").unwrap();
+        let names = index_names(&conn).unwrap();
+        assert_eq!(names.len(), 2);
+        assert_eq!(
+            names[0],
+            ("main".into(), "quoted\" 名".into(), "idx\"quoted".into())
+        );
+        assert!(
+            bounded_index_names(&conn, 1)
+                .unwrap_err()
+                .to_string()
+                .contains("1 objects")
+        );
+        let oversized = "n".repeat(MAX_INDEX_NAME_BYTES + 1);
+        conn.execute_batch(&format!(
+            "CREATE INDEX {oversized} ON \"quoted\"\" 名\"(label)"
+        ))
+        .unwrap();
+        assert!(
+            index_names(&conn)
+                .unwrap_err()
+                .to_string()
+                .contains("128 KiB")
+        );
+    }
+
+    #[test]
+    fn index_reader_enforces_the_aggregate_name_budget_without_partial_results() {
+        // Each row contains two 128 KiB names, so 64 rows exactly fill 16 MiB.
+        const ROWS_AT_BUDGET: usize = 64;
+        let driver = SqliteDriver::new_memory();
+        let conn = driver.conn.lock();
+        let table = "t".repeat(MAX_INDEX_NAME_BYTES);
+        conn.execute_batch(&format!("CREATE TABLE {table} (id INTEGER)"))
+            .unwrap();
+        for n in 0..ROWS_AT_BUDGET {
+            let index = format!("i{n:03}{}", "x".repeat(MAX_INDEX_NAME_BYTES - 4));
+            conn.execute_batch(&format!("CREATE INDEX {index} ON {table}(id)"))
+                .unwrap();
+        }
+        assert_eq!(index_names(&conn).unwrap().len(), ROWS_AT_BUDGET);
+        let index = "z".repeat(MAX_INDEX_NAME_BYTES);
+        conn.execute_batch(&format!("CREATE INDEX {index} ON {table}(id)"))
+            .unwrap();
+        assert!(
+            index_names(&conn)
+                .unwrap_err()
+                .to_string()
+                .contains("16 MiB")
+        );
+    }
+
+    #[test]
+    fn schema_index_reader_uses_native_metadata_at_large_catalog_volume() {
+        let driver = SqliteDriver::new_memory();
+        let conn = driver.conn.lock();
+        for n in 0..1000 {
+            conn.execute_batch(&format!(
+                "CREATE TABLE fixture_{n} (id TEXT PRIMARY KEY, label TEXT UNIQUE) WITHOUT ROWID"
+            ))
+            .unwrap();
+        }
+        let plan = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {INDEX_NAMES}"))
+            .unwrap()
+            .query_map(
+                rusqlite::params![MAX_SCHEMA_INDEXES + 1, MAX_INDEX_NAME_BYTES],
+                |row| row.get::<_, String>(3),
+            )
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(plan.iter().any(|line| line.contains("VIRTUAL TABLE")));
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            let indexes = index_names(&conn).unwrap();
+            assert_eq!(indexes.len(), 2000);
+            assert!(
+                indexes
+                    .iter()
+                    .all(|(_, _, name)| name.starts_with("sqlite_autoindex_"))
+            );
+        }
+        let version: String = conn
+            .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+            .unwrap();
+        eprintln!(
+            "SQLite {version}; 1000 WITHOUT ROWID tables, 2000 native implicit indexes; 20 warm schema reads: {:?}; plan: {plan:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn scoped_column_reader_uses_native_metadata_at_large_schema_volume() {
