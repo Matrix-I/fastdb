@@ -532,10 +532,18 @@ impl DatabaseDriver for MySqlDriver {
     fn metadata_capabilities(&self) -> crate::metadata::MetadataCapabilities {
         use crate::catalog::CatalogSection as C;
         use crate::metadata::{MetadataCapabilities, MetadataFeature as F};
-        MetadataCapabilities::new(
-            &[F::Columns, F::Constraints, F::Indexes, F::ForeignKeys],
-            &[F::Catalog(C::Rules), F::Catalog(C::Policies)],
-        )
+        let available: &'static [F] = if self.config.driver == crate::DbDriverKind::MySql {
+            &[
+                F::Columns,
+                F::Constraints,
+                F::Indexes,
+                F::ForeignKeys,
+                F::TableDetails,
+            ]
+        } else {
+            &[F::Columns, F::Constraints, F::Indexes, F::ForeignKeys]
+        };
+        MetadataCapabilities::new(available, &[F::Catalog(C::Rules), F::Catalog(C::Policies)])
     }
 
     async fn ping(&self) -> Result<()> {
@@ -791,6 +799,23 @@ impl DatabaseDriver for MySqlDriver {
         let rows: Vec<(String, String, String, String)> =
             self.query_rows(sql.to_string(), ()).await?;
         Ok(rows)
+    }
+
+    async fn list_table_details(&self) -> Result<Vec<(String, String, crate::TableDetails)>> {
+        use anyhow::Context as _;
+        if self.config.driver != crate::DbDriverKind::MySql {
+            return Ok(Vec::new());
+        }
+        let rows = tokio::time::timeout(
+            Duration::from_secs(15),
+            self.query_rows(
+                metadata::TABLE_STATISTICS.to_owned(),
+                (metadata::MAX_STATISTICS_TABLES + 1,),
+            ),
+        )
+        .await
+        .context("MySQL table statistics timed out")??;
+        metadata::table_statistics(rows)
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {

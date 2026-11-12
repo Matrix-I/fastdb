@@ -73,20 +73,36 @@ impl TableProperties {
             ),
             ("Persistence", text(d.and_then(|d| d.persistence.as_ref()))),
             (
-                if self.kind == DbDriverKind::Sqlite {
-                    "Stored Row Estimate (may be stale)"
-                } else {
-                    "Estimated Rows (ANALYZE)"
+                match self.kind {
+                    DbDriverKind::Sqlite | DbDriverKind::MySql => {
+                        "Stored Row Estimate (may be stale)"
+                    }
+                    _ => "Estimated Rows (ANALYZE)",
                 },
                 number(d.and_then(|d| d.estimated_rows)),
             ),
             (
-                "Table + TOAST (bytes)",
+                if self.kind == DbDriverKind::MySql {
+                    "Data (catalog bytes)"
+                } else {
+                    "Table + TOAST (bytes)"
+                },
                 number(d.and_then(|d| d.table_bytes)),
             ),
-            ("Indexes (bytes)", number(d.and_then(|d| d.index_bytes))),
             (
-                "Total Relation (bytes)",
+                if self.kind == DbDriverKind::MySql {
+                    "Indexes (catalog bytes)"
+                } else {
+                    "Indexes (bytes)"
+                },
+                number(d.and_then(|d| d.index_bytes)),
+            ),
+            (
+                if self.kind == DbDriverKind::MySql {
+                    "Data + Indexes (catalog bytes)"
+                } else {
+                    "Total Relation (bytes)"
+                },
                 number(d.and_then(|d| d.total_bytes)),
             ),
             ("Last Vacuum", text(d.and_then(|d| d.last_vacuum.as_ref()))),
@@ -154,6 +170,12 @@ impl TableProperties {
             self.section_notice(MetadataFeature::Columns)
         }
     }
+    pub(super) fn index_details(&self) -> Option<&db_wire::TableDetails> {
+        self.details
+            .as_ref()
+            .filter(|details| self.kind != DbDriverKind::MySql || !details.indexes.is_empty())
+    }
+
     pub(super) fn constraint_details(&self) -> Option<&db_wire::TableDetails> {
         self.details
             .as_ref()
@@ -191,9 +213,8 @@ impl TableProperties {
         if feature == MetadataFeature::ForeignKeys && self.foreign_key_details().is_some() {
             return None;
         }
-        if self.details.is_some()
-            && (feature == MetadataFeature::Indexes
-                || (self.kind == DbDriverKind::Postgres && feature == MetadataFeature::Constraints))
+        if (feature == MetadataFeature::Indexes && self.index_details().is_some())
+            || (feature == MetadataFeature::Constraints && self.constraint_details().is_some())
         {
             return None;
         }
@@ -249,6 +270,44 @@ impl TableProperties {
 mod tests {
     use super::TableProperties;
     use db_wire::{ColumnMeta, DataType, DbDriverKind};
+
+    #[test]
+    fn mysql_statistics_keep_index_summaries_and_use_catalog_labels() {
+        use db_wire::metadata::MetadataFeature as F;
+        let model = TableProperties::new(
+            DbDriverKind::MySql,
+            "main".into(),
+            "items".into(),
+            vec![],
+            vec![],
+            vec!["PRIMARY".into()],
+        )
+        .with_metadata(
+            Some(db_wire::TableDetails {
+                estimated_rows: Some(5),
+                table_bytes: Some(1024),
+                index_bytes: Some(2048),
+                total_bytes: Some(3072),
+                ..Default::default()
+            }),
+            None,
+        )
+        .with_states(
+            std::sync::Arc::new(std::collections::HashMap::from([
+                (F::Indexes, super::MetadataState::Ready),
+                (F::TableDetails, super::MetadataState::Ready),
+            ])),
+            vec![],
+        );
+        let rows = model.statistics_rows();
+        assert!(rows.contains(&("Stored Row Estimate (may be stale)", "5".into())));
+        assert!(rows.contains(&("Data (catalog bytes)", "1024".into())));
+        assert!(rows.contains(&("Indexes (catalog bytes)", "2048".into())));
+        assert!(rows.contains(&("Data + Indexes (catalog bytes)", "3072".into())));
+        assert_eq!(model.section_notice(F::Indexes), None);
+        assert!(model.index_details().is_none());
+        assert_eq!(model.indexes, ["PRIMARY"]);
+    }
 
     #[test]
     fn sqlite_foreign_key_details_leave_general_constraint_status_unavailable() {
