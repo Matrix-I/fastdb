@@ -14,7 +14,7 @@
 
 - **Scoped database search.** The Connections panel omits definition search and multi-table data search. Search table data is available from the open table’s footer.
 
-- **Query plan coverage.** SQLite estimated plans are wired; desktop acceptance is pending. MySQL/MariaDB and ODBC plans, expensive-node navigation, saved plan comparison and remaining metadata/DDL coverage are open.
+- **Query plan coverage.** PostgreSQL, MySQL and SQLite estimated plans, PostgreSQL/MySQL/MariaDB actual-plan adapters, expensive-node navigation and versioned Save/Open JSON comparison are wired with automated coverage. MariaDB desktop connections remain disabled. SQL Server estimated plans await live ODBC acceptance. Oracle and Db2 plan adapters and remaining metadata/DDL coverage are open; desktop acceptance of the new controls is pending.
 
 - **Transfer formats and analysis.** HTML, Markdown and JSON export of loaded results and focused ER SVG export are wired; desktop acceptance is pending. JSON import and full-source export, spreadsheet transfer, format options and result aggregates/charts remain open.
 
@@ -37,7 +37,7 @@ The [audited roadmap](../ROADMAP.md) separates working paths, partial features, 
 - **Execution feedback limits.** Execution logs and timeout choices live only in open SQL tabs. ODBC informational notices and structured error positions are not exposed; MySQL/MariaDB positions are limited to native error text. Desktop acceptance of Execution log/Timeout is pending manual verification.
 - **Advanced script execution.** Transaction chaining remains unsupported for PostgreSQL. Dedicated ODBC tabs, supported database/schema selectors and vendor batch delimiters are implemented with automated fixtures. Live ODBC parity, separate MariaDB validation and desktop acceptance remain open.
 - **SSH coverage.** PostgreSQL, MySQL, and MariaDB have fingerprint-verified SSH forwarding. Separate MariaDB validation and desktop acceptance remain to be verified.
-- **Additional metadata for other providers.** PostgreSQL Properties has catalog metadata and statistics; other providers label unsupported fields as unavailable. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. PostgreSQL DDL uses catalog definitions for tables and views (see provider documentation for scope); other providers retain a partial preview.
+- **Additional metadata coverage.** PostgreSQL Properties includes materialized-view columns, native types, details and structural DDL with no data; foreign/inherited/typed/temporary relation DDL remains open. PostgreSQL row counts are estimates, and partition-parent sizes are unavailable rather than a misleading zero or a sum of partitions. MySQL/SQLite have native scoped DDL and column readers; broader native index/constraint/statistics details remain incomplete. Other providers label unsupported fields as unavailable or retain a partial preview.
 - **Theme and preferences.** Light theme toggle (View menu / `Cmd+Shift+T`), configurable editor font zoom (`Cmd+=` / `Cmd+-` / `Cmd+0`), and persistent panel/grid preferences are implemented; desktop acceptance belongs to the user.
 - **Performance target validation.** The desktop regression suite measures startup, RSS, a million-row SQLite stream, scrolling and release executable size; cold-cache startup, live-provider latency and the original target claims still need separate measurements.
 

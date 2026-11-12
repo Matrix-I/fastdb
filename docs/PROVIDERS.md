@@ -23,15 +23,20 @@ table bytes include TOAST and auxiliary storage. Sizes apply to the relation its
 Partition parents and views show unavailable sizes, not totals of their children.
 Vacuum/analyze timestamps come from `pg_stat_all_tables` and may be unknown or
 reset. These are read-only catalog queries; FastDB does not run COUNT, ANALYZE or
-VACUUM to populate Properties. Catalog visibility follows `information_schema`;
-metadata failures appear in the Properties header and Statistics section without
+VACUUM to populate Properties. Catalog visibility follows `information_schema`
+for its supported relation kinds; materialized views use native ownership and
+SELECT/column-grant visibility, including restricted column lists.
+Metadata failures appear in the Properties header and Statistics section without
 preventing table browsing.
 
 ### PostgreSQL DDL
 
 Properties → DDL / Copy DDL exports executable structural SQL from one catalog
 query snapshot during metadata refresh. It supports ordinary and partitioned
-tables, partition attachment, zero-column tables and views. Output preserves:
+tables, partition attachment, zero-column tables, views and materialized views.
+Materialized views retain their query, native columns, storage settings, indexes,
+comments and grants; scripts use WITH NO DATA and require an explicit refresh
+after replay. Output preserves:
 
 - Native types/typmods, collations, defaults, NOT NULL, stored/virtual generated
   expressions and ALWAYS/BY DEFAULT identity options and sequence names.
@@ -54,9 +59,14 @@ indexes and triggers from its parent. The script captures the source search path
 for deparsed expressions and assumes compatible PostgreSQL and dependency
 versions. This is single-object structural SQL, not a full database dump: data,
 sequence current values, child partitions, incoming foreign keys, publications,
-security labels and extension membership are outside its scope. Inheritance,
-typed, temporary and foreign tables return an explicit unavailable message.
-Other providers keep their partial metadata preview. Catalog DDL is tested on
+security labels and extension membership are outside its scope. Typed tables use
+OF with the existing composite type dependency. Inherited source is in progress:
+basic parent order, local checks and child overrides have replay coverage, but
+diverged parent defaults and parent-added column order remain unresolved. Do
+not treat inherited source as release-ready. Temporary and foreign tables still
+return an explicit unavailable message.
+MySQL/SQLite use their native scoped DDL readers; remaining providers retain a
+partial metadata preview. Catalog DDL is tested on
 PostgreSQL 16; catalog fields require PostgreSQL 14 or later.
 
 Run the DDL round-trip test (creates, exports, drops, recreates and compares
@@ -236,20 +246,68 @@ architecture requirements and the Db2 image's setup workaround.
 
 Table browsing and row edits share provider-aware identifier quoting and pagination in `db-wire::sql`. SQL Server identifiers use brackets and string literals preserve Unicode. Default-only row inserts are rejected for Oracle and Db2 until their provider-specific behavior has live coverage; enter at least one column instead. Generated row edits still run through the driver's exactly-one-row transactional contract.
 
-For providers other than PostgreSQL, DDL in Properties remains a partial metadata preview, not an exact reconstruction. Incomplete native column types make the preview unavailable; index and constraint names without definitions appear only as comments. SQL planning has deterministic unit coverage for all presets. Unit coverage does not replace the configured live provider and TLS tests described above.
+When native relation DDL is unavailable, Properties falls back to a partial metadata preview. Incomplete native column types make that preview unavailable; index and constraint names without definitions appear only as comments. PostgreSQL uses catalog-derived structural DDL, MySQL uses SHOW CREATE TABLE for tables/views, and SQLite returns stored relation/index/trigger SQL. SQL planning has deterministic unit coverage for all presets. Unit coverage does not replace the configured live provider and TLS tests described above.
 
 ## Visual query plans
 
-PostgreSQL script tabs offer Explain (estimated JSON plan) and Analyze (executes
-the statement with ANALYZE and BUFFERS). The original statement is not paged or
-wrapped in a subquery. Analyze can change data and run functions with side
-effects, just like executing the statement normally. Results use the standard
-streaming/cancellation path. The tree displays inclusive estimated costs relative
-to the root, row estimates, actual per-loop times/rows, loops, conditions and
-buffer counts; raw JSON remains available for all other fields. SQLite offers
-Explain using `EXPLAIN QUERY PLAN` on the same tab session. The viewer displays
-operator hierarchy and raw native rows. SQLite does not report cost or actual
-execution metrics for this command. Other providers still require native SQL.
+All native plan actions reuse the SQL tab's physical session, including TEMP
+objects and active transactions. The original statement is neither paged nor
+wrapped in a subquery. The app validates one statement before execution.
+
+| Provider | Estimated | Actual | Limits |
+| --- | --- | --- | --- |
+| PostgreSQL | EXPLAIN FORMAT JSON | ANALYZE/BUFFERS FORMAT JSON | Native costs, rows, per-loop times/loops and raw JSON. |
+| MySQL | EXPLAIN FORMAT=JSON | EXPLAIN ANALYZE FORMAT=TREE | Native nested/window/subquery operators, estimates and per-loop observations. |
+| MariaDB | EXPLAIN FORMAT=JSON | ANALYZE FORMAT=JSON | Native row/cost fields when present; r_total_time_ms is divided by r_loops for per-loop display. Other engine timings stay in native details. Desktop preset remains disabled. |
+| SQLite | EXPLAIN QUERY PLAN | Unavailable | Native operator hierarchy and raw rows; no invented costs or runtime statistics. |
+| SQL Server | SHOWPLAN_ALL | Pending | Adapter and fixture tests are available. Live ODBC acceptance is pending. |
+| Oracle and Db2 | Pending | Pending | Native plan adapters remain open. |
+
+Analyze executes the statement, including supported writes/function side
+effects. Error/cancel cleanup follows the existing session runner. Stateful
+providers can override ScriptSession::execute_plan; ScriptControl::with_plan
+marks only the last input statement, preserving preceding setup or implicit
+transaction controls. PostgreSQL/MySQL/MariaDB output is limited to 16 MiB;
+all adapters enforce a 4,096-operator bound.
+
+Expensive-node navigation uses reported inclusive per-loop time multiplied by
+loops, otherwise native cumulative cost. Operators may overlap; their values
+are not summed. Save/Open JSON snapshots preserve provider/native output,
+never replay SQL, and compare only the same provider. See the
+[SQL editor guide](guide/sql-editor.md) for file/report bounds and GUI status.
+
+The new query_plan_test suite passed against disposable PostgreSQL 16.15,
+MySQL 8.4.13 and MariaDB 11.4.13 with FASTDB_REQUIRE_DB_TESTS=1. It verifies
+estimated/actual metrics, TEMP-session identity, unchanged data, MySQL window
+operators and SQLite setup/BEGIN preservation. mysql_session_test additionally
+verifies that explaining DELETE does not execute it. Desktop acceptance remains
+pending. The opt-in SQL Server plan test uses a session-local temporary table and checks that both successful and failed Explain restore normal execution. MariaDB uses FASTDB_REQUIRE_MARIADB_TESTS when its fixture is mandatory.
+
+Syntax references: [MySQL EXPLAIN](https://dev.mysql.com/doc/refman/8.4/en/explain.html),
+[MariaDB ANALYZE JSON](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-format-json),
+[SQLite PRAGMAs](https://www.sqlite.org/pragma.html).
+
+### Native column metadata
+
+MySQL's scoped and schema-wide readers preserve COLUMN_TYPE (including unsigned,
+length and decimal precision), the server's COLUMN_DEFAULT value, collation,
+comment and generated-column identity. Auto-increment columns accept explicit
+NULL as a generated-key request. INFORMATION_SCHEMA cannot distinguish an absent
+default from an explicit NULL default; SHOW CREATE remains authoritative for
+that distinction. See the [native column catalog](https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html).
+
+SQLite's background column reader uses table_xinfo (including generated columns),
+foreign_key_list and index_list. It preserves declared types and default SQL,
+including SQL NULL, literal 'NULL', empty text and absent defaults. Hidden
+virtual-table implementation columns are excluded. Rowid-alias PKs are not
+nullable; ordinary nullable PKs and the inline INTEGER PRIMARY KEY DESC
+exception retain SQLite semantics. STRICT/WITHOUT ROWID PKs use native NOT NULL
+flags. Read-only authorization and quoted identifiers have real-engine tests.
+
+A SQLite 3.46.0 fixture with 1,000 unrelated tables and 60 target columns used
+native virtual metadata scans plus a small ORDER BY sort, not user-table data
+scans. Query-plan/profile evidence is recorded in the completion plan. Native
+SQLite relation DDL reads the stored table or view definition plus explicit indexes and triggers for the selected object. It caps source at 1 MiB and 256 objects. MySQL reads the selected table or view with [SHOW CREATE TABLE](https://dev.mysql.com/doc/refman/8.4/en/show-create-table.html) and caps displayed source at 1 MiB. Remaining relation metadata and PostgreSQL relation kinds are tracked in the roadmap.
 
 PostgreSQL integration tests also accept `FASTDB_TEST_PG_PASSWORD` when the local
 test server requires password authentication. Leave it unset for trust/peer setups.
