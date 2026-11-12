@@ -73,7 +73,11 @@ impl TableProperties {
             ),
             ("Persistence", text(d.and_then(|d| d.persistence.as_ref()))),
             (
-                "Estimated Rows (ANALYZE)",
+                if self.kind == DbDriverKind::Sqlite {
+                    "Stored Row Estimate (may be stale)"
+                } else {
+                    "Estimated Rows (ANALYZE)"
+                },
                 number(d.and_then(|d| d.estimated_rows)),
             ),
             (
@@ -158,7 +162,18 @@ impl TableProperties {
 
     pub(in crate::workspace) fn statistics_notice(&self) -> Option<String> {
         if self.kind == DbDriverKind::Sqlite {
-            Some("Native table statistics are unavailable for SQLite.".into())
+            if let Some(message) = self
+                .states
+                .get(&MetadataFeature::TableDetails)
+                .and_then(MetadataState::message)
+            {
+                return Some(message);
+            }
+            self.details
+                .as_ref()
+                .and_then(|details| details.estimated_rows)
+                .is_none()
+                .then(|| "No stored SQLite table row estimate is available.".into())
         } else {
             self.section_notice(MetadataFeature::TableDetails)
         }
@@ -256,11 +271,24 @@ mod tests {
         assert_eq!(model.section_notice(MetadataFeature::TableDetails), None);
         assert_eq!(
             model.statistics_notice().as_deref(),
-            Some("Native table statistics are unavailable for SQLite.")
+            Some("No stored SQLite table row estimate is available.")
         );
         let rows = model.statistics_rows();
         assert!(rows.contains(&("Has Primary Key", "Yes".into())));
         assert!(rows.contains(&("Comment", "Unavailable".into())));
+        let analyzed = model.with_metadata(
+            Some(db_wire::TableDetails {
+                estimated_rows: Some(3),
+                ..Default::default()
+            }),
+            None,
+        );
+        assert_eq!(analyzed.statistics_notice(), None);
+        assert!(
+            analyzed
+                .statistics_rows()
+                .contains(&("Stored Row Estimate (may be stale)", "3".into()))
+        );
     }
 
     #[test]

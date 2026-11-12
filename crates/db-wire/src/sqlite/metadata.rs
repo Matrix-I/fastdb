@@ -1,5 +1,6 @@
 //! Native visible columns, including generated values omitted by table_info.
 use super::*;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // Rowid aliases cannot store NULL. The legacy inline PRIMARY KEY DESC case
 // has a native primary-key index, so it must retain ordinary nullable semantics.
@@ -76,7 +77,7 @@ SELECT CASE WHEN length(CAST(m.name AS BLOB)) <= ?2 THEN m.name END AS table_nam
        x."desc",
        CASE WHEN length(CAST(x.coll AS BLOB)) <= ?2 THEN x.coll END,
        CASE WHEN x.seqno = 0 AND length(CAST(d.sql AS BLOB)) <= ?2 THEN d.sql END,
-       x.seqno = 0 AND coalesce(length(CAST(d.sql AS BLOB)) > ?2, 0)
+       x.seqno = 0 AND coalesce(length(CAST(d.sql AS BLOB)) > ?2, 0), i.partial
 FROM main.sqlite_schema m
 JOIN pragma_index_list(m.name, 'main') i
 JOIN pragma_index_xinfo(i.name, 'main') x
@@ -86,9 +87,13 @@ ORDER BY table_name, index_name, x.seqno
 LIMIT ?1
 "#;
 
-pub(super) fn index_details(
-    conn: &Connection,
-) -> Result<Vec<(String, String, crate::TableDetails)>> {
+#[derive(Default)]
+struct IndexCatalog {
+    tables: BTreeMap<String, crate::TableDetails>,
+    full_indexes: HashMap<String, HashSet<String>>,
+}
+
+fn index_details(conn: &Connection) -> Result<IndexCatalog> {
     use crate::{IndexDetails, TableDetails, sql::SqlDialect};
     const MAX_KEY_ROWS: usize = 200_000;
     let dialect = SqlDialect(crate::DbDriverKind::Sqlite);
@@ -99,7 +104,8 @@ pub(super) fn index_details(
             let mut statement = conn.prepare(query)?;
             let mut rows =
                 statement.query(rusqlite::params![MAX_KEY_ROWS + 1, MAX_INDEX_NAME_BYTES])?;
-            let mut tables: Vec<(String, String, TableDetails)> = Vec::new();
+            let mut catalog = IndexCatalog::default();
+            let mut current_table: Option<(String, TableDetails)> = None;
             let mut key_rows = 0;
             let mut bytes = 0;
             while let Some(row) = rows.next()? {
@@ -129,10 +135,13 @@ pub(super) fn index_details(
                     field(7)?.context("SQLite index collation is missing or exceeds 128 KiB")?;
                 anyhow::ensure!(!row.get::<_, bool>(9)?, "SQLite index SQL exceeds 128 KiB");
                 let source = field(8)?;
-                if tables.last().is_none_or(|(_, last, _)| last != table) {
-                    tables.push(("main".into(), table.into(), TableDetails::default()));
+                if current_table.as_ref().is_none_or(|(name, _)| name != table)
+                    && let Some((name, details)) =
+                        current_table.replace((table.into(), TableDetails::default()))
+                {
+                    catalog.tables.insert(name, details);
                 }
-                let indexes = &mut tables.last_mut().unwrap().2.indexes;
+                let indexes = &mut current_table.as_mut().unwrap().1.indexes;
                 if indexes.last().is_none_or(|index| index.name != name) {
                     let definition = match (source, row.get_ref(3)?.as_str()?) {
                         (Some(sql), _) => sql.into(),
@@ -140,6 +149,13 @@ pub(super) fn index_details(
                         (None, "u") => "Implicit unique-constraint index".into(),
                         _ => "Definition unavailable".into(),
                     };
+                    if !row.get::<_, bool>(10)? {
+                        catalog
+                            .full_indexes
+                            .entry(table.into())
+                            .or_default()
+                            .insert(name.into());
+                    }
                     indexes.push(IndexDetails {
                         name: name.into(),
                         method: "B-tree".into(),
@@ -166,7 +182,118 @@ pub(super) fn index_details(
                     .columns
                     .push(format!("{key} COLLATE {collation} {direction}"));
             }
-            Ok(tables)
+            if let Some((name, details)) = current_table {
+                catalog.tables.insert(name, details);
+            }
+            Ok(catalog)
+        },
+        |catalog| Some(catalog.tables.len() as u64)
+    )
+}
+
+const HAS_STATS: &str = "SELECT EXISTS (SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = 'sqlite_stat1')";
+
+// Check full-index membership against the already bounded index catalog.
+const TABLE_ESTIMATES: &str = r#"
+SELECT CASE WHEN length(CAST(s.tbl AS BLOB)) <= ?2 THEN s.tbl END,
+       s.idx IS NULL OR s.idx = s.tbl,
+       CASE WHEN length(CAST(s.stat AS BLOB)) <= ?2 THEN s.stat END,
+       CASE WHEN length(CAST(s.idx AS BLOB)) <= ?2 THEN s.idx END
+FROM main.sqlite_stat1 s
+JOIN main.sqlite_schema m ON m.type = 'table' AND m.name = s.tbl
+WHERE m.name NOT GLOB 'sqlite_*'
+LIMIT ?1
+"#;
+
+pub(super) fn table_details(
+    conn: &Connection,
+) -> Result<Vec<(String, String, crate::TableDetails)>> {
+    let IndexCatalog {
+        mut tables,
+        full_indexes,
+    } = index_details(conn)?;
+    for (name, rows) in table_estimates(conn, &full_indexes)? {
+        tables.entry(name).or_default().estimated_rows = Some(rows);
+    }
+    Ok(tables
+        .into_iter()
+        .map(|(name, details)| ("main".into(), name, details))
+        .collect())
+}
+
+fn table_estimates(
+    conn: &Connection,
+    full_indexes: &HashMap<String, HashSet<String>>,
+) -> Result<Vec<(String, i64)>> {
+    let exists: bool = crate::sql_observer::observe!("SQLite", HAS_STATS, |query| conn.query_row(
+        query,
+        [],
+        |row| row.get(0)
+    ))?;
+    if !exists {
+        return Ok(Vec::new());
+    }
+    crate::sql_observer::observe!(
+        "SQLite",
+        TABLE_ESTIMATES,
+        |query| {
+            let mut statement = conn.prepare(query)?;
+            let mut rows = statement.query(rusqlite::params![
+                MAX_SCHEMA_INDEXES + 1,
+                MAX_INDEX_NAME_BYTES
+            ])?;
+            let mut estimates = std::collections::BTreeMap::<String, (bool, i64)>::new();
+            let mut count = 0;
+            let mut bytes = 0;
+            while let Some(row) = rows.next()? {
+                count += 1;
+                anyhow::ensure!(
+                    count <= MAX_SCHEMA_INDEXES,
+                    "SQLite statistics exceed {MAX_SCHEMA_INDEXES} entries"
+                );
+                let table = row
+                    .get_ref(0)?
+                    .as_str()
+                    .context("SQLite statistics table name is invalid or exceeds 128 KiB")?;
+                let direct: bool = row.get(1)?;
+                if !direct {
+                    let Ok(index) = row.get_ref(3)?.as_str() else {
+                        continue;
+                    };
+                    if !full_indexes
+                        .get(table)
+                        .is_some_and(|indexes| indexes.contains(index))
+                    {
+                        continue;
+                    }
+                }
+                let Ok(stat) = row.get_ref(2)?.as_str() else {
+                    continue;
+                };
+                bytes += table.len() + stat.len();
+                anyhow::ensure!(
+                    bytes <= MAX_INDEX_METADATA_BYTES,
+                    "SQLite statistics exceed 16 MiB"
+                );
+                let Some(rows) = stat
+                    .split_ascii_whitespace()
+                    .next()
+                    .filter(|token| token.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|token| token.parse::<i64>().ok())
+                else {
+                    continue;
+                };
+                let candidate = (direct, rows);
+                if let Some(current) = estimates.get_mut(table) {
+                    *current = (*current).max(candidate);
+                } else {
+                    estimates.insert(table.into(), candidate);
+                }
+            }
+            Ok(estimates
+                .into_iter()
+                .map(|(name, (_, rows))| (name, rows))
+                .collect::<Vec<_>>())
         },
         |rows| Some(rows.len() as u64)
     )

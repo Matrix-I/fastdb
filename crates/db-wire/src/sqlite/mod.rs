@@ -465,9 +465,9 @@ impl DatabaseDriver for SqliteDriver {
 
     async fn list_table_details(&self) -> Result<Vec<(String, String, crate::TableDetails)>> {
         let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || metadata::index_details(&conn.lock()))
+        tokio::task::spawn_blocking(move || metadata::table_details(&conn.lock()))
             .await
-            .context("SQLite index details worker failed")?
+            .context("SQLite table details worker failed")?
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {
