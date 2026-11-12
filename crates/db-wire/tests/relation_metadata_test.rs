@@ -342,3 +342,53 @@ async fn sqlite_index_details_reject_oversized_stored_sql() {
     assert!(error.to_string().contains("index SQL exceeds 128 KiB"));
     assert_eq!(driver.list_all_indexes().await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn sqlite_stored_statistics_distinguish_full_tables_from_partial_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = db_wire::ConnectionConfig {
+        database: dir.path().join("stats.db").to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let writer = SqliteDriver::new(config.clone()).unwrap();
+    writer
+        .execute_schema_ddl(
+            "CREATE TABLE plain (id INTEGER);
+         CREATE TABLE indexed (id INTEGER);
+         CREATE INDEX full_idx ON indexed(id);
+         CREATE TABLE keyed (id INTEGER PRIMARY KEY) WITHOUT ROWID;
+         CREATE TABLE partial (id INTEGER);
+         CREATE INDEX subset ON partial(id) WHERE id = 1;
+         INSERT INTO plain VALUES (1),(2),(3);
+         INSERT INTO indexed SELECT id FROM plain;
+         INSERT INTO keyed SELECT id FROM plain;
+         INSERT INTO partial SELECT id FROM plain;
+         ANALYZE;",
+        )
+        .await
+        .unwrap();
+    // Leave only the subset count, as can happen after targeted ANALYZE.
+    writer
+        .execute_schema_ddl(
+            "DELETE FROM sqlite_stat1 WHERE tbl='partial' AND idx IS NULL;
+                               INSERT INTO plain VALUES (4);",
+        )
+        .await
+        .unwrap();
+    let reader = SqliteDriver::new(db_wire::ConnectionConfig {
+        read_only: true,
+        ..config
+    })
+    .unwrap();
+    let details = reader.list_table_details().await.unwrap();
+    let estimate = |name| {
+        details
+            .iter()
+            .find(|(_, table, _)| table == name)
+            .and_then(|(_, _, details)| details.estimated_rows)
+    };
+    for name in ["plain", "indexed", "keyed"] {
+        assert_eq!(estimate(name), Some(3), "{name}");
+    }
+    assert_eq!(estimate("partial"), None);
+}
