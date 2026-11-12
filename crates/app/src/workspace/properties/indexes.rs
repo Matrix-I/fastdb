@@ -1,4 +1,5 @@
 use super::{grid::metadata_grid, model::TableProperties};
+use db_wire::DbDriverKind;
 use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
@@ -14,14 +15,7 @@ impl TableProperties {
                         i.method.clone(),
                         i.columns.join(", "),
                         if i.unique { "Yes" } else { "No" }.into(),
-                        if self.kind == db_wire::DbDriverKind::Sqlite {
-                            "Unavailable"
-                        } else if i.valid {
-                            "Valid"
-                        } else {
-                            "Invalid"
-                        }
-                        .into(),
+                        index_status(self.kind, i.valid).into(),
                         i.definition.clone(),
                     ]
                 })
@@ -59,5 +53,24 @@ impl TableProperties {
             },
             theme,
         )
+    }
+}
+
+fn index_status(kind: DbDriverKind, valid: bool) -> &'static str {
+    match kind {
+        DbDriverKind::Sqlite | DbDriverKind::MySql => "Unavailable",
+        _ if valid => "Valid",
+        _ => "Invalid",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DbDriverKind, index_status};
+
+    #[test]
+    fn mysql_index_details_do_not_imply_validation() {
+        assert_eq!(index_status(DbDriverKind::MySql, false), "Unavailable");
+        assert_eq!(index_status(DbDriverKind::Postgres, false), "Invalid");
     }
 }

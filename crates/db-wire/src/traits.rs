@@ -333,6 +333,7 @@ pub struct IndexDetails {
     /// Ordered key expressions, followed by any INCLUDE columns.
     pub columns: Vec<String>,
     pub unique: bool,
+    /// Validation status from PostgreSQL. SQLite and MySQL do not report it here.
     pub valid: bool,
     pub definition: String,
 }

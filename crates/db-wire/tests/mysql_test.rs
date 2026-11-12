@@ -419,28 +419,31 @@ fn mysql_read_only_properties_load_native_table_statistics() {
             .unwrap();
         config.database = schema.clone();
         let writer = MySqlDriver::new(config.clone());
-        let result: anyhow::Result<_> =
-            async {
-                writer.execute_query(
-                "CREATE TABLE `metrics'table` (id INTEGER PRIMARY KEY, tag INT, INDEX (tag))
+        let result: anyhow::Result<_> = async {
+            writer
+                .execute_query(
+                    "CREATE TABLE `metrics'table` (id INTEGER PRIMARY KEY, tag VARCHAR(32),
+                     INDEX ordered_key (tag(4) DESC, id) INVISIBLE,
+                     INDEX expression_key ((lower(tag))))
                  ENGINE=InnoDB COMMENT='native stats fixture'",
-            ).await?;
-                writer
-                    .execute_query("INSERT INTO `metrics'table` VALUES (1, 10), (2, 20)")
-                    .await?;
-                writer
-                    .execute_query("ANALYZE TABLE `metrics'table`")
-                    .await?;
-                writer
-                    .execute_query("CREATE VIEW metrics_view AS SELECT id FROM `metrics'table`")
-                    .await?;
-                let reader = MySqlDriver::new(ConnectionConfig {
-                    read_only: true,
-                    ..config
-                });
-                reader.list_table_details().await
-            }
-            .await;
+                )
+                .await?;
+            writer
+                .execute_query("INSERT INTO `metrics'table` VALUES (1, 'ten'), (2, 'twenty')")
+                .await?;
+            writer
+                .execute_query("ANALYZE TABLE `metrics'table`")
+                .await?;
+            writer
+                .execute_query("CREATE VIEW metrics_view AS SELECT id FROM `metrics'table`")
+                .await?;
+            let reader = MySqlDriver::new(ConnectionConfig {
+                read_only: true,
+                ..config
+            });
+            reader.list_table_details().await
+        }
+        .await;
         admin
             .execute_query(&format!("DROP DATABASE {schema}"))
             .await
@@ -461,6 +464,22 @@ fn mysql_read_only_properties_load_native_table_statistics() {
                 .zip(table.index_bytes)
                 .and_then(|(data, indexes)| data.checked_add(indexes))
         );
+        let ordered = table
+            .indexes
+            .iter()
+            .find(|index| index.name == "ordered_key")
+            .unwrap();
+        assert_eq!(ordered.columns, ["`tag`(4) DESC", "`id` ASC"]);
+        assert_eq!(ordered.method, "BTREE");
+        assert!(!ordered.unique);
+        assert_eq!(ordered.definition, "Optimizer visibility: Invisible");
+        let functional = table
+            .indexes
+            .iter()
+            .find(|index| index.name == "expression_key")
+            .unwrap();
+        assert!(functional.columns[0].contains("lower("));
+        assert_eq!(functional.definition, "Optimizer visibility: Visible");
         assert!(table.last_analyze.is_none());
         assert!(
             !details
