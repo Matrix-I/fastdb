@@ -160,6 +160,14 @@ impl TableProperties {
             .filter(|_| self.kind == DbDriverKind::Postgres)
     }
 
+    pub(super) fn foreign_key_details(&self) -> Option<&db_wire::TableDetails> {
+        self.details.as_ref().filter(|details| {
+            self.kind == DbDriverKind::Postgres
+                || (self.kind == DbDriverKind::Sqlite
+                    && details.constraints.iter().any(|c| c.kind == "FOREIGN KEY"))
+        })
+    }
+
     pub(in crate::workspace) fn statistics_notice(&self) -> Option<String> {
         if self.kind == DbDriverKind::Sqlite {
             if let Some(message) = self
@@ -180,13 +188,12 @@ impl TableProperties {
     }
 
     pub fn section_notice(&self, feature: MetadataFeature) -> Option<String> {
+        if feature == MetadataFeature::ForeignKeys && self.foreign_key_details().is_some() {
+            return None;
+        }
         if self.details.is_some()
             && (feature == MetadataFeature::Indexes
-                || (self.kind == DbDriverKind::Postgres
-                    && matches!(
-                        feature,
-                        MetadataFeature::Constraints | MetadataFeature::ForeignKeys
-                    )))
+                || (self.kind == DbDriverKind::Postgres && feature == MetadataFeature::Constraints))
         {
             return None;
         }
@@ -242,6 +249,48 @@ impl TableProperties {
 mod tests {
     use super::TableProperties;
     use db_wire::{ColumnMeta, DataType, DbDriverKind};
+
+    #[test]
+    fn sqlite_foreign_key_details_leave_general_constraint_status_unavailable() {
+        let model = TableProperties::new(
+            DbDriverKind::Sqlite,
+            "main".into(),
+            "items".into(),
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(model.foreign_key_details().is_none());
+        let model = model.with_metadata(
+            Some(db_wire::TableDetails {
+                constraints: vec![db_wire::ConstraintDetails {
+                    name: "fk_0".into(),
+                    kind: "FOREIGN KEY".into(),
+                    columns: vec!["parent_id".into()],
+                    definition: "ON DELETE CASCADE".into(),
+                    validated: false,
+                }],
+                ..Default::default()
+            }),
+            None,
+        );
+        let model = model.with_states(
+            std::sync::Arc::new(std::collections::HashMap::from([(
+                db_wire::metadata::MetadataFeature::ForeignKeys,
+                super::MetadataState::Failed("Summary unavailable".into()),
+            )])),
+            vec![],
+        );
+        assert_eq!(
+            model.section_notice(db_wire::metadata::MetadataFeature::ForeignKeys),
+            None
+        );
+        assert!(model.constraint_details().is_none());
+        assert_eq!(
+            model.foreign_key_details().unwrap().constraints[0].definition,
+            "ON DELETE CASCADE"
+        );
+    }
 
     #[test]
     fn sqlite_index_details_do_not_replace_constraint_availability_or_primary_key() {

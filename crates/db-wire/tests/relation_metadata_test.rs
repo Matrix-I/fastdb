@@ -437,3 +437,105 @@ async fn sqlite_native_constraint_summaries_distinguish_unique_indexes_and_const
         ]
     );
 }
+
+#[tokio::test]
+async fn sqlite_foreign_key_details_report_actions_and_native_column_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = db_wire::ConnectionConfig {
+        driver: db_wire::DbDriverKind::Sqlite,
+        database: directory
+            .path()
+            .join("foreign-keys.sqlite")
+            .to_string_lossy()
+            .into_owned(),
+        ..Default::default()
+    };
+    let driver = SqliteDriver::new(config.clone()).unwrap();
+    driver
+        .execute_schema_ddl(
+            r#"CREATE TABLE "parent's table" (a TEXT, b TEXT, PRIMARY KEY (b, a));
+               CREATE TABLE child (
+                   x TEXT, y TEXT, z TEXT,
+                   FOREIGN KEY (x, y) REFERENCES "parent's table"
+                       ON UPDATE SET NULL ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+                   FOREIGN KEY (z) REFERENCES "parent's table"(a)
+               );
+               CREATE TABLE mismatch (id TEXT REFERENCES "parent's table");
+               CREATE TABLE orphan (id INTEGER REFERENCES missing_parent);"#,
+        )
+        .await
+        .unwrap();
+    let driver = SqliteDriver::new(db_wire::ConnectionConfig {
+        read_only: true,
+        ..config
+    })
+    .unwrap();
+    let details = driver.list_table_details().await.unwrap();
+    let orphan = &details
+        .iter()
+        .find(|(_, table, _)| table == "orphan")
+        .unwrap()
+        .2;
+    assert!(
+        orphan.constraints[0]
+            .definition
+            .contains("primary-key columns unavailable")
+    );
+    let mismatch = &details
+        .iter()
+        .find(|(_, table, _)| table == "mismatch")
+        .unwrap()
+        .2;
+    assert!(
+        mismatch.constraints[0]
+            .definition
+            .contains("primary-key columns unavailable")
+    );
+    let child = &details
+        .iter()
+        .find(|(_, table, _)| table == "child")
+        .unwrap()
+        .2;
+    assert_eq!(child.constraints.len(), 2);
+    assert_eq!(child.constraints[0].name, "fk_0");
+    assert_eq!(child.constraints[0].columns, ["z"]);
+    assert_eq!(child.constraints[1].name, "fk_1");
+    assert_eq!(child.constraints[1].columns, ["x", "y"]);
+    assert_eq!(
+        child.constraints[1].definition,
+        r#"REFERENCES "main"."parent's table" ("b", "a") ON UPDATE SET NULL ON DELETE CASCADE · deferrability in DDL"#
+    );
+    assert_eq!(
+        child.constraints[0].definition,
+        r#"REFERENCES "main"."parent's table" ("a") ON UPDATE NO ACTION ON DELETE NO ACTION · deferrability in DDL"#
+    );
+}
+
+#[tokio::test]
+async fn sqlite_rejected_foreign_key_details_preserve_index_details_and_estimates() {
+    let driver = SqliteDriver::new_memory();
+    let oversized_parent = "p".repeat(128 * 1024 + 1);
+    driver
+        .execute_schema_ddl(&format!(
+            r#"CREATE TABLE indexed (id INTEGER PRIMARY KEY, tag TEXT UNIQUE);
+               INSERT INTO indexed VALUES (1, 'tag');
+               ANALYZE;
+               CREATE TABLE orphan (id INTEGER REFERENCES "{oversized_parent}");"#
+        ))
+        .await
+        .unwrap();
+
+    let details = driver.list_table_details().await.unwrap();
+    let indexed = &details
+        .iter()
+        .find(|(_, table, _)| table == "indexed")
+        .unwrap()
+        .2;
+    assert_eq!(indexed.indexes.len(), 1);
+    assert_eq!(indexed.estimated_rows, Some(1));
+    assert!(
+        details
+            .iter()
+            .all(|(_, _, details)| details.constraints.is_empty())
+    );
+}

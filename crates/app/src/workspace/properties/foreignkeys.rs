@@ -3,7 +3,8 @@ use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
     pub(in crate::workspace) fn render_foreignkeys(&self, theme: &Theme) -> AnyElement {
-        let rows = if let Some(details) = self.constraint_details() {
+        let details = self.foreign_key_details();
+        let rows = if let Some(details) = details {
             details
                 .constraints
                 .iter()
@@ -33,7 +34,7 @@ impl TableProperties {
                 ("Definition (reference, actions, deferrability)", 760.0),
             ],
             rows,
-            if self.constraint_details().is_some() {
+            if details.is_some() || self.kind == db_wire::DbDriverKind::Sqlite {
                 "No foreign keys."
             } else {
                 "Foreign keys loaded: no objects found. Native definitions/actions are unavailable."
