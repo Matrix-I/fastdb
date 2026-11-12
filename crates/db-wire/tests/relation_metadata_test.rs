@@ -282,3 +282,63 @@ async fn sqlite_relation_ddl_replays_table_indexes_and_triggers() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn sqlite_index_details_preserve_native_order_and_partial_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = db_wire::ConnectionConfig {
+        database: dir.path().join("indexes.db").to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let driver = SqliteDriver::new(config.clone()).unwrap();
+    driver
+        .execute_schema_ddl(
+            "CREATE TABLE items (a TEXT, b INTEGER, PRIMARY KEY (b,a)) WITHOUT ROWID;
+         CREATE UNIQUE INDEX folded ON items (lower(a), b DESC) WHERE b > 0;",
+        )
+        .await
+        .unwrap();
+    let reader = SqliteDriver::new(db_wire::ConnectionConfig {
+        read_only: true,
+        ..config
+    })
+    .unwrap();
+    let tables = reader.list_table_details().await.unwrap();
+    let (_, _, details) = tables
+        .iter()
+        .find(|(s, t, _)| s == "main" && t == "items")
+        .unwrap();
+    let folded = details.indexes.iter().find(|i| i.name == "folded").unwrap();
+    assert!(folded.unique);
+    assert_eq!(
+        folded.columns,
+        [
+            "(expression) COLLATE BINARY ASC",
+            "\"b\" COLLATE BINARY DESC"
+        ]
+    );
+    assert!(folded.definition.contains("lower(a), b DESC"));
+    assert!(folded.definition.ends_with("WHERE b > 0"));
+    let pk = details
+        .indexes
+        .iter()
+        .find(|i| i.name.starts_with("sqlite_autoindex"))
+        .unwrap();
+    assert_eq!(
+        pk.columns,
+        ["\"b\" COLLATE BINARY ASC", "\"a\" COLLATE BINARY ASC"]
+    );
+    assert!(pk.unique);
+}
+
+#[tokio::test]
+async fn sqlite_index_details_reject_oversized_stored_sql() {
+    let driver = SqliteDriver::new_memory();
+    let literal = "x".repeat(128 * 1024);
+    driver.execute_schema_ddl(&format!(
+        "CREATE TABLE items (label TEXT); CREATE INDEX large_index ON items(label) WHERE label = '{literal}';"
+    )).await.unwrap();
+    let error = driver.list_table_details().await.unwrap_err();
+    assert!(error.to_string().contains("index SQL exceeds 128 KiB"));
+    assert_eq!(driver.list_all_indexes().await.unwrap().len(), 1);
+}

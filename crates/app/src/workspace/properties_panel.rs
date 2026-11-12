@@ -262,6 +262,8 @@ impl Workspace {
                 } else {
                     model.ddl_notice()
                 }
+            } else if active_property_sec == PropertySection::Statistics {
+                model.statistics_notice()
             } else {
                 feature.and_then(|feature| model.section_notice(feature))
             }
