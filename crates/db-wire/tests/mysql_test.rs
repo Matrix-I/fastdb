@@ -399,6 +399,20 @@ fn mysql_relation_ddl_preserves_quoted_table_and_native_view_source() {
             assert!(table.contains("KEY `lookup`"));
             assert!(view.contains("VIEW `named_view`"));
             assert!(view.contains("`order``s`"));
+            driver.execute_query("DROP VIEW named_view").await.unwrap();
+            driver.execute_query("DROP TABLE `order``s`").await.unwrap();
+            driver.execute_schema_ddl(&table).await.unwrap();
+            driver.execute_schema_ddl(&view).await.unwrap();
+            assert_eq!(driver.load_relation_ddl(&schema, "order`s").await.unwrap().as_deref(), Some(table.as_str()));
+            assert_eq!(driver.load_relation_ddl(&schema, "named_view").await.unwrap().as_deref(), Some(view.as_str()));
+            driver.execute_query("INSERT INTO `order``s` () VALUES ()").await.unwrap();
+            let (restored, count, _) = driver.execute_query("SELECT v.id, t.label, t.computed, t.amount FROM named_view v JOIN `order``s` t ON t.id=v.id").await.unwrap();
+            assert_eq!(count, 1);
+            assert_eq!(cell_text(&restored, 0, 0).as_deref(), Some("1"));
+            assert_eq!(cell_text(&restored, 0, 1).as_deref(), Some(""));
+            assert_eq!(cell_text(&restored, 0, 2).as_deref(), Some("0"));
+            assert_eq!(cell_text(&restored, 0, 3).as_deref(), Some("1.25000000"));
+
         }).catch_unwind().await;
         admin.execute_query(&format!("DROP DATABASE {schema}")).await.unwrap();
         if let Err(panic) = result { std::panic::resume_unwind(panic); }
