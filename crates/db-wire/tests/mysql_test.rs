@@ -488,3 +488,38 @@ fn mysql_read_only_properties_load_native_table_statistics() {
         );
     });
 }
+
+#[test]
+fn mysql_read_only_constraints_preserve_native_order_actions_and_checks() {
+    let Some(mut config) = test_config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let admin = MySqlDriver::new(config.clone());
+        let schema = format!("fastdb_constraints_{}", uuid::Uuid::new_v4().simple());
+        admin.execute_query(&format!("CREATE DATABASE {schema}")).await.unwrap();
+        config.database = schema.clone();
+        let writer = MySqlDriver::new(config.clone());
+        let result: anyhow::Result<_> = async {
+            writer.execute_query("CREATE TABLE `parent ON UPDATE odd` (a INT, b INT, PRIMARY KEY(b,a))").await?;
+            writer.execute_query("CREATE TABLE child (a INT, b INT, c INT, PRIMARY KEY(b,a), CONSTRAINT named_unique UNIQUE(c,b), CONSTRAINT named_fk FOREIGN KEY(b,a) REFERENCES `parent ON UPDATE odd`(b,a) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT positive CHECK(c > 0), CONSTRAINT optional_check CHECK(c < 100) NOT ENFORCED, CONSTRAINT named_fk CHECK(c <> 0), CONSTRAINT named_fk UNIQUE(c))").await?;
+            let reader = MySqlDriver::new(ConnectionConfig { read_only: true, ..config });
+            reader.list_table_details().await
+        }.await;
+        admin.execute_query(&format!("DROP DATABASE {schema}")).await.unwrap();
+        let details = result.unwrap();
+        let child = &details.iter().find(|(db, table, _)| db == &schema && table == "child").unwrap().2;
+        let find = |name, kind| child.constraints.iter().find(|key| key.name == name && key.kind == kind).unwrap();
+        assert_eq!(find("PRIMARY", "PRIMARY KEY").columns, ["b", "a"]);
+        assert_eq!(find("named_unique", "UNIQUE").columns, ["c", "b"]);
+        assert_eq!(find("named_fk", "FOREIGN KEY").columns, ["b", "a"]);
+        assert!(find("named_fk", "FOREIGN KEY").definition.contains("(`b`, `a`) ON UPDATE CASCADE ON DELETE RESTRICT"));
+        assert!(find("named_fk", "FOREIGN KEY").definition.contains(&format!("`{schema}`.`parent ON UPDATE odd`")));
+        assert!(find("positive", "CHECK").definition.contains("CHECK"));
+        assert!(find("positive", "CHECK").definition.ends_with("ENFORCED"));
+        assert!(find("optional_check", "CHECK").definition.ends_with("NOT ENFORCED"));
+        assert_eq!(find("named_fk", "UNIQUE").columns, ["c"]);
+        assert!(find("named_fk", "CHECK").columns.is_empty());
+        assert!(find("named_fk", "CHECK").definition.contains("CHECK"));
+    });
+}

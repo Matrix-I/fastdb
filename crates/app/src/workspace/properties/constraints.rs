@@ -45,8 +45,14 @@ impl TableProperties {
                     vec![
                         c.name.clone(),
                         c.kind.clone(),
-                        c.columns.join(", "),
-                        if c.validated {
+                        if c.columns.is_empty() {
+                            "Unavailable".into()
+                        } else {
+                            c.columns.join(", ")
+                        },
+                        if self.kind == db_wire::DbDriverKind::MySql {
+                            "Unavailable"
+                        } else if c.validated {
                             "Validated"
                         } else {
                             "Not validated"
