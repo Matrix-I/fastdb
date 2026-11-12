@@ -67,6 +67,67 @@ fn bounded_index_names(conn: &Connection, limit: usize) -> Result<Vec<(String, S
     )
 }
 
+// The pragmas expose constraint identities even when the declared name is
+// available only in CREATE TABLE. FK seq and PK ordinal select one row per key.
+const CONSTRAINT_NAMES: &str = r#"
+WITH tables AS NOT MATERIALIZED (
+    SELECT name FROM main.sqlite_schema
+    WHERE type = 'table' AND name NOT GLOB 'sqlite_*'
+), constraints(table_name, name, kind) AS (
+    SELECT t.name, 'PRIMARY KEY', 'PRIMARY KEY'
+    FROM tables t CROSS JOIN pragma_table_xinfo(t.name, 'main') c WHERE c.pk = 1
+    UNION ALL
+    SELECT t.name, i.name, 'UNIQUE'
+    FROM tables t CROSS JOIN pragma_index_list(t.name, 'main') i WHERE i.origin = 'u'
+    UNION ALL
+    SELECT t.name, 'fk_' || f.id, 'FOREIGN KEY'
+    FROM tables t CROSS JOIN pragma_foreign_key_list(t.name, 'main') f WHERE f.seq = 0
+)
+SELECT CASE WHEN length(CAST(table_name AS BLOB)) <= ?2 THEN table_name END,
+       CASE WHEN length(CAST(name AS BLOB)) <= ?2 THEN name END,
+       kind
+FROM constraints
+LIMIT ?1
+"#;
+
+pub(super) fn constraint_names(conn: &Connection) -> Result<Vec<(String, String, String, String)>> {
+    const MAX_CONSTRAINTS: usize = 100_000;
+    const MAX_NAME_BYTES: usize = 128 * 1024;
+    const MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;
+    crate::sql_observer::observe!(
+        "SQLite",
+        CONSTRAINT_NAMES,
+        |query| {
+            let mut statement = conn.prepare(query)?;
+            let mut rows =
+                statement.query(rusqlite::params![MAX_CONSTRAINTS + 1, MAX_NAME_BYTES])?;
+            let mut result = Vec::new();
+            let mut bytes = 0;
+            while let Some(row) = rows.next()? {
+                anyhow::ensure!(
+                    result.len() < MAX_CONSTRAINTS,
+                    "SQLite constraint metadata exceeds {MAX_CONSTRAINTS} objects"
+                );
+                let table = row
+                    .get::<_, Option<String>>(0)?
+                    .context("SQLite constraint table name exceeds 128 KiB")?;
+                let name = row
+                    .get::<_, Option<String>>(1)?
+                    .context("SQLite constraint name exceeds 128 KiB")?;
+                bytes += table.len() + name.len();
+                anyhow::ensure!(
+                    bytes <= MAX_METADATA_BYTES,
+                    "SQLite constraint metadata names exceed 16 MiB"
+                );
+                result.push(("main".to_owned(), table, name, row.get(2)?));
+            }
+            result.sort_unstable();
+            Ok(result)
+        },
+        |rows| Some(rows.len() as u64)
+    )
+}
+
 // WITHOUT ROWID primary keys are reported by index_list even when they have
 // no sqlite_schema index row. index_xinfo excludes auxiliary storage columns.
 const INDEX_DETAILS: &str = r#"

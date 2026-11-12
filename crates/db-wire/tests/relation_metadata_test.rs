@@ -123,6 +123,7 @@ async fn sqlite_native_columns_work_through_read_only_authorization() {
             "sqlite_autoindex_native_columns_1".into()
         )]
     );
+    assert_eq!(readonly.list_all_constraints().await.unwrap().len(), 2);
     assert!(
         readonly
             .execute_query("INSERT INTO native_columns (label) VALUES ('no')")
@@ -391,4 +392,48 @@ async fn sqlite_stored_statistics_distinguish_full_tables_from_partial_indexes()
         assert_eq!(estimate(name), Some(3), "{name}");
     }
     assert_eq!(estimate("partial"), None);
+}
+
+#[tokio::test]
+async fn sqlite_native_constraint_summaries_distinguish_unique_indexes_and_constraints() {
+    let driver = SqliteDriver::new_memory();
+    driver
+        .execute_schema_ddl(
+            r#"CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (b, a)) WITHOUT ROWID;
+               CREATE TABLE "child's table" (
+                   id INTEGER PRIMARY KEY, a INTEGER, b INTEGER UNIQUE,
+                   CHECK (a > 0), FOREIGN KEY (b, a) REFERENCES parent
+               );
+               CREATE UNIQUE INDEX independent ON "child's table"(a);
+               CREATE TABLE unconstrained (a INTEGER);
+               CREATE VIEW child_view AS SELECT id FROM "child's table";"#,
+        )
+        .await
+        .unwrap();
+    let summaries = driver.list_all_constraints().await.unwrap();
+    let entries: Vec<_> = summaries
+        .iter()
+        .map(|(schema, table, name, kind)| {
+            (
+                schema.as_str(),
+                table.as_str(),
+                name.as_str(),
+                kind.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("main", "child's table", "PRIMARY KEY", "PRIMARY KEY"),
+            ("main", "child's table", "fk_0", "FOREIGN KEY"),
+            (
+                "main",
+                "child's table",
+                "sqlite_autoindex_child's table_1",
+                "UNIQUE"
+            ),
+            ("main", "parent", "PRIMARY KEY", "PRIMARY KEY"),
+        ]
+    );
 }
