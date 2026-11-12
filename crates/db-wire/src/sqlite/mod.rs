@@ -13,6 +13,7 @@ use std::time::Instant;
 
 mod data_search;
 mod definition_search;
+mod metadata;
 mod script;
 
 use crate::stream::{RowSink, report_error};
@@ -407,34 +408,20 @@ impl DatabaseDriver for SqliteDriver {
         )
     }
 
-    async fn list_columns(&self, _schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
-        crate::sql_observer::observe!(
-            "SQLite",
-            "SELECT * FROM pragma_table_info(?1)",
-            |_query| async {
-                let conn = self.conn.lock();
-                let mut stmt = conn.prepare("SELECT * FROM pragma_table_info(?1)")?;
+    async fn load_relation_ddl(&self, schema: &str, table: &str) -> Result<Option<String>> {
+        anyhow::ensure!(
+            schema == "main",
+            "SQLite DDL is available for the main schema"
+        );
+        let table = table.to_owned();
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || metadata::relation_ddl(&conn.lock(), &table))
+            .await
+            .context("SQLite DDL metadata worker failed")?
+    }
 
-                let rows = stmt.query_map([table], |row| {
-                    let name: String = row.get(1)?;
-                    let dtype_str: String = row.get(2)?;
-                    let notnull: i32 = row.get(3)?;
-                    let pk: i32 = row.get(5)?;
-
-                    Ok(ColumnMeta::new(name, sqlite_decl_data_type(&dtype_str))
-                        .with_nullable(notnull == 0)
-                        .with_pk(pk > 0))
-                })?;
-
-                let mut cols = Vec::new();
-                for r in rows {
-                    cols.push(r?);
-                }
-                Ok(cols)
-            }
-            .await,
-            |rows| Some(rows.len() as u64)
-        )
+    async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
+        self.native_columns(schema, table).await
     }
 
     async fn list_foreign_keys(&self) -> Result<Option<Vec<crate::ForeignKey>>> {

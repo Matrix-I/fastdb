@@ -56,15 +56,21 @@ impl ScriptSession for SqliteScriptSession {
                 [&table], |row| row.get(0),
             ), |_row| Some(1))?;
             anyhow::ensure!(ordinary, "SQLite transfers require an ordinary table");
-            let current = crate::sql_observer::observe!("SQLite", r#"SELECT name, type, "notnull", pk FROM pragma_table_info(?1)"#, |_query| (|| -> Result<_> {
-            let mut metadata = connection.prepare(r#"SELECT name, type, "notnull", pk FROM pragma_table_info(?1)"#)?;
-            let current = metadata.query_map([&table], |row| Ok((row.get::<_, String>(0)?, (row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?))))?
-                .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
-            Ok(current)
-            })(), |rows| Some(rows.len() as u64))?;
+            let current = super::metadata::columns(&connection, "main", &table)?;
+            let by_name: std::collections::HashMap<_, _> = current.iter()
+                .map(|(native, nullable)| (native.name.as_str(), (native, *nullable))).collect();
             for column in &columns {
+                let (native, declared_nullable) = by_name.get(column.name.as_str())
+                    .with_context(|| format!("Destination column changed since mapping: {}", column.name))?;
+                anyhow::ensure!(!native.is_generated, "Destination column is generated: {}", column.name);
+                // Legacy callers without a declared type used the raw PRAGMA nullability.
+                let nullable_matches = native.nullable == column.nullable
+                    || (column.raw_type.is_none() && *declared_nullable == column.nullable);
                 anyhow::ensure!(
-                    current.get(&column.name).is_some_and(|(kind, not_null, primary_key)| sqlite_decl_data_type(kind) == column.data_type && (*not_null == 0) == column.nullable && (*primary_key > 0) == column.is_primary_key),
+                    nullable_matches && native.data_type == column.data_type
+                        && native.is_primary_key == column.is_primary_key
+                        && column.raw_type.as_ref().is_none_or(|kind| native.raw_type.as_ref() == Some(kind)
+                            && native.generates_key_on_null == column.generates_key_on_null),
                     "Destination column changed since mapping: {}", column.name,
                 );
             }

@@ -198,3 +198,37 @@ fn oracle_connects_and_runs_sql() {
 fn db2_connects_and_runs_sql() {
     check(DbDriverKind::Db2, "DB2");
 }
+
+#[test]
+fn sql_server_estimated_plan_restores_execution_on_the_pinned_session() {
+    let Some(config) = config(DbDriverKind::SqlServer, "SQLSERVER") else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver = create_driver(config).unwrap();
+        let session = driver.open_script_session().await.unwrap();
+        let (tx, rx) = flume::unbounded();
+        session.execute_streaming("CREATE TABLE #fastdb_showplan (id INT PRIMARY KEY); INSERT INTO #fastdb_showplan VALUES (1)", tx).await.unwrap();
+        drop(rx);
+        let (tx, rx) = flume::unbounded();
+        session.execute_plan(DbDriverKind::SqlServer, "DELETE FROM #fastdb_showplan WHERE id = 1", false, tx).await.unwrap();
+        let raw = rx.try_iter().find_map(|event| match event {
+            StreamEvent::SchemaReady(pager) => Some(pager),
+            _ => None,
+        }).unwrap();
+        let plan = db_wire::query_plan::QueryPlan::parse_sql_server(&raw).unwrap();
+        assert_eq!(plan.provider, DbDriverKind::SqlServer);
+        assert!(plan.nodes.iter().any(|node| node.metrics.estimated_cost.is_some()));
+
+        let (tx, _rx) = flume::unbounded();
+        assert!(session.execute_plan(DbDriverKind::SqlServer, "SELECT missing FROM #fastdb_showplan", false, tx).await.is_err());
+        let (tx, rx) = flume::unbounded();
+        session.execute_streaming("SELECT COUNT(*) FROM #fastdb_showplan", tx).await.unwrap();
+        let raw = rx.try_iter().find_map(|event| match event {
+            StreamEvent::SchemaReady(pager) => Some(pager),
+            _ => None,
+        }).unwrap();
+        assert_eq!(raw.get_cell(0, 0).as_deref(), Some(b"1".as_slice()));
+        session.finish().await.unwrap();
+    });
+}

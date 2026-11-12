@@ -46,6 +46,7 @@ impl MappingDraft {
     pub fn auto(sources: Vec<String>, targets: &[ColumnMeta]) -> Self {
         let rows = targets
             .iter()
+            .filter(|target| !target.is_generated)
             .map(|target| MappingRow {
                 target: target.clone(),
                 source: sources
@@ -59,12 +60,11 @@ impl MappingDraft {
 
     /// Keeps choices for the same source header names; new sources are auto-mapped.
     pub fn with_sources(&self, sources: Vec<String>, targets: &[ColumnMeta]) -> Self {
-        let same_targets = self.rows.len() == targets.len()
-            && self
-                .rows
-                .iter()
-                .zip(targets)
-                .all(|(r, t)| r.target.name == t.name);
+        let same_targets = self
+            .rows
+            .iter()
+            .map(|row| &row.target)
+            .eq(targets.iter().filter(|target| !target.is_generated));
         if self.sources == sources && same_targets {
             return self.clone();
         }
@@ -113,6 +113,37 @@ impl MappingDraft {
 mod tests {
     use super::*;
     use mem_engine::DataType;
+
+    #[test]
+    fn native_generated_destinations_are_inspectable_but_not_automatic_write_targets() {
+        use db_wire::{
+            DatabaseDriver, SqliteDriver,
+            transfer::import::{CommitPolicy, ImportSettings, run_table_transfer},
+        };
+        use std::sync::Arc;
+        db_wire::get_runtime().block_on(async {
+            let driver = Arc::new(SqliteDriver::new_memory());
+            driver.execute_schema_ddl("CREATE TABLE source_rows (id TEXT PRIMARY KEY, label TEXT, calculated TEXT AS (upper(label)) STORED);
+                CREATE TABLE destination_rows (id TEXT PRIMARY KEY, label TEXT, calculated TEXT AS (lower(label)) STORED);
+                INSERT INTO source_rows(id,label) VALUES ('a','MiXeD')").await.unwrap();
+            let targets = driver.list_columns("main", "destination_rows").await.unwrap();
+            assert_eq!(targets.len(), 3, "generated fields remain visible for inspection");
+            let sources = vec!["id".into(), "label".into(), "calculated".into()];
+            let draft = MappingDraft::auto(sources.clone(), &targets);
+            assert_eq!(draft.rows.len(), 2);
+            let draft = draft.with_sources(sources, &targets);
+            assert!(draft.rows.iter().all(|row| row.target.name != "calculated"));
+            let outcome = run_table_transfer(driver.clone(), "SELECT id,label,calculated FROM source_rows".into(), driver.clone(), ImportSettings {
+                schema: "main".into(), table: "destination_rows".into(), expected_object_id: None, csv: Default::default(),
+                mapping: draft.build().unwrap(), commit: CommitPolicy::Atomic, skip_invalid_values: false,
+            }, Arc::default()).await;
+            assert!(outcome.error.is_none(), "{outcome:?}");
+            assert_eq!(outcome.progress.committed, 1);
+            let (pager, rows, _) = driver.execute_query("SELECT calculated FROM destination_rows").await.unwrap();
+            assert_eq!(rows, 1);
+            assert_eq!(pager.get_cell(0, 0).as_deref(), Some(b"mixed".as_slice()));
+        });
+    }
 
     fn targets() -> Vec<ColumnMeta> {
         vec![

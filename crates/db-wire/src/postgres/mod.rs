@@ -658,7 +658,14 @@ impl DatabaseDriver for PostgresDriver {
             LEFT JOIN pg_namespace n ON n.nspname = t.table_schema
             LEFT JOIN pg_class c ON c.relname = t.table_name AND c.relnamespace = n.oid
             WHERE t.table_schema NOT IN ('information_schema', 'pg_catalog')
-            ORDER BY t.table_schema, t.table_name;
+            UNION ALL
+            SELECT n.nspname::text, c.relname::text, 'MATERIALIZED VIEW',
+                   CASE WHEN c.reltuples >= 0 THEN c.reltuples::bigint END
+            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'm' AND n.nspname NOT IN ('information_schema', 'pg_catalog')
+              AND (pg_has_role(c.relowner, 'USAGE')
+                   OR has_any_column_privilege(c.oid, 'SELECT'))
+            ORDER BY 1, 2;
         "#;
 
         let rows = async {

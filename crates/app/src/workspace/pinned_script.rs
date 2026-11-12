@@ -4,7 +4,7 @@ use db_wire::script::{ScriptControl, ScriptEvent, ScriptOutcome};
 
 enum ExecutionKind {
     Script,
-    Plan,
+    Plan { analyze: bool },
     Settings(super::session_controls::SessionSetting),
     Schema(String),
 }
@@ -73,13 +73,21 @@ impl Workspace {
         index: usize,
         driver: Arc<dyn DatabaseDriver>,
         sql: String,
+        analyze: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(statements) = self.plan_user_transactions(index, vec![sql], cx) else {
             return;
         };
         let timeout = self.tabs[index].statement_timeout();
-        self.start_pinned_execution(index, driver, statements, ExecutionKind::Plan, timeout, cx);
+        self.start_pinned_execution(
+            index,
+            driver,
+            statements,
+            ExecutionKind::Plan { analyze },
+            timeout,
+            cx,
+        );
     }
 
     fn plan_user_transactions(
@@ -120,12 +128,16 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let control = Arc::new(super::transaction_mode::script_control(
+        let mut control = super::transaction_mode::script_control(
             self.tab_provider(index),
             !matches!(kind, ExecutionKind::Settings(_) | ExecutionKind::Schema(_))
                 && self.tabs[index].manual_transactions,
             timeout,
-        ));
+        );
+        if let ExecutionKind::Plan { analyze } = kind {
+            control = control.with_plan(self.tab_provider(index), analyze);
+        }
+        let control = Arc::new(control);
         let tab = &mut self.tabs[index];
         let tab_id = tab.id;
         let Some(connection_id) = tab.connection_id.clone() else {
@@ -253,10 +265,11 @@ impl Workspace {
                     self.query_history.record(connection.clone(), sql.clone());
                 }
                 let is_plan = super::transaction_mode::statement_is_plan(
-                    matches!(kind, ExecutionKind::Plan),
+                    matches!(kind, ExecutionKind::Plan { .. }),
                     &sql,
                 );
                 tab.begin_session_statement(sql, is_plan);
+                tab.requested_plan_provider = is_plan.then_some(provider);
                 tab.script_status = Some("Running script on a dedicated session…".into());
             }
             ScriptEvent::Stream(event) => {

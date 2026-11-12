@@ -65,6 +65,11 @@ impl Mapping {
         let mut names = HashSet::new();
         for column in &columns {
             ensure!(
+                !column.target.is_generated,
+                "Destination column is generated: {}",
+                column.target.name
+            );
+            ensure!(
                 column.source < source_width,
                 "Mapped source column is out of range"
             );
@@ -148,7 +153,7 @@ fn automatic(kind: DataType) -> Conversion {
 fn convert_value(value: &Value, column: &ColumnMapping) -> Result<Value> {
     if *value == Value::Null {
         ensure!(
-            column.target.nullable,
+            column.target.nullable || column.target.generates_key_on_null,
             "Destination does not accept SQL NULL"
         );
         return Ok(Value::Null);

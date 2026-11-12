@@ -893,6 +893,35 @@ mod metadata_tests {
     use db_wire::metadata::{MetadataFeature as F, MetadataSupport};
     use db_wire::{DatabaseDriver, SqliteDriver};
     #[test]
+    fn native_materialized_view_reaches_the_read_only_properties_metadata_pipeline() {
+        let Ok(port) = std::env::var("FASTDB_TEST_PG_PORT") else {
+            return;
+        };
+        db_wire::get_runtime().block_on(async {
+            let config = db_wire::ConnectionConfig {
+                driver: db_wire::DbDriverKind::Postgres,
+                host: std::env::var("FASTDB_TEST_PG_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
+                port: port.parse().unwrap(),
+                user: std::env::var("FASTDB_TEST_PG_USER").unwrap_or_else(|_| "postgres".into()),
+                password: std::env::var("FASTDB_TEST_PG_PASSWORD").ok(),
+                database: "postgres".into(),
+                use_unix_socket: false,
+                ..Default::default()
+            };
+            let writer = db_wire::PostgresDriver::new(config.clone());
+            let schema = format!("fastdb_app_mv_{}", std::process::id());
+            writer.execute_schema_ddl(&format!("CREATE SCHEMA {schema}; CREATE MATERIALIZED VIEW {schema}.snapshot AS SELECT 1 AS id")).await.unwrap();
+            let reader = db_wire::PostgresDriver::new(db_wire::ConnectionConfig { read_only: true, ..config });
+            let result = fetch_schema_metadata(&reader).await;
+            writer.execute_schema_ddl(&format!("DROP SCHEMA {schema} CASCADE")).await.unwrap();
+            let metadata = result.unwrap();
+            assert!(metadata.tables.iter().any(|t| t.schema == schema && t.name == "snapshot" && t.table_type == "MATERIALIZED VIEW"));
+            assert!(metadata.columns.iter().any(|(s,t,c)| s == &schema && t == "snapshot" && c.len() == 1 && c[0].name == "id"));
+            assert!(metadata.details.iter().any(|(s,t,d)| s == &schema && t == "snapshot" && d.ddl.as_ref().is_some_and(|sql| sql.contains("CREATE MATERIALIZED VIEW"))));
+            assert_eq!(metadata.states.get(&F::TableDetails), Some(&MetadataState::Ready));
+        });
+    }
+    #[test]
     fn table_discovery_survives_optional_failure_without_claiming_empty_metadata() {
         db_wire::get_runtime().block_on(async {
             let driver = SqliteDriver::new_memory();

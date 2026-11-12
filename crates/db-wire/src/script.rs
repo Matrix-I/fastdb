@@ -1,6 +1,6 @@
 //! Run-scoped sessions. Cancellation is owned by the runner, so a late cancel
 //! cannot reach a subsequent statement, rollback or another run's connection.
-use crate::{DatabaseDriver, StreamEvent};
+use crate::{DatabaseDriver, DbDriverKind, StreamEvent};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::{sync::Arc, time::Duration};
@@ -36,6 +36,18 @@ pub trait ScriptSession: Send + Sync {
         false
     }
     async fn execute_streaming(&self, sql: &str, tx: flume::Sender<StreamEvent>) -> Result<()>;
+    /// Plans one caller-validated statement on this physical session.
+    /// Stateful providers override this to restore plan settings on every exit.
+    async fn execute_plan(
+        &self,
+        provider: DbDriverKind,
+        statement: &str,
+        analyze: bool,
+        tx: flume::Sender<StreamEvent>,
+    ) -> Result<()> {
+        let sql = crate::query_plan::explain_sql(provider, statement, analyze)?;
+        self.execute_streaming(&sql, tx).await
+    }
     async fn cancel_active_query(&self) -> Result<()>;
     /// Roll back any remaining transaction and close the session.
     async fn finish(&self) -> Result<()>;
@@ -65,6 +77,7 @@ impl Drop for TabSession {
 pub struct ScriptControl {
     timeout: Option<Duration>,
     native_manual_statement: Option<fn(&str) -> bool>,
+    plan: Option<(DbDriverKind, bool)>,
     cancel: tokio::sync::watch::Sender<bool>,
     finished: tokio::sync::watch::Sender<bool>,
 }
@@ -73,12 +86,19 @@ impl Default for ScriptControl {
         Self {
             timeout: None,
             native_manual_statement: None,
+            plan: None,
             cancel: tokio::sync::watch::channel(false).0,
             finished: tokio::sync::watch::channel(false).0,
         }
     }
 }
 impl ScriptControl {
+    /// Plans only the final input statement; preceding setup/transaction controls
+    /// and an injected implicit BEGIN remain ordinary statements.
+    pub fn with_plan(mut self, provider: DbDriverKind, analyze: bool) -> Self {
+        self.plan = Some((provider, analyze));
+        self
+    }
     pub fn with_timeout(timeout: Option<Duration>) -> Self {
         Self {
             timeout,
@@ -226,9 +246,19 @@ async fn run_script_inner(
         }
     }
     let mut outcome = ScriptOutcome::default();
-    let mut statements: std::collections::VecDeque<_> =
-        statements.into_iter().map(|sql| (sql, true)).collect();
-    while let Some((sql, check_manual)) = statements.pop_front() {
+    let final_statement = statements.len().checked_sub(1);
+    let mut statements: std::collections::VecDeque<_> = statements
+        .into_iter()
+        .enumerate()
+        .map(|(index, sql)| {
+            (
+                sql,
+                true,
+                control.plan.filter(|_| Some(index) == final_statement),
+            )
+        })
+        .collect();
+    while let Some((sql, check_manual, plan)) = statements.pop_front() {
         if control.is_cancelled() {
             break;
         }
@@ -239,8 +269,8 @@ async fn run_script_inner(
         {
             match session.in_transaction() {
                 Some(false) => {
-                    statements.push_front((sql, false));
-                    statements.push_front(("BEGIN".into(), false));
+                    statements.push_front((sql, false, plan));
+                    statements.push_front(("BEGIN".into(), false, None));
                     continue;
                 }
                 Some(true) => {}
@@ -253,10 +283,21 @@ async fn run_script_inner(
                 }
             }
         }
+        let display_sql = plan
+            .map(|(provider, analyze)| {
+                crate::query_plan::explain_sql(provider, &sql, analyze).unwrap_or_else(|_| {
+                    format!(
+                        "-- {} {} plan\n{sql}",
+                        provider.name(),
+                        if analyze { "Actual" } else { "Estimated" }
+                    )
+                })
+            })
+            .unwrap_or_else(|| sql.clone());
         send(
             &tx,
             &control,
-            ScriptEvent::StatementStarted { sql: sql.clone() },
+            ScriptEvent::StatementStarted { sql: display_sql },
         );
         if control.is_cancelled() {
             break;
@@ -271,10 +312,15 @@ async fn run_script_inner(
         });
         let executed = {
             let session_id = format!("session#{:x}", Arc::as_ptr(&session) as *const () as usize);
-            let execution = crate::sql_observer::with_session(
-                session_id,
-                session.execute_streaming(&sql, row_tx),
-            );
+            let operation = async {
+                match plan {
+                    Some((provider, analyze)) => {
+                        session.execute_plan(provider, &sql, analyze, row_tx).await
+                    }
+                    None => session.execute_streaming(&sql, row_tx).await,
+                }
+            };
+            let execution = crate::sql_observer::with_session(session_id, operation);
             tokio::pin!(execution);
             tokio::select! {
                 biased;

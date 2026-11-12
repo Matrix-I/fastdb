@@ -80,6 +80,7 @@ fn rail_symbol(label: &str) -> &'static str {
         "Outdent" => "⇤",
         "History" => "↺",
         "Explain" => "⑂",
+        "Open plan JSON…" => "↥",
         "Analyze (executes SQL)" => "⚡",
         "Rename" => "✎",
         "Delete" => "×",
@@ -121,6 +122,7 @@ fn rail_explanation(label: &str) -> String {
         "Outdent" => "Remove one level of indentation from the current or selected lines",
         "History" => "Show recent queries for this connection and insert a previous query",
         "Explain" => "Show the query plan without executing the statement",
+        "Open plan JSON…" => "Open a saved native query plan without executing SQL",
         "Analyze (executes SQL)" => {
             "Analyze: executes SQL, including writes, and shows actual timings"
         }

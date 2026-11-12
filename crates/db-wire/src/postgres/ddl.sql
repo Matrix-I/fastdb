@@ -2,13 +2,15 @@
 WITH relations AS (
     SELECT c.*, n.nspname,
            format('%I.%I', n.nspname, c.relname) AS target,
-           CASE WHEN c.relkind = 'v' THEN 'VIEW' ELSE 'TABLE' END AS object_type,
-           EXISTS (SELECT FROM pg_inherits h WHERE h.inhrelid = c.oid) AND NOT c.relispartition
-               OR c.reloftype <> 0 OR c.relkind NOT IN ('r', 'p', 'v')
+           CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END AS object_type,
+           c.relkind NOT IN ('r', 'p', 'v', 'm')
                OR c.relpersistence = 't' AS unsupported
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
+    LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
+      AND (t.table_name IS NOT NULL OR (c.relkind = 'm'
+           AND (pg_has_role(c.relowner, 'USAGE')
+                OR has_any_column_privilege(c.oid, 'SELECT'))))
 ), sequences AS (
     SELECT d.refobjid AS table_oid, a.attnum, d.deptype, sn.nspname, s.relname,
            format('%I.%I', sn.nspname, s.relname) AS target,
@@ -27,8 +29,9 @@ WITH relations AS (
       AND d.deptype IN ('a', 'i')
 ), columns AS (
     SELECT a.attrelid, a.attnum,
-        format('    %I %s', a.attname, format_type(a.atttypid, a.atttypmod)) ||
-        CASE WHEN a.attcollation <> 0 AND a.attcollation <> ty.typcollation
+        CASE WHEN r.reloftype <> 0 THEN format('    %I WITH OPTIONS', a.attname)
+             ELSE format('    %I %s', a.attname, format_type(a.atttypid, a.atttypmod)) END ||
+        CASE WHEN r.reloftype = 0 AND a.attcollation <> 0 AND a.attcollation <> ty.typcollation
              THEN format(' COLLATE %I.%I', cn.nspname, co.collname) ELSE '' END ||
         CASE WHEN a.attidentity <> '' THEN
             ' GENERATED ' || CASE a.attidentity WHEN 'a' THEN 'ALWAYS' ELSE 'BY DEFAULT' END ||
@@ -44,7 +47,22 @@ WITH relations AS (
     LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
     LEFT JOIN pg_collation co ON co.oid = a.attcollation
     LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
-    WHERE a.attnum > 0 AND NOT a.attisdropped
+    WHERE a.attnum > 0 AND NOT a.attisdropped AND (a.attislocal OR r.relispartition)
+), definitions AS (
+    SELECT c.attrelid, c.attnum, ''::text AS constraint_name, c.definition FROM columns c
+    UNION ALL
+    -- Locally redeclared inherited checks must merge during CREATE, rather than
+    -- colliding with the check already inherited from the parent afterward.
+    SELECT con.conrelid, NULL::smallint, con.conname::text,
+           format('    CONSTRAINT %I %s', con.conname, pg_get_constraintdef(con.oid, false))
+    FROM pg_constraint con JOIN relations r ON r.oid = con.conrelid
+    WHERE con.contype = 'c' AND con.conislocal AND con.coninhcount > 0 AND NOT r.relispartition
+), inheritance AS (
+    SELECT h.inhrelid, string_agg(format('%I.%I', n.nspname, p.relname), ', ' ORDER BY h.inhseqno) AS parents
+    FROM pg_inherits h JOIN relations r ON r.oid = h.inhrelid
+    JOIN pg_class p ON p.oid = h.inhparent JOIN pg_namespace n ON n.oid = p.relnamespace
+    WHERE NOT r.relispartition
+    GROUP BY h.inhrelid
 ), statements AS (
     SELECT r.oid, 0 AS phase, '' AS sort_key,
         '-- PostgreSQL structural DDL. Dependencies must already exist; sequence values and data are not included.' || E'\n' ||
@@ -52,7 +70,7 @@ WITH relations AS (
         'SET standard_conforming_strings = on;' AS sql
     FROM relations r WHERE NOT r.unsupported
     UNION ALL
-    SELECT r.oid, 0, '', '-- DDL unavailable: inheritance, typed, temporary or foreign tables are not supported.'
+    SELECT r.oid, 0, '', '-- DDL unavailable: temporary or foreign tables are not supported.'
     FROM relations r WHERE r.unsupported
     UNION ALL
     SELECT s.table_oid, 10, s.target, 'CREATE ' || CASE WHEN s.relpersistence = 'u' THEN 'UNLOGGED ' ELSE '' END ||
@@ -60,12 +78,20 @@ WITH relations AS (
     FROM sequences s JOIN relations r ON r.oid = s.table_oid WHERE s.deptype = 'a' AND NOT r.unsupported
     UNION ALL
     SELECT r.oid, 20, '',
-        CASE WHEN r.relkind = 'v' THEN 'CREATE VIEW ' || r.target || ' (' ||
+        CASE WHEN r.relkind = 'm' THEN 'CREATE MATERIALIZED VIEW ' || r.target || ' (' ||
+            (SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) FROM pg_attribute a
+             WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped) || ')' ||
+            COALESCE((SELECT ' USING ' || quote_ident(am.amname) FROM pg_am am WHERE am.oid = r.relam), '') ||
+            COALESCE((SELECT ' TABLESPACE ' || quote_ident(ts.spcname) FROM pg_tablespace ts WHERE ts.oid = r.reltablespace), '') ||
+            ' AS ' || rtrim(pg_get_viewdef(r.oid, false), E';\n\r ') || ' WITH NO DATA;'
+        WHEN r.relkind = 'v' THEN 'CREATE VIEW ' || r.target || ' (' ||
             (SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) FROM pg_attribute a
              WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped) || ') AS ' || pg_get_viewdef(r.oid, false)
         ELSE 'CREATE ' || CASE WHEN r.relpersistence = 'u' THEN 'UNLOGGED ' ELSE '' END ||
-            'TABLE ' || r.target || E' (\n' ||
-            COALESCE((SELECT string_agg(c.definition, E',\n' ORDER BY c.attnum) FROM columns c WHERE c.attrelid = r.oid), '') || E'\n)' ||
+            'TABLE ' || r.target ||
+            CASE WHEN r.reloftype <> 0 THEN ' OF ' || format_type(r.reloftype, NULL) ELSE '' END || E' (\n' ||
+            COALESCE((SELECT string_agg(c.definition, E',\n' ORDER BY c.attnum NULLS LAST, c.constraint_name) FROM definitions c WHERE c.attrelid = r.oid), '') || E'\n)' ||
+            COALESCE((SELECT ' INHERITS (' || h.parents || ')' FROM inheritance h WHERE h.inhrelid = r.oid), '') ||
             CASE WHEN r.relkind = 'p' THEN ' PARTITION BY ' || pg_get_partkeydef(r.oid) ELSE '' END ||
             COALESCE((SELECT ' USING ' || quote_ident(am.amname) FROM pg_am am WHERE am.oid = r.relam AND r.relkind = 'r'), '') ||
             COALESCE((SELECT ' TABLESPACE ' || quote_ident(ts.spcname) FROM pg_tablespace ts WHERE ts.oid = r.reltablespace), '') || ';'
@@ -83,6 +109,17 @@ WITH relations AS (
     JOIN pg_attrdef ad ON ad.adrelid = r.oid AND ad.adnum = a.attnum
     WHERE NOT r.unsupported AND r.relkind = 'v' AND a.attnum > 0 AND NOT a.attisdropped
     UNION ALL
+    -- ALTER preserves inherited-only attislocal=false while restoring child
+    -- defaults/nullability that may differ from the required existing parents.
+    SELECT r.oid, 27, a.attname, 'ALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
+        CASE WHEN ad.oid IS NULL THEN ' DROP DEFAULT' ELSE ' SET DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid, false) END || ';' ||
+        E'\nALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
+        CASE WHEN a.attnotnull THEN ' SET NOT NULL;' ELSE ' DROP NOT NULL;' END
+    FROM relations r JOIN pg_attribute a ON a.attrelid = r.oid
+    LEFT JOIN pg_attrdef ad ON ad.adrelid = r.oid AND ad.adnum = a.attnum
+    WHERE NOT r.unsupported AND NOT r.relispartition AND a.attnum > 0 AND NOT a.attisdropped
+      AND NOT a.attislocal AND a.attinhcount > 0 AND a.attgenerated = '' AND a.attidentity = ''
+    UNION ALL
     SELECT s.table_oid, 30, s.target, 'ALTER SEQUENCE ' || s.target || ' OWNED BY ' || r.target || '.' || quote_ident(a.attname) || ';'
     FROM sequences s JOIN relations r ON r.oid = s.table_oid
     JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum = s.attnum
@@ -92,6 +129,7 @@ WITH relations AS (
         quote_ident(con.conname) || ' ' || pg_get_constraintdef(con.oid, false) || ';'
     FROM relations r JOIN pg_constraint con ON con.conrelid = r.oid
     WHERE NOT r.unsupported AND con.contype IN ('p', 'u', 'c', 'x', 'f') AND con.conparentid = 0
+      AND (r.relispartition OR (con.conislocal AND con.coninhcount = 0))
     UNION ALL
     SELECT r.oid, 50, ic.relname,
         CASE WHEN NOT i.indisvalid OR NOT i.indisready THEN '-- WARNING: invalid index omitted: ' ||
@@ -100,7 +138,7 @@ WITH relations AS (
     FROM relations r JOIN pg_index i ON i.indrelid = r.oid JOIN pg_class ic ON ic.oid = i.indexrelid
     WHERE NOT r.unsupported AND NOT EXISTS (SELECT FROM pg_constraint con WHERE con.conindid = i.indexrelid AND con.contype IN ('p', 'u', 'x'))
     UNION ALL
-    SELECT r.oid, 51, ic.relname, 'ALTER TABLE ' || r.target || ' CLUSTER ON ' || quote_ident(ic.relname) || ';'
+    SELECT r.oid, 51, ic.relname, 'ALTER ' || r.object_type || ' ' || r.target || ' CLUSTER ON ' || quote_ident(ic.relname) || ';'
     FROM relations r JOIN pg_index i ON i.indrelid = r.oid JOIN pg_class ic ON ic.oid = i.indexrelid
     WHERE NOT r.unsupported AND i.indisvalid AND i.indisclustered
     UNION ALL
@@ -129,14 +167,14 @@ WITH relations AS (
     SELECT s.table_oid, 60, s.target, format('COMMENT ON SEQUENCE %s IS %L;', s.target, s.comment)
     FROM sequences s JOIN relations r ON r.oid = s.table_oid WHERE NOT r.unsupported AND s.comment IS NOT NULL
     UNION ALL
-    SELECT r.oid, 65, a.attname, 'ALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
+    SELECT r.oid, 65, a.attname, 'ALTER ' || r.object_type || CASE WHEN r.relkind = 'm' THEN ' ' ELSE ' ONLY ' END || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
         ' SET STORAGE ' || CASE a.attstorage WHEN 'p' THEN 'PLAIN' WHEN 'e' THEN 'EXTERNAL' WHEN 'm' THEN 'MAIN' ELSE 'EXTENDED' END || ';' ||
-        CASE WHEN a.attstattarget >= 0 THEN E'\nALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
+        CASE WHEN a.attstattarget >= 0 THEN E'\nALTER ' || r.object_type || CASE WHEN r.relkind = 'm' THEN ' ' ELSE ' ONLY ' END || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
              ' SET STATISTICS ' || a.attstattarget || ';' ELSE '' END ||
-        CASE WHEN a.attcompression <> '' THEN E'\nALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
+        CASE WHEN a.attcompression <> '' THEN E'\nALTER ' || r.object_type || CASE WHEN r.relkind = 'm' THEN ' ' ELSE ' ONLY ' END || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
              ' SET COMPRESSION ' || CASE a.attcompression WHEN 'p' THEN 'pglz' ELSE 'lz4' END || ';' ELSE '' END
     FROM relations r JOIN pg_attribute a ON a.attrelid = r.oid
-    WHERE NOT r.unsupported AND r.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated <> 'v'
+    WHERE NOT r.unsupported AND r.relkind IN ('r', 'p', 'm') AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated <> 'v'
     UNION ALL
     SELECT r.oid, 70, p.polname, 'CREATE POLICY ' || quote_ident(p.polname) || ' ON ' || r.target ||
         CASE WHEN p.polpermissive THEN ' AS PERMISSIVE' ELSE ' AS RESTRICTIVE' END ||

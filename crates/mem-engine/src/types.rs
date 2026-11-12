@@ -58,6 +58,10 @@ pub struct ColumnMeta {
     pub nullable: bool,
     pub is_primary_key: bool,
     pub is_foreign_key: bool,
+    /// The engine computes the value and does not accept explicit writes.
+    pub is_generated: bool,
+    /// An explicit SQL NULL on insert requests an engine-generated key.
+    pub generates_key_on_null: bool,
     pub raw_type: Option<String>,
     pub default_val: Option<String>,
     pub collation: Option<String>,
@@ -72,6 +76,8 @@ impl ColumnMeta {
             nullable: true,
             is_primary_key: false,
             is_foreign_key: false,
+            is_generated: false,
+            generates_key_on_null: false,
             raw_type: None,
             default_val: None,
             collation: None,
