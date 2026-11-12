@@ -304,6 +304,14 @@ nullable; ordinary nullable PKs and the inline INTEGER PRIMARY KEY DESC
 exception retain SQLite semantics. STRICT/WITHOUT ROWID PKs use native NOT NULL
 flags. Read-only authorization and quoted identifiers have real-engine tests.
 
+SQLite index summaries use pragma_index_list rather than filtering index rows
+from sqlite_schema. This includes native implicit UNIQUE indexes and WITHOUT
+ROWID primary-key indexes; a rowid alias has no separate index object. Reads run
+on a blocking worker. A refresh rejects more than 100,000 index objects, a table
+or index name over 128 KiB, or over 16 MiB of aggregate table/index-name bytes,
+with a metadata error instead of silently returning a partial index list.
+Structured index/constraint details beyond the names remain in progress.
+
 A SQLite 3.46.0 fixture with 1,000 unrelated tables and 60 target columns used
 native virtual metadata scans plus a small ORDER BY sort, not user-table data
 scans. Query-plan/profile evidence is recorded in the completion plan. Native
