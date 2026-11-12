@@ -10,6 +10,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         self.ensure_catalog_section(active_tab_idx, cx);
+        self.ensure_relation_ddl(active_tab_idx, cx);
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[active_tab_idx];
@@ -35,6 +36,16 @@ impl Workspace {
                     vec![],
                 ))
             });
+        let model = if active_property_sec == PropertySection::Ddl {
+            tab.catalog
+                .relation_ddl
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned()
+                .unwrap_or(model)
+        } else {
+            model
+        };
         let mut prop_container = div()
             .id("properties-main-container")
             .flex()
@@ -244,7 +255,13 @@ impl Workspace {
             Some("Disconnected. Connect and refresh to load metadata.".to_string())
         } else {
             if active_property_sec == PropertySection::Ddl {
-                model.ddl_notice()
+                if tab.catalog.ddl_loading {
+                    Some("Loading native relation DDL…".into())
+                } else if let Some(Err(error)) = &tab.catalog.relation_ddl {
+                    Some(error.clone())
+                } else {
+                    model.ddl_notice()
+                }
             } else {
                 feature.and_then(|feature| model.section_notice(feature))
             }
@@ -267,6 +284,7 @@ impl Workspace {
                     )));
             }
             if active_property_sec == PropertySection::Ddl
+                && !matches!(tab.catalog.relation_ddl, Some(Ok(_)))
                 && let Some(notice) = model.section_notice(F::TableDetails)
             {
                 right_content =
@@ -379,7 +397,10 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .overflow_hidden();
-        if active_property_sec == PropertySection::Ddl {
+        if active_property_sec == PropertySection::Ddl
+            && !tab.catalog.ddl_loading
+            && !matches!(tab.catalog.relation_ddl, Some(Err(_)))
+        {
             detail = detail.child(model.render_ddl_toolbar(theme, cx));
         }
         master_detail = master_detail.child(

@@ -37,7 +37,7 @@ impl TableProperties {
                             .text_color(theme.text_secondary)
                             .child(
                                 if self.details.as_ref().and_then(|d| d.ddl.as_ref()).is_some() {
-                                    "PostgreSQL DDL"
+                                    "Native DDL"
                                 } else {
                                     "DDL Metadata Preview"
                                 },

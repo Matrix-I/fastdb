@@ -16,12 +16,16 @@ pub(super) enum CatalogState {
 pub(super) struct CatalogCache {
     pub generation: u64,
     pub sections: HashMap<CatalogSection, CatalogState>,
+    pub relation_ddl: Option<Result<Arc<properties::model::TableProperties>, String>>,
+    pub ddl_loading: bool,
 }
 impl CatalogCache {
     fn advance_generation(&mut self, generation: u64) {
         if self.generation != generation {
             self.generation = generation;
             self.sections.clear();
+            self.relation_ddl = None;
+            self.ddl_loading = false;
         }
     }
 }
@@ -50,6 +54,81 @@ impl Workspace {
             let id = tab.id;
             self.load_catalog_section(id, section, cx);
         }
+    }
+    pub(super) fn ensure_relation_ddl(&mut self, index: usize, cx: &mut Context<Self>) {
+        let session = self.tab_session(index);
+        if !matches!(session.kind, DbDriverKind::Sqlite | DbDriverKind::MySql) {
+            return;
+        }
+        let generation = session.metadata_generation;
+        let Some(driver) = session.driver.clone() else {
+            return;
+        };
+        let tab = &self.tabs[index];
+        if tab.active_property_section != PropertySection::Ddl
+            || tab.catalog.ddl_loading
+            || tab.catalog.relation_ddl.is_some()
+        {
+            return;
+        }
+        let (Some(owner), Some(schema), Some(table)) = (
+            tab.connection_id.clone(),
+            tab.schema_name.clone(),
+            tab.table_name.clone(),
+        ) else {
+            return;
+        };
+        let Some(model) = session
+            .properties
+            .get(&(schema.clone(), table.clone()))
+            .cloned()
+        else {
+            return;
+        };
+        let id = tab.id;
+        self.tabs[index].catalog.ddl_loading = true;
+        let expected = driver.clone();
+        cx.spawn(async move |this, cx| {
+            let result = db_wire::run_on_shared_runtime(async move {
+                let ddl = tokio::time::timeout(
+                    std::time::Duration::from_secs(20),
+                    driver.load_relation_ddl(&schema, &table),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("Relation DDL load timed out"))??
+                .ok_or_else(|| anyhow::anyhow!("Native relation DDL is unavailable"))?;
+                let mut details = model.details.clone().unwrap_or_default();
+                details.ddl = Some(ddl);
+                let metadata_error = model.metadata_error.clone();
+                Ok(Arc::new(
+                    (*model)
+                        .clone()
+                        .with_metadata(Some(details), metadata_error),
+                ))
+            })
+            .await;
+            let _ = this.update(cx, |this, cx| {
+                let session = this.connections.session(&owner);
+                if session.metadata_generation != generation
+                    || !session
+                        .driver
+                        .as_ref()
+                        .is_some_and(|driver| Arc::ptr_eq(driver, &expected))
+                {
+                    return;
+                }
+                if let Some(tab) = this
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.id == id && tab.catalog.generation == generation)
+                {
+                    tab.catalog.ddl_loading = false;
+                    tab.catalog.relation_ddl = Some(result.map_err(|error| format!("{error:#}")));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
     fn load_catalog_section(&mut self, id: u64, section: CatalogSection, cx: &mut Context<Self>) {
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {

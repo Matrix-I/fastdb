@@ -22,7 +22,11 @@ impl Workspace {
         let caret_visible = self.input.cursor_visible;
         let supports_plan = matches!(
             self.tab_provider(tab_idx),
-            DbDriverKind::Postgres | DbDriverKind::Sqlite
+            DbDriverKind::Postgres
+                | DbDriverKind::Sqlite
+                | DbDriverKind::MySql
+                | DbDriverKind::MariaDb
+                | DbDriverKind::SqlServer
         );
         let toolbar = div()
             .id("script-toolbar")
@@ -59,6 +63,23 @@ impl Workspace {
             .when(supports_plan && !is_running_query, |toolbar| {
                 toolbar.child(tool("Explain").id("btn-explain").on_click(
                     cx.listener(|this, _, _, cx| this.explain_active_statement(false, cx)),
+                ))
+            })
+            .when(
+                !is_running_query
+                    && matches!(
+                        self.tab_provider(tab_idx),
+                        DbDriverKind::Postgres | DbDriverKind::MySql | DbDriverKind::MariaDb
+                    ),
+                |toolbar| {
+                    toolbar.child(tool("Analyze (executes SQL)").on_click(
+                        cx.listener(|this, _, _, cx| this.explain_active_statement(true, cx)),
+                    ))
+                },
+            )
+            .when(!is_running_query, |toolbar| {
+                toolbar.child(tool("Open plan JSON…").on_click(
+                    cx.listener(move |this, _, _, cx| this.open_plan_file(tab_idx, false, cx)),
                 ))
             });
 

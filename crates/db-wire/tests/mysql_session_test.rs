@@ -38,6 +38,89 @@ fn cell(events: &[StreamEvent]) -> Vec<u8> {
 }
 
 #[test]
+fn mysql_explain_uses_the_same_temp_table_session_without_executing_dml() {
+    let Some(config) = config() else {
+        return;
+    };
+    db_wire::get_runtime().block_on(async {
+        let driver = MySqlDriver::new(config);
+        let session = driver.open_script_session().await.unwrap();
+        execute(
+            session.as_ref(),
+            "CREATE TEMPORARY TABLE fastdb_plan_items (id INTEGER PRIMARY KEY)",
+        )
+        .await;
+        execute(
+            session.as_ref(),
+            "INSERT INTO fastdb_plan_items VALUES (42)",
+        )
+        .await;
+        let identity = cell(&execute(session.as_ref(), "SELECT CONNECTION_ID()").await);
+        let sql = db_wire::query_plan::explain_sql(
+            DbDriverKind::MySql,
+            "SELECT id FROM fastdb_plan_items WHERE id = 42",
+            false,
+        )
+        .unwrap();
+        let raw = cell(&execute(session.as_ref(), &sql).await);
+        let plan = db_wire::query_plan::QueryPlan::parse(&raw).unwrap();
+        assert!(
+            plan.nodes
+                .iter()
+                .any(|node| node.title.contains("fastdb_plan_items"))
+        );
+        assert!(
+            plan.nodes
+                .iter()
+                .any(|node| node.details.contains("PRIMARY"))
+        );
+        let actual = db_wire::query_plan::explain_sql(
+            DbDriverKind::MySql,
+            "SELECT id FROM fastdb_plan_items WHERE id = 42",
+            true,
+        )
+        .unwrap();
+        let raw = cell(&execute(session.as_ref(), &actual).await);
+        let actual = db_wire::query_plan::QueryPlan::parse(&raw).unwrap();
+        assert!(
+            actual
+                .nodes
+                .iter()
+                .any(|node| node.metrics.actual_rows_per_loop == Some(1.0))
+        );
+        assert!(
+            actual
+                .nodes
+                .iter()
+                .any(|node| node.metrics.actual_loops == Some(1.0))
+        );
+        assert!(actual.expensive_basis().unwrap().contains("time"));
+        let delete = db_wire::query_plan::explain_sql(
+            DbDriverKind::MySql,
+            "DELETE FROM fastdb_plan_items WHERE id = 42",
+            false,
+        )
+        .unwrap();
+        let raw = cell(&execute(session.as_ref(), &delete).await);
+        assert!(
+            !db_wire::query_plan::QueryPlan::parse(&raw)
+                .unwrap()
+                .nodes
+                .is_empty()
+        );
+        assert_eq!(
+            cell(&execute(session.as_ref(), "SELECT count(*) FROM fastdb_plan_items").await),
+            b"1"
+        );
+        assert_eq!(
+            cell(&execute(session.as_ref(), "SELECT CONNECTION_ID()").await),
+            identity
+        );
+        session.finish().await.unwrap();
+    });
+}
+
+#[test]
 fn mysql_session_keeps_temp_objects_settings_and_savepoints_without_pool_leakage() {
     let Some(config) = config() else {
         return;

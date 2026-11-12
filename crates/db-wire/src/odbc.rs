@@ -1,6 +1,7 @@
 //! SQL Server, Oracle and Db2 through installed vendor ODBC drivers.
 //! The driver manager is bundled; vendor clients are discovered at runtime.
 mod script;
+mod showplan;
 
 use crate::stream::{RowSink, report_error};
 use crate::{ConnectionConfig, DatabaseDriver, DbDriverKind, StreamEvent, TableSummary};

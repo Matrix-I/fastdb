@@ -603,13 +603,22 @@ impl Workspace {
         if cmd && key.key.eq_ignore_ascii_case("a") {
             self.tabs[self.active_tab].ddl_selected_all = true;
         } else if cmd && key.key.eq_ignore_ascii_case("c") {
-            if tab.ddl_selected_all {
+            if tab.ddl_selected_all
+                && !tab.catalog.ddl_loading
+                && !matches!(tab.catalog.relation_ddl, Some(Err(_)))
+            {
                 let schema = tab.schema_name.clone().unwrap_or_default();
                 let table = tab.table_name.clone().unwrap_or_default();
-                if let Some(model) = self
-                    .tab_session(self.active_tab)
-                    .properties
-                    .get(&(schema, table))
+                if let Some(model) = tab
+                    .catalog
+                    .relation_ddl
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .or_else(|| {
+                        self.tab_session(self.active_tab)
+                            .properties
+                            .get(&(schema, table))
+                    })
                 {
                     cx.write_to_clipboard(ClipboardItem::new_string(model.ddl.clone()));
                 }

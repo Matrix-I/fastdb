@@ -202,6 +202,40 @@ impl ScriptSession for OdbcSession {
         result
     }
 
+    async fn execute_plan(
+        &self,
+        provider: DbDriverKind,
+        statement: &str,
+        analyze: bool,
+        tx: flume::Sender<StreamEvent>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            provider == DbDriverKind::SqlServer
+                && provider == self.driver.config.driver
+                && !analyze,
+            "ODBC plan mode is unavailable for this provider"
+        );
+        let started = Instant::now();
+        let sql = statement.to_owned();
+        let pager = self
+            .driver
+            .with_connection(move |conn, driver| super::showplan::capture(conn, driver, &sql))
+            .await;
+        if self.driver.closed.load(Ordering::Acquire) {
+            self.end_connection()
+                .await
+                .context("Cannot discard SQL Server plan session")?;
+        }
+        let pager = Arc::new(pager?);
+        let total_rows = pager.total_rows();
+        tx.send(StreamEvent::SchemaReady(pager))?;
+        tx.send(StreamEvent::Completed {
+            total_rows,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })?;
+        Ok(())
+    }
+
     async fn cancel_active_query(&self) -> Result<()> {
         self.driver.closed.store(true, Ordering::Release);
         self.driver.cancel_active_query().await

@@ -363,3 +363,44 @@ fn mysql_data_search_matches_literals_and_opens_captured_rows() {
         if let Err(panic) = result { std::panic::resume_unwind(panic); }
     });
 }
+
+#[test]
+fn mysql_relation_ddl_preserves_quoted_table_and_native_view_source() {
+    use futures::FutureExt as _;
+    let Some(config) = test_config() else { return };
+    db_wire::get_runtime().block_on(async {
+        let schema = format!("fastdb_ddl_{}", uuid::Uuid::new_v4().simple());
+        let admin = MySqlDriver::new(config.clone());
+        admin.execute_query(&format!("CREATE DATABASE {schema}")).await.unwrap();
+        let driver = MySqlDriver::new(ConnectionConfig { database: schema.clone(), ..config });
+        let result = std::panic::AssertUnwindSafe(async {
+            driver.execute_query("CREATE TABLE `order``s` (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, label VARCHAR(40) COLLATE utf8mb4_bin DEFAULT '' COMMENT 'native label', computed INT AS (length(label)) STORED, amount DECIMAL(24,8) DEFAULT 1.25, KEY lookup (label))").await.unwrap();
+            let columns = driver.list_columns(&schema, "order`s").await.unwrap();
+            assert_eq!(columns[0].raw_type.as_deref(), Some("int unsigned"));
+            assert!(columns[0].generates_key_on_null);
+            assert!(!columns[1].generates_key_on_null);
+            assert_eq!(columns[1].raw_type.as_deref(), Some("varchar(40)"));
+            assert_eq!(columns[1].default_val.as_deref(), Some(""));
+            assert_eq!(columns[1].collation.as_deref(), Some("utf8mb4_bin"));
+            assert_eq!(columns[1].comment.as_deref(), Some("native label"));
+            assert!(columns[2].is_generated);
+            assert_eq!(columns[3].raw_type.as_deref(), Some("decimal(24,8)"));
+            assert_eq!(columns[3].default_val.as_deref(), Some("1.25000000"));
+            let all = driver.list_all_columns().await.unwrap();
+            let (_, _, bulk) = all.iter().find(|(s, t, _)| s == &schema && t == "order`s").unwrap();
+            assert_eq!(bulk[0].raw_type, columns[0].raw_type);
+            assert_eq!(bulk[1].comment, columns[1].comment);
+            assert!(bulk[2].is_generated);
+            driver.execute_query("CREATE VIEW named_view AS SELECT id FROM `order``s`").await.unwrap();
+            let table = driver.load_relation_ddl(&schema, "order`s").await.unwrap().unwrap();
+            let view = driver.load_relation_ddl(&schema, "named_view").await.unwrap().unwrap();
+            assert!(table.contains("`order``s`"));
+            assert!(table.contains("GENERATED ALWAYS AS"));
+            assert!(table.contains("KEY `lookup`"));
+            assert!(view.contains("VIEW `named_view`"));
+            assert!(view.contains("`order``s`"));
+        }).catch_unwind().await;
+        admin.execute_query(&format!("DROP DATABASE {schema}")).await.unwrap();
+        if let Err(panic) = result { std::panic::resume_unwind(panic); }
+    });
+}

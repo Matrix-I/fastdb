@@ -47,7 +47,11 @@ pub struct TabState {
     /// Statement of a script tab's current result, read again by "fetch next"
     pub script_sql: Option<String>,
     pub query_plan: Option<db_wire::query_plan::QueryPlan>,
+    pub(super) plan_scroll: ScrollHandle,
+    pub(super) plan_comparison: Option<SharedString>,
+    pub(super) plan_file_busy: bool,
     pub plan_requested: bool,
+    pub(super) requested_plan_provider: Option<DbDriverKind>,
     pub show_plan: bool,
     /// Message of the last failed run, cleared when the next run starts
     pub last_error: Option<String>,
@@ -89,6 +93,8 @@ pub(super) struct ScriptResult {
     elapsed: Option<u64>,
     affected_rows: Option<Option<u64>>,
     query_plan: Option<db_wire::query_plan::QueryPlan>,
+    plan_comparison: Option<SharedString>,
+    plan_scroll: ScrollHandle,
     show_plan: bool,
     query_edit_driver: Option<std::sync::Weak<dyn DatabaseDriver>>,
 }
@@ -324,7 +330,11 @@ impl TabState {
             fetch: FetchState::default(),
             script_sql: None,
             query_plan: None,
+            plan_scroll: ScrollHandle::new(),
+            plan_comparison: None,
+            plan_file_busy: false,
             plan_requested: false,
+            requested_plan_provider: None,
             show_plan: false,
             last_error: None,
             editor_focused: false,
@@ -390,6 +400,8 @@ impl TabState {
         std::mem::swap(&mut self.execution_time_ms, &mut result.elapsed);
         std::mem::swap(&mut self.affected_rows, &mut result.affected_rows);
         std::mem::swap(&mut self.query_plan, &mut result.query_plan);
+        std::mem::swap(&mut self.plan_comparison, &mut result.plan_comparison);
+        std::mem::swap(&mut self.plan_scroll, &mut result.plan_scroll);
         std::mem::swap(&mut self.show_plan, &mut result.show_plan);
         std::mem::swap(&mut self.query_edit_driver, &mut result.query_edit_driver);
         // Keep inactive results in display order after removing the selected slot.
@@ -444,6 +456,8 @@ impl TabState {
         self.execution_time_ms = None;
         self.affected_rows = None;
         self.query_plan = None;
+        self.plan_comparison = None;
+        self.plan_scroll = ScrollHandle::new();
         self.show_plan = false;
         self.query_edit_driver = None;
         self.active_result = 0;
@@ -474,6 +488,8 @@ impl TabState {
                 elapsed: self.execution_time_ms.take(),
                 affected_rows: self.affected_rows.take(),
                 query_plan: self.query_plan.take(),
+                plan_comparison: self.plan_comparison.take(),
+                plan_scroll: std::mem::replace(&mut self.plan_scroll, ScrollHandle::new()),
                 show_plan: std::mem::take(&mut self.show_plan),
                 query_edit_driver: self.query_edit_driver.take(),
             };
@@ -518,10 +534,12 @@ impl TabState {
 
     /// Marks the start of a run; `append` keeps the current rows and adds the new ones after them
     pub fn begin_fetch(&mut self, paged: bool, append: bool) {
+        self.plan_comparison = None;
         self.affected_rows = None;
         self.execution_time_ms = None;
         self.query_plan = None;
         self.plan_requested = false;
+        self.requested_plan_provider = None;
         self.show_plan = false;
         self.fetch.paged = paged;
         self.fetch.append = append.then(AppendSource::default);
@@ -593,12 +611,13 @@ impl TabState {
                 });
                 if self.plan_requested {
                     self.plan_requested = false;
+                    let provider = self.requested_plan_provider.take();
                     let parsed = self
                         .grid
                         .pager
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("EXPLAIN returned no plan"))
-                        .and_then(|pager| super::query_plan::parse_plan(pager));
+                        .and_then(|pager| super::query_plan::parse_plan_for(provider, pager));
                     match parsed {
                         Ok(plan) => {
                             self.query_plan = Some(plan);
@@ -614,6 +633,7 @@ impl TabState {
     }
 
     fn fail_fetch(&mut self, error: String) -> QueryStatus {
+        self.requested_plan_provider = None;
         // Rows copied before the failure stay; the next scroll to the end retries from there
         self.pending_statements.clear();
         self.plan_requested = false;
@@ -1344,6 +1364,42 @@ mod query_plan_tests {
 
     fn tab() -> TabState {
         TabState::blank(42)
+    }
+
+    #[test]
+    fn plan_viewport_and_comparison_belong_to_each_result() {
+        let mut tab = tab();
+        tab.new_script_result("first plan".into());
+        let first = gpui::point(gpui::px(-10.0), gpui::px(-200.0));
+        tab.plan_scroll.set_offset(first);
+        tab.plan_comparison = Some("first comparison".into());
+        tab.new_script_result("second plan".into());
+        assert_eq!(
+            tab.plan_scroll.offset(),
+            gpui::point(gpui::px(0.0), gpui::px(0.0))
+        );
+        let second = gpui::point(gpui::px(-20.0), gpui::px(-300.0));
+        tab.plan_scroll.set_offset(second);
+        tab.plan_comparison = Some("second comparison".into());
+        tab.select_result(0);
+        assert_eq!(tab.plan_scroll.offset(), first);
+        assert_eq!(
+            tab.plan_comparison.as_ref().map(|text| text.to_string()),
+            Some("first comparison".to_string())
+        );
+        tab.select_result(1);
+        assert_eq!(tab.plan_scroll.offset(), second);
+        assert_eq!(
+            tab.plan_comparison.as_ref().map(|text| text.to_string()),
+            Some("second comparison".to_string())
+        );
+        tab.close_result(1);
+        tab.close_result(0);
+        assert!(tab.plan_comparison.is_none());
+        assert_eq!(
+            tab.plan_scroll.offset(),
+            gpui::point(gpui::px(0.0), gpui::px(0.0))
+        );
     }
 
     fn complete_plan(tab: &mut TabState, json: &[u8]) -> QueryStatus {

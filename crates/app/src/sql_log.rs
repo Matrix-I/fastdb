@@ -473,7 +473,7 @@ mod tests {
                 .any(|entry| entry.sql.contains("skipped"))
         );
         let metadata = log
-            .page(0, "pragma_table_info", &AtomicBool::new(false))
+            .page(0, "pragma_table_xinfo", &AtomicBool::new(false))
             .unwrap();
         assert!(!metadata.entries.is_empty());
         log.shutdown();

@@ -197,7 +197,7 @@ impl Workspace {
 
         if is_explain {
             let kind = self.tab_provider(tab_idx);
-            match super::query_plan::explain_statement(kind, &substituted_sql, explain_analyze) {
+            match super::query_plan::plan_statement(kind, &substituted_sql, explain_analyze) {
                 Ok(explain_stmt) => {
                     let Some(driver) = self.tab_session(tab_idx).driver.clone() else {
                         let owner = self.tabs[tab_idx].connection_id.clone();
@@ -205,7 +205,7 @@ impl Workspace {
                         cx.notify();
                         return;
                     };
-                    self.start_pinned_plan(tab_idx, driver, explain_stmt, cx);
+                    self.start_pinned_plan(tab_idx, driver, explain_stmt, explain_analyze, cx);
                 }
                 Err(error) => self.tabs[tab_idx].last_error = Some(error.to_string()),
             }

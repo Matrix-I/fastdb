@@ -1,41 +1,60 @@
 //! Script query plan actions and tree view.
+mod file_actions;
+mod files;
 use super::*;
 use anyhow::{Context as _, Result, ensure};
 use db_wire::QueryResultPager;
 use db_wire::query_plan::{PlanNode, QueryPlan};
+use gpui::prelude::FluentBuilder;
 
 const MAX_SQLITE_PLAN_NODES: u64 = 4096;
+const PLAN_HEADER_ROWS: usize = 4;
 
-pub(super) fn explain_statement(
-    kind: DbDriverKind,
-    statement: &str,
-    analyze: bool,
-) -> Result<String> {
-    if kind != DbDriverKind::Sqlite {
-        return db_wire::query_plan::explain_sql(kind, statement, analyze);
+pub(super) fn plan_statement(kind: DbDriverKind, statement: &str, analyze: bool) -> Result<String> {
+    if kind == DbDriverKind::SqlServer {
+        ensure!(!analyze, "SQL Server actual plans are unavailable");
     }
-
-    ensure!(!analyze, "SQLite does not provide actual execution plans");
+    if kind == DbDriverKind::Sqlite {
+        ensure!(!analyze, "SQLite does not provide actual execution plans");
+    }
     let statements =
         super::sql_script::split_for_provider(statement, kind).map_err(anyhow::Error::msg)?;
     let [statement] = statements.as_slice() else {
-        anyhow::bail!("Select one SQLite statement to explain");
+        anyhow::bail!("Select one {} statement to explain", kind.name());
     };
+    if !matches!(
+        kind,
+        DbDriverKind::Sqlite
+            | DbDriverKind::MySql
+            | DbDriverKind::MariaDb
+            | DbDriverKind::SqlServer
+    ) {
+        return Ok(statement.to_owned());
+    }
     // SQLite can apply PRAGMAs during preparation, even under EXPLAIN.
     ensure!(
         matches!(
-            sqlite_plan_keyword(statement).as_str(),
+            plan_keyword(statement, kind).as_str(),
             "SELECT" | "WITH" | "VALUES" | "INSERT" | "UPDATE" | "DELETE" | "REPLACE"
         ),
-        "SQLite Explain supports SELECT, VALUES, WITH and data changes"
+        "Explain supports SELECT, VALUES, WITH and data changes"
     );
-    Ok(format!("EXPLAIN QUERY PLAN\n{statement}"))
+    Ok(statement.to_owned())
 }
 
-fn sqlite_plan_keyword(mut sql: &str) -> String {
+#[cfg(test)]
+fn explain_statement(kind: DbDriverKind, statement: &str, analyze: bool) -> Result<String> {
+    db_wire::query_plan::explain_sql(kind, &plan_statement(kind, statement, analyze)?, analyze)
+}
+
+fn plan_keyword(mut sql: &str, kind: DbDriverKind) -> String {
     loop {
         sql = sql.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
         if let Some(comment) = sql.strip_prefix("--") {
+            sql = comment.split_once('\n').map_or("", |(_, rest)| rest);
+        } else if matches!(kind, DbDriverKind::MySql | DbDriverKind::MariaDb)
+            && let Some(comment) = sql.strip_prefix('#')
+        {
             sql = comment.split_once('\n').map_or("", |(_, rest)| rest);
         } else if let Some(comment) = sql.strip_prefix("/*") {
             sql = comment.split_once("*/").map_or("", |(_, rest)| rest);
@@ -49,13 +68,30 @@ fn sqlite_plan_keyword(mut sql: &str) -> String {
     }
 }
 
-pub(super) fn parse_plan(pager: &QueryResultPager) -> Result<QueryPlan> {
+pub(super) fn parse_plan_for(
+    provider: Option<DbDriverKind>,
+    pager: &QueryResultPager,
+) -> Result<QueryPlan> {
+    if provider == Some(DbDriverKind::SqlServer) {
+        return QueryPlan::parse_sql_server(pager);
+    }
     let columns = pager.columns.iter().map(|column| column.name.as_str());
     if columns.eq(["id", "parent", "notused", "detail"]) {
+        ensure!(
+            provider.is_none_or(|provider| provider == DbDriverKind::Sqlite),
+            "Native plan provider mismatch"
+        );
         return parse_sqlite_plan(pager);
     }
+    ensure!(
+        pager.total_rows() == 1 && pager.num_cols() == 1,
+        "Expected one native plan cell"
+    );
     let json = pager.get_cell(0, 0).context("EXPLAIN returned no plan")?;
-    QueryPlan::parse(&json)
+    match provider {
+        Some(provider) => QueryPlan::parse_for_provider(provider, &json),
+        None => QueryPlan::parse(&json),
+    }
 }
 
 fn parse_sqlite_plan(pager: &QueryResultPager) -> Result<QueryPlan> {
@@ -86,6 +122,7 @@ fn parse_sqlite_plan(pager: &QueryResultPager) -> Result<QueryPlan> {
             cost_fraction: 0.0,
             has_children: !descendants.is_empty(),
             collapsed: false,
+            metrics: Default::default(),
         });
         pending.extend(descendants.into_iter().rev().map(|node| (depth + 1, node)));
     }
@@ -96,10 +133,7 @@ fn parse_sqlite_plan(pager: &QueryResultPager) -> Result<QueryPlan> {
     } else {
         "SQLite query plan · statement not executed · no cost or runtime metrics"
     };
-    Ok(QueryPlan {
-        summary: summary.into(),
-        nodes,
-    })
+    Ok(QueryPlan::new(DbDriverKind::Sqlite, summary, nodes))
 }
 
 fn sqlite_plan_cell(pager: &QueryResultPager, row: u64, column: usize) -> Result<String> {
@@ -110,6 +144,20 @@ fn sqlite_plan_cell(pager: &QueryResultPager, row: u64, column: usize) -> Result
 }
 
 impl Workspace {
+    fn navigate_expensive_plan(&mut self, id: u64, backwards: bool, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id)
+            && let Some(plan) = &mut tab.query_plan
+            && let Some(selected) = plan.select_expensive(backwards)
+            && let Some(visible) = plan
+                .visible_indices()
+                .iter()
+                .position(|index| *index == selected)
+        {
+            tab.plan_scroll.scroll_to_item(visible + PLAN_HEADER_ROWS);
+        }
+        cx.notify();
+    }
+
     pub(super) fn explain_active_statement(&mut self, analyze: bool, cx: &mut Context<Self>) {
         if self.execution_busy(cx) {
             return;
@@ -152,7 +200,7 @@ impl Workspace {
             self.open_parameter_binding_modal(id, statement, true, analyze, cx);
             return;
         }
-        match explain_statement(kind, &statement, analyze) {
+        match plan_statement(kind, &statement, analyze) {
             Ok(sql) => {
                 let Some(driver) = self.tab_session(index).driver.clone() else {
                     let owner = self.tabs[index].connection_id.clone();
@@ -160,7 +208,7 @@ impl Workspace {
                     cx.notify();
                     return;
                 };
-                self.start_pinned_plan(index, driver, sql, cx);
+                self.start_pinned_plan(index, driver, sql, analyze, cx);
             }
             Err(error) => self.tabs[index].last_error = Some(error.to_string()),
         }
@@ -176,12 +224,69 @@ impl Workspace {
         let tab = &self.tabs[index];
         let tab_id = tab.id;
         let plan = tab.query_plan.as_ref().expect("plan view requires a plan");
-        let mut tree = div().id("query-plan-tree").flex().flex_col().flex_1().min_h_0()
+        let navigation = div()
+            .flex()
+            .gap_2()
+            .items_center()
+            .child(script_tools::tool("Save plan JSON…").on_click(cx.listener(
+                move |this, _, _, cx| {
+                    if let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) {
+                        this.save_plan_file(index, cx);
+                    }
+                },
+            )))
+            .child(
+                script_tools::tool("Compare saved plan…").on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        if let Some(index) = this.tabs.iter().position(|tab| tab.id == tab_id) {
+                            this.open_plan_file(index, true, cx);
+                        }
+                    },
+                )),
+            )
+            .when(plan.expensive_basis().is_some(), |row| {
+                let basis = plan.expensive_basis().unwrap_or_default();
+                row.child(
+                    script_tools::tool("Previous expensive node").on_click(cx.listener(
+                        move |this, _, _, cx| this.navigate_expensive_plan(tab_id, true, cx),
+                    )),
+                )
+                .child(
+                    script_tools::tool("Next expensive node").on_click(cx.listener(
+                        move |this, _, _, cx| this.navigate_expensive_plan(tab_id, false, cx),
+                    )),
+                )
+                .child(format!(
+                    "Ranked by {basis}; inclusive operators may overlap"
+                ))
+            })
+            .when(plan.expensive_basis().is_none(), |row| {
+                row.child("No cost or runtime metrics for expensive-node navigation")
+            });
+        let mut tree = div().id("query-plan-tree").track_scroll(&tab.plan_scroll).flex().flex_col().flex_1().min_h_0()
             .overflow_y_scroll().p_3().gap_2().text_size(px(12.0)).text_color(theme.text_primary)
+            .child(navigation)
             .child(div().text_color(theme.text_secondary).child(plan.summary.clone()))
             .child(div().text_color(theme.text_muted).child("When reported, cost bars are relative to the root and actual node times and rows are per loop."));
+        let mut comparison = div().flex().flex_col().gap_2();
+        if let Some(report) = &tab.plan_comparison {
+            comparison = comparison
+                .child(script_tools::tool("Close comparison").on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                            tab.plan_comparison = None;
+                        }
+                        cx.notify();
+                    },
+                )))
+                .child(div().font_family("monospace").child(report.clone()));
+        }
+        tree = tree.child(comparison);
         for i in plan.visible_indices() {
             let node = &plan.nodes[i];
+            let preview = plan
+                .preview(i)
+                .expect("every plan node has a display preview");
             let marker = if node.has_children {
                 if node.collapsed { "▸" } else { "▾" }
             } else {
@@ -198,7 +303,11 @@ impl Workspace {
                     .p_2()
                     .border_l_2()
                     .border_color(theme.border)
-                    .bg(theme.bg_surface)
+                    .bg(if plan.selected_node == Some(i) {
+                        theme.bg_surface_selected
+                    } else {
+                        theme.bg_surface
+                    })
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(plan) = this
@@ -212,7 +321,7 @@ impl Workspace {
                         }
                         cx.notify();
                     }))
-                    .child(format!("{marker} {}", node.title))
+                    .child(format!("{marker} {}", preview.title))
                     .child(
                         div()
                             .h(px(3.0))
@@ -223,7 +332,7 @@ impl Workspace {
                         div()
                             .text_size(px(11.0))
                             .text_color(theme.text_secondary)
-                            .child(node.details.clone()),
+                            .child(SharedString::new(preview.details.clone())),
                     ),
             );
         }
@@ -233,8 +342,52 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{explain_statement, parse_plan};
+    use super::{explain_statement, parse_plan_for};
     use db_wire::{DatabaseDriver, DbDriverKind, SqliteDriver, StreamEvent};
+
+    #[test]
+    fn postgres_plan_never_appends_unexplained_selected_statements() {
+        for analyze in [false, true] {
+            assert!(
+                explain_statement(
+                    DbDriverKind::Postgres,
+                    "SELECT 1; DELETE FROM items",
+                    analyze
+                )
+                .is_err()
+            );
+            assert!(
+                explain_statement(
+                    DbDriverKind::Postgres,
+                    "SELECT ';'; -- trailing comment",
+                    analyze
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn mysql_explain_requires_one_query_and_preserves_literals() {
+        assert!(
+            explain_statement(DbDriverKind::MySql, "# native comment\nSELECT 1", false).is_ok()
+        );
+        assert_eq!(
+            explain_statement(DbDriverKind::MySql, "SELECT ';'; -- comment", false).unwrap(),
+            "EXPLAIN FORMAT=JSON\nSELECT ';'"
+        );
+        for sql in [
+            "SELECT 1; DELETE FROM items",
+            "SET @value = 1",
+            "EXPLAIN SELECT 1",
+            "-- empty",
+        ] {
+            assert!(
+                explain_statement(DbDriverKind::MySql, sql, false).is_err(),
+                "{sql}"
+            );
+        }
+    }
 
     #[test]
     fn sqlite_explain_plans_a_temp_table_on_its_pinned_session() {
@@ -262,7 +415,7 @@ mod tests {
                     _ => None,
                 })
                 .unwrap();
-            let plan = parse_plan(&pager).unwrap();
+            let plan = parse_plan_for(None, &pager).unwrap();
             assert_eq!(plan.nodes.len(), 1);
             assert!(
                 plan.nodes[0]
@@ -292,7 +445,7 @@ mod tests {
         ] {
             pager.append_row(row.map(Some)).unwrap();
         }
-        let mut plan = parse_plan(&pager).unwrap();
+        let mut plan = parse_plan_for(None, &pager).unwrap();
         assert_eq!(
             plan.nodes
                 .iter()
@@ -306,7 +459,7 @@ mod tests {
             .append_row(["5", "99", "0", "orphan"].map(Some))
             .unwrap();
         assert!(
-            parse_plan(&pager)
+            parse_plan_for(None, &pager)
                 .unwrap_err()
                 .to_string()
                 .contains("hierarchy")

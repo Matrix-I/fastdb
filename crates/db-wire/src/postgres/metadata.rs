@@ -11,23 +11,7 @@ pub(super) async fn columns(
     let rows = async {
         crate::sql_observer::observe!(
             "PostgreSQL",
-            r#"
-        SELECT col.table_schema, col.table_name, col.column_name, col.data_type,
-               col.is_nullable, col.column_default, col.collation_name,
-               format_type(a.atttypid, a.atttypmod), col_description(c.oid, a.attnum),
-               EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid = c.oid
-                      AND k.contype = 'p' AND a.attnum = ANY(k.conkey)),
-               EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid = c.oid
-                      AND k.contype = 'f' AND a.attnum = ANY(k.conkey))
-        FROM information_schema.columns col
-        JOIN pg_namespace n ON n.nspname = col.table_schema
-        JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = col.table_name
-        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = col.column_name
-        WHERE col.table_schema NOT IN ('information_schema', 'pg_catalog')
-          AND ($1::text IS NULL OR col.table_schema = $1)
-          AND ($2::text IS NULL OR col.table_name = $2)
-        ORDER BY col.table_schema, col.table_name, col.ordinal_position
-    "#,
+            include_str!("columns.sql"),
             |query| client.query(query, &[&schema, &table],).await,
             |rows| Some(rows.len() as u64)
         )
@@ -77,11 +61,14 @@ SELECT n.nspname::text AS schema, c.relname::text AS name,
        s.last_analyze::text, s.last_autoanalyze::text
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
+LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
 JOIN pg_database d ON d.datname = current_database()
 LEFT JOIN pg_tablespace ts ON ts.oid = COALESCE(NULLIF(c.reltablespace, 0), d.dattablespace)
 LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
 WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
+  AND (t.table_name IS NOT NULL OR (c.relkind = 'm'
+       AND (pg_has_role(c.relowner, 'USAGE')
+            OR has_any_column_privilege(c.oid, 'SELECT'))))
 ORDER BY n.nspname, c.relname
 "#;
 
@@ -95,8 +82,11 @@ JOIN pg_class c ON c.oid = i.indrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_class ic ON ic.oid = i.indexrelid
 JOIN pg_am am ON am.oid = ic.relam
-JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
+LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
 WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
+  AND (t.table_name IS NOT NULL OR (c.relkind = 'm'
+       AND (pg_has_role(c.relowner, 'USAGE')
+            OR has_any_column_privilege(c.oid, 'SELECT'))))
 ORDER BY n.nspname, c.relname, ic.relname
 "#;
 
@@ -111,8 +101,11 @@ SELECT n.nspname::text, c.relname::text, con.conname::text,
 FROM pg_constraint con
 JOIN pg_class c ON c.oid = con.conrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
-JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
+LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
 WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
+  AND (t.table_name IS NOT NULL OR (c.relkind = 'm'
+       AND (pg_has_role(c.relowner, 'USAGE')
+            OR has_any_column_privilege(c.oid, 'SELECT'))))
 ORDER BY n.nspname, c.relname, con.conname
 "#;
 

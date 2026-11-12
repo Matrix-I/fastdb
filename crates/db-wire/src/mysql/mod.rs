@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 mod data_search;
 mod definition_search;
+mod metadata;
 mod read_only;
 mod script;
 
@@ -712,40 +713,45 @@ impl DatabaseDriver for MySqlDriver {
         Ok(tables)
     }
 
+    async fn load_relation_ddl(&self, schema: &str, table: &str) -> Result<Option<String>> {
+        use anyhow::Context as _;
+        anyhow::ensure!(
+            !schema.is_empty() && !table.is_empty(),
+            "A database and relation are required"
+        );
+        let qualified =
+            crate::sql::SqlDialect(crate::DbDriverKind::MySql).qualified_table(schema, table);
+        let rows: Vec<mysql_async::Row> = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            self.query_rows(format!("SHOW CREATE TABLE {qualified}"), ()),
+        )
+        .await
+        .context("MySQL relation DDL timed out")??;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        let source: String = row
+            .get_opt(1)
+            .context("MySQL did not return relation DDL")??;
+        anyhow::ensure!(source.len() <= 1024 * 1024, "Relation DDL exceeds 1 MiB");
+        Ok(Some(format!(
+            "{};\n",
+            source.trim_end().trim_end_matches(';')
+        )))
+    }
+
     async fn list_columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnMeta>> {
-        let sql = "SELECT column_name, data_type, is_nullable, column_key FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position;";
-
-        let rows: Vec<(String, String, String, String)> = self
-            .query_rows(sql.to_string(), (schema.to_string(), table.to_string()))
+        let rows: Vec<mysql_async::Row> = self
+            .query_rows(
+                metadata::column_query(true),
+                (schema.to_owned(), table.to_owned()),
+            )
             .await?;
-        let cols = rows
-            .into_iter()
-            .map(|(name, dtype, is_null, col_key)| {
-                info_schema_column(name, &dtype, &is_null, &col_key)
-            })
-            .collect();
-
-        Ok(cols)
+        rows.iter().map(metadata::column).collect()
     }
 
     async fn list_all_columns(&self) -> Result<Vec<(String, String, Vec<ColumnMeta>)>> {
-        let sql = r#"
-            SELECT table_schema, table_name, column_name, data_type, is_nullable, column_key
-            FROM information_schema.columns
-            WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
-            ORDER BY table_schema, table_name, ordinal_position;
-        "#;
-
-        let rows: Vec<(String, String, String, String, String, String)> =
-            self.query_rows(sql.to_string(), ()).await?;
-        let mut map: std::collections::BTreeMap<(String, String), Vec<ColumnMeta>> =
-            std::collections::BTreeMap::new();
-        for (schema, table, name, dtype, is_null, col_key) in rows {
-            let col = info_schema_column(name, &dtype, &is_null, &col_key);
-            map.entry((schema, table)).or_default().push(col);
-        }
-
-        Ok(map.into_iter().map(|((s, t), cols)| (s, t, cols)).collect())
+        metadata::grouped(self.query_rows(metadata::column_query(false), ()).await?)
     }
 
     async fn list_foreign_keys(&self) -> Result<Option<Vec<crate::ForeignKey>>> {

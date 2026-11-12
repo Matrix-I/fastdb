@@ -8,6 +8,135 @@ use std::sync::Arc;
 // separate so one test cannot remove catalogs while the other deparses them.
 static CATALOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn postgres_typed_and_inherited_ddl_preserves_native_column_and_constraint_ownership() {
+    use futures::FutureExt as _;
+    let Some(config) = test_config() else { return };
+    let _catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
+    db_wire::get_runtime().block_on(async {
+        let driver = PostgresDriver::new(config);
+        let schema = format!("fastdb_inherit_{}", uuid::Uuid::new_v4().simple());
+        driver.execute_schema_ddl(&format!("CREATE SCHEMA {schema}; CREATE TYPE {schema}.record_type AS (id INTEGER, label TEXT); CREATE TABLE {schema}.typed OF {schema}.record_type (id WITH OPTIONS NOT NULL, label WITH OPTIONS DEFAULT 'typed'); CREATE TABLE {schema}.parent_a (id INTEGER DEFAULT 1, label TEXT DEFAULT 'parent', CONSTRAINT positive CHECK (id > 0)); CREATE TABLE {schema}.parent_b (id INTEGER DEFAULT 1, other INTEGER DEFAULT 2); CREATE TABLE {schema}.child (id INTEGER DEFAULT 5, local_value INTEGER DEFAULT 7, CONSTRAINT positive CHECK (id > 0)) INHERITS ({schema}.parent_a, {schema}.parent_b); ALTER TABLE ONLY {schema}.child ALTER COLUMN label SET DEFAULT 'child'; ALTER TABLE ONLY {schema}.child ALTER COLUMN other DROP DEFAULT; ALTER TABLE ONLY {schema}.child ALTER COLUMN other SET NOT NULL; CREATE TABLE {schema}.pure () INHERITS ({schema}.parent_a); ALTER TABLE ONLY {schema}.pure ALTER COLUMN label DROP DEFAULT")).await.unwrap();
+        let result = std::panic::AssertUnwindSafe(async {
+            let signature = format!(r#"SELECT jsonb_agg(jsonb_build_object(
+                'name', c.relname, 'type', c.reloftype::regtype::text,
+                'columns', (SELECT jsonb_agg(jsonb_build_array(a.attname, a.attislocal, a.attinhcount, a.attnotnull, pg_get_expr(d.adbin, d.adrelid)) ORDER BY a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped),
+                'parents', (SELECT jsonb_agg(h.inhparent::regclass::text ORDER BY h.inhseqno) FROM pg_inherits h WHERE h.inhrelid=c.oid),
+                'constraints', (SELECT jsonb_agg(jsonb_build_array(k.conname, k.conislocal, k.coninhcount, k.convalidated, pg_get_constraintdef(k.oid)) ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid=c.oid)) ORDER BY c.relname)
+                FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='{schema}' AND c.relname IN ('typed','child','pure')"#);
+            let (before, _, _) = driver.execute_query(&signature).await.unwrap();
+            let before = cell_text(&before, 0, 0).unwrap();
+            let details = driver.list_table_details().await.unwrap();
+            let mut saved = Vec::new();
+            for name in ["typed", "child", "pure"] {
+                let ddl = details.iter().find(|(s,t,_)| s == &schema && t == name).unwrap().2.ddl.clone().unwrap();
+                assert!(!ddl.contains("unavailable"), "{name}: {ddl}");
+                saved.push((name, ddl));
+            }
+            assert!(saved[0].1.contains(" OF "));
+            assert!(saved[1].1.contains(" INHERITS ("));
+            driver.execute_schema_ddl(&format!("DROP TABLE {schema}.typed, {schema}.child, {schema}.pure")).await.unwrap();
+            for (_, ddl) in &saved { driver.execute_schema_ddl(ddl).await.unwrap(); }
+            let (after, _, _) = driver.execute_query(&signature).await.unwrap();
+            assert_eq!(cell_text(&after, 0, 0).as_deref(), Some(before.as_str()));
+            let restored = driver.list_table_details().await.unwrap();
+            for (name, ddl) in &saved {
+                assert_eq!(restored.iter().find(|(s,t,_)| s == &schema && t == name).unwrap().2.ddl.as_ref(), Some(ddl));
+            }
+            driver.execute_schema_ddl(&format!("INSERT INTO {schema}.typed (id) VALUES (1); INSERT INTO {schema}.child (other) VALUES (3); INSERT INTO {schema}.pure DEFAULT VALUES")).await.unwrap();
+            let (values, _, _) = driver.execute_query(&format!("SELECT id, label, local_value FROM ONLY {schema}.child")).await.unwrap();
+            assert_eq!(cell_text(&values, 0, 0).as_deref(), Some("5"));
+            assert_eq!(cell_text(&values, 0, 1).as_deref(), Some("child"));
+            assert_eq!(cell_text(&values, 0, 2).as_deref(), Some("7"));
+            let (values, _, _) = driver.execute_query(&format!("SELECT label FROM {schema}.pure")).await.unwrap();
+            assert_eq!(values.get_cell(0, 0), None);
+        }).catch_unwind().await;
+        driver.execute_schema_ddl(&format!("DROP SCHEMA {schema} CASCADE")).await.unwrap();
+        if let Err(panic) = result { std::panic::resume_unwind(panic); }
+    });
+}
+
+#[test]
+fn postgres_materialized_view_metadata_and_structural_ddl_replay() {
+    use futures::FutureExt as _;
+    let Some(config) = test_config() else { return };
+    let _catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
+    db_wire::get_runtime().block_on(async {
+        let driver = PostgresDriver::new(config);
+        let schema = format!("fastdb_mv_{}", uuid::Uuid::new_v4().simple());
+        let dialect = db_wire::sql::SqlDialect(DbDriverKind::Postgres);
+        let name = "Quoted \"snapshot";
+        let target = dialect.qualified_table(&schema, name);
+        driver.execute_schema_ddl(&format!("CREATE SCHEMA {schema}; CREATE DOMAIN {schema}.exact_amount AS NUMERIC(18,4) NOT NULL; CREATE TABLE {schema}.source (id INTEGER, amount NUMERIC(12,2), balance {schema}.exact_amount); INSERT INTO {schema}.source VALUES (1, 1.25, 2.5000); CREATE MATERIALIZED VIEW {target} WITH (fillfactor=80) AS SELECT id, amount, balance FROM {schema}.source; CREATE UNIQUE INDEX snapshot_key ON {target} (id); COMMENT ON MATERIALIZED VIEW {target} IS 'native snapshot'; COMMENT ON COLUMN {target}.amount IS 'exact amount'; ALTER MATERIALIZED VIEW {target} ALTER COLUMN amount SET STATISTICS 42")).await.unwrap();
+        let result = std::panic::AssertUnwindSafe(async {
+            assert!(driver.list_tables().await.unwrap().iter().any(|t| t.schema == schema && t.name == name && t.table_type == "MATERIALIZED VIEW"));
+            let columns = driver.list_columns(&schema, name).await.unwrap();
+            assert_eq!(columns.len(), 3);
+            let source_columns = driver.list_columns(&schema, "source").await.unwrap();
+            assert_eq!(columns[2].data_type, source_columns[2].data_type);
+            assert_eq!(columns[2].nullable, source_columns[2].nullable);
+            assert_eq!(columns[2].raw_type, source_columns[2].raw_type);
+            assert_eq!(columns[1].raw_type.as_deref(), Some("numeric(12,2)"));
+            assert_eq!(columns[1].comment.as_deref(), Some("exact amount"));
+            let all = driver.list_all_columns().await.unwrap();
+            assert_eq!(&all.iter().find(|(s,t,_)| s == &schema && t == name).unwrap().2, &columns);
+            let details = driver.list_table_details().await.unwrap();
+            let native = &details.iter().find(|(s,t,_)| s == &schema && t == name).unwrap().2;
+            assert_eq!(native.comment.as_deref(), Some("native snapshot"));
+            assert!(native.table_bytes.is_some());
+            assert!(native.indexes.iter().any(|i| i.name == "snapshot_key" && i.unique));
+            let ddl = native.ddl.as_ref().unwrap();
+            assert!(ddl.contains("CREATE MATERIALIZED VIEW"), "{ddl}");
+            assert!(ddl.contains("WITH NO DATA"), "{ddl}");
+            assert!(ddl.contains("SET STATISTICS 42"), "{ddl}");
+            driver.execute_schema_ddl(&format!("DROP MATERIALIZED VIEW {target}")).await.unwrap();
+            driver.execute_schema_ddl(ddl).await.unwrap();
+            let restored = driver.list_table_details().await.unwrap();
+            let restored = &restored.iter().find(|(s,t,_)| s == &schema && t == name).unwrap().2;
+            assert_eq!(restored.ddl.as_ref(), Some(ddl));
+            assert_eq!(restored.comment, native.comment);
+            driver.execute_schema_ddl(&format!("REFRESH MATERIALIZED VIEW {target}")).await.unwrap();
+            let (rows, count, _) = driver.execute_query(&format!("SELECT amount FROM {target}")).await.unwrap();
+            assert_eq!(count, 1);
+            assert_eq!(cell_text(&rows, 0, 0).as_deref(), Some("1.25"));
+        }).catch_unwind().await;
+        driver.execute_schema_ddl(&format!("DROP SCHEMA {schema} CASCADE")).await.unwrap();
+        if let Err(panic) = result { std::panic::resume_unwind(panic); }
+    });
+}
+
+#[test]
+fn postgres_materialized_view_metadata_respects_relation_and_column_grants() {
+    use futures::FutureExt as _;
+    let Some(config) = test_config() else { return };
+    let _catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
+    db_wire::get_runtime().block_on(async {
+        let admin = PostgresDriver::new(config.clone());
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let schema = format!("fastdb_mv_acl_{suffix}");
+        let role = format!("fastdb_mv_reader_{suffix}");
+        admin.execute_schema_ddl(&format!("CREATE ROLE {role}; CREATE SCHEMA {schema}; CREATE MATERIALIZED VIEW {schema}.allowed AS SELECT 1 AS id, 2 AS restricted; CREATE MATERIALIZED VIEW {schema}.hidden AS SELECT 3 AS secret; GRANT USAGE ON SCHEMA {schema} TO {role}; GRANT SELECT(id) ON {schema}.allowed TO {role}")).await.unwrap();
+        let result = std::panic::AssertUnwindSafe(async {
+            let reader = PostgresDriver::new(config);
+            reader.execute_query(&format!("SET ROLE {role}")).await.unwrap();
+            let (identity, _, _) = reader.execute_query("SELECT current_user").await.unwrap();
+            assert_eq!(cell_text(&identity, 0, 0).as_deref(), Some(role.as_str()));
+            let tables = reader.list_tables().await.unwrap();
+            assert!(tables.iter().any(|t| t.schema == schema && t.name == "allowed"));
+            assert!(!tables.iter().any(|t| t.schema == schema && t.name == "hidden"));
+            let columns = reader.list_columns(&schema, "allowed").await.unwrap();
+            assert_eq!(columns.len(), 1);
+            assert_eq!(columns[0].name, "id");
+            assert!(reader.list_columns(&schema, "hidden").await.unwrap().is_empty());
+            let details = reader.list_table_details().await.unwrap();
+            assert!(details.iter().any(|(s,t,_)| s == &schema && t == "allowed"));
+            assert!(!details.iter().any(|(s,t,_)| s == &schema && t == "hidden"));
+        }).catch_unwind().await;
+        admin.execute_schema_ddl(&format!("DROP SCHEMA {schema} CASCADE; DROP ROLE {role}")).await.unwrap();
+        if let Err(panic) = result { std::panic::resume_unwind(panic); }
+    });
+}
+
 fn test_config() -> Option<ConnectionConfig> {
     let Ok(port) = std::env::var("FASTDB_TEST_PG_PORT") else {
         // CI sets FASTDB_REQUIRE_DB_TESTS so a misconfigured job fails instead of skipping
@@ -414,10 +543,11 @@ fn test_postgres_ddl_round_trip() {
         let invalid = details.iter().find(|(s, t, _)| s == &schema && t == "invalid_source").unwrap().2.ddl.as_ref().unwrap();
         assert!(invalid.contains("-- WARNING: invalid index omitted: invalid_index"));
         assert!(!invalid.contains("CREATE UNIQUE INDEX"));
-        for name in ["inherited", "typed"] {
+        for (name, clause) in [("inherited", " INHERITS ("), ("typed", " OF ")] {
             let ddl = details.iter().find(|(s, t, _)| s == &schema && t == name).unwrap().2.ddl.as_ref().unwrap();
-            assert!(ddl.starts_with("-- DDL unavailable:"));
-            assert!(!ddl.contains("CREATE TABLE"));
+            assert!(!ddl.contains("unavailable"), "{ddl}");
+            assert!(ddl.contains("CREATE TABLE"), "{ddl}");
+            assert!(ddl.contains(clause), "{ddl}");
         }
         let mut saved = Vec::new();
         for name in ["quoted\"table", "parent", "leaf", "view", "empty"] {

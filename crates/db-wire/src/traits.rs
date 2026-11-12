@@ -587,6 +587,11 @@ pub trait DatabaseDriver: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Native DDL for one relation. Providers without a scoped reader return None.
+    async fn load_relation_ddl(&self, _schema: &str, _table: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Optional table details, fetched during background schema refresh.
     /// Unsupported providers return an empty list, preserving unavailable UI values.
     async fn list_table_details(&self) -> Result<Vec<(String, String, TableDetails)>> {
