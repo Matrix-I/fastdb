@@ -317,7 +317,13 @@ Index Properties includes native key order, collation, sort direction and
 uniqueness from index_xinfo and index_list. The stored CREATE INDEX SQL preserves
 expression text and partial predicates. Implicit indexes identify their origin.
 Index integrity status is unavailable because these reads do not check integrity.
-Structured constraint and statistics readers remain in progress.
+SQLite Statistics reads stored row estimates from sqlite_stat1. It prefers table
+or WITHOUT ROWID primary-key entries and otherwise uses the largest eligible
+full-index estimate. Partial indexes are excluded. Estimates may be stale, and
+absent or malformed estimates remain unavailable. The reader never runs ANALYZE.
+Structured constraints and additional statistics remain in progress. SQLite
+index details and row estimates share the optional TableDetails read. A reader
+error is shown in Properties, while index name summaries are loaded separately.
 
 A SQLite 3.46.0 fixture with 1,000 unrelated tables and 60 target columns used
 native virtual metadata scans plus a small ORDER BY sort, not user-table data
