@@ -325,10 +325,15 @@ SQLite constraint summaries use table_xinfo, index_list and foreign_key_list
 for primary keys, UNIQUE constraints and foreign keys. Summaries use a PRIMARY
 KEY label, backing index names and fk_N labels. Equivalent UNIQUE declarations
 can share a backing index. Declared names, CHECK expressions and full definitions
-are available in stored DDL. Structured constraint details and additional
-statistics remain in progress. SQLite index details and row estimates share
-the optional TableDetails read. A reader
-error is shown in Properties, while index name summaries are loaded separately.
+are available in stored DDL. The Foreign Keys grid groups ordered column
+mappings by key and shows native update/delete actions. It resolves omitted
+target columns only when the parent primary key is present and has matching
+arity. Deferrability remains in the stored DDL. If FK details fail, Properties
+can still show the basic mappings and independent index/statistics details.
+Other structured constraint details and additional statistics remain in
+progress. SQLite index details and row estimates share the optional
+TableDetails read. A reader error is shown in Properties, while index name
+summaries are loaded separately.
 
 A SQLite 3.46.0 fixture with 1,000 unrelated tables and 60 target columns used
 native virtual metadata scans plus a small ORDER BY sort, not user-table data

@@ -266,6 +266,121 @@ WHERE m.name NOT GLOB 'sqlite_*'
 LIMIT ?1
 "#;
 
+const FOREIGN_KEY_DETAILS: &str = r#"
+SELECT m.name, f.id, f.seq, f."from", f."table",
+       COALESCE(f."to", (SELECT p.name FROM pragma_table_info(f."table", 'main') p
+                         WHERE p.pk = f.seq + 1)),
+       f.on_update, f.on_delete,
+       CASE WHEN f.seq = 0 AND f."to" IS NULL THEN
+           (SELECT count(*) FROM pragma_table_info(f."table", 'main') p WHERE p.pk > 0)
+       END
+FROM main.sqlite_schema m CROSS JOIN pragma_foreign_key_list(m.name, 'main') f
+WHERE m.type = 'table' AND m.name NOT GLOB 'sqlite_*'
+LIMIT ?1
+"#;
+
+struct ForeignKeyDetails {
+    target: String,
+    on_update: String,
+    on_delete: String,
+    implicit_target_arity: Option<usize>,
+    columns: BTreeMap<i64, (String, Option<String>)>,
+}
+
+fn read_foreign_key_details(
+    conn: &Connection,
+    tables: &mut BTreeMap<String, crate::TableDetails>,
+) -> Result<()> {
+    const MAX_KEY_ROWS: usize = 100_000;
+    const MAX_NAME_BYTES: usize = 128 * 1024;
+    const MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;
+    let keys = crate::sql_observer::observe!("SQLite", FOREIGN_KEY_DETAILS, |query| (|| {
+        let mut statement = conn.prepare(query)?;
+        let mut rows = statement.query([MAX_KEY_ROWS + 1])?;
+        let mut keys = BTreeMap::<String, BTreeMap<i64, ForeignKeyDetails>>::new();
+        let mut bytes = 0;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            count += 1;
+            anyhow::ensure!(
+                count <= MAX_KEY_ROWS,
+                "SQLite foreign keys exceed {MAX_KEY_ROWS} column mappings"
+            );
+            let table = row.get_ref(0)?.as_str()?;
+            let source = row.get_ref(3)?.as_str()?;
+            let target = row.get_ref(4)?.as_str()?;
+            let target_column = match row.get_ref(5)? {
+                rusqlite::types::ValueRef::Null => None,
+                value => Some(value.as_str()?),
+            };
+            for name in [table, source, target, target_column.unwrap_or_default()] {
+                anyhow::ensure!(
+                    name.len() <= MAX_NAME_BYTES,
+                    "SQLite foreign key identifier exceeds 128 KiB"
+                );
+                bytes += name.len();
+            }
+            anyhow::ensure!(
+                bytes <= MAX_METADATA_BYTES,
+                "SQLite foreign key identifiers exceed 16 MiB"
+            );
+            let table_keys = keys.entry(table.into()).or_default();
+            let id = row.get(1)?;
+            let key = match table_keys.entry(id) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(ForeignKeyDetails {
+                        target: target.into(),
+                        on_update: row.get(6)?,
+                        on_delete: row.get(7)?,
+                        implicit_target_arity: None,
+                        columns: BTreeMap::new(),
+                    })
+                }
+            };
+            let ordinal: i64 = row.get(2)?;
+            if ordinal == 0 {
+                key.implicit_target_arity = row.get(8)?;
+            }
+            key.columns
+                .insert(ordinal, (source.into(), target_column.map(str::to_owned)));
+        }
+        Ok::<_, anyhow::Error>(keys)
+    })())?;
+    let dialect = crate::sql::SqlDialect(crate::DbDriverKind::Sqlite);
+    for (table, keys) in keys {
+        let details = tables.entry(table).or_default();
+        for (id, key) in keys {
+            let (columns, target_columns): (Vec<_>, Vec<_>) = key.columns.into_values().unzip();
+            let target_columns = target_columns
+                .into_iter()
+                .map(|column| column.map(|name| dialect.quote_ident(&name)))
+                .collect::<Option<Vec<_>>>();
+            let target_columns = target_columns
+                .filter(|_| {
+                    key.implicit_target_arity
+                        .is_none_or(|arity| arity == columns.len())
+                })
+                .map_or_else(
+                    || "primary-key columns unavailable".into(),
+                    |columns| columns.join(", "),
+                );
+            details.constraints.push(crate::ConstraintDetails {
+                name: format!("fk_{id}"),
+                kind: "FOREIGN KEY".into(),
+                columns,
+                definition: format!(
+                    "REFERENCES \"main\".{} ({target_columns}) ON UPDATE {} ON DELETE {} · deferrability in DDL",
+                    dialect.quote_ident(&key.target), key.on_update, key.on_delete
+                ),
+                // SQLite Properties does not display validation status for these rows.
+                validated: false,
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn table_details(
     conn: &Connection,
 ) -> Result<Vec<(String, String, crate::TableDetails)>> {
@@ -275,6 +390,9 @@ pub(super) fn table_details(
     } = index_details(conn)?;
     for (name, rows) in table_estimates(conn, &full_indexes)? {
         tables.entry(name).or_default().estimated_rows = Some(rows);
+    }
+    if let Err(error) = read_foreign_key_details(conn, &mut tables) {
+        tracing::warn!(%error, "SQLite foreign key details are unavailable");
     }
     Ok(tables
         .into_iter()
