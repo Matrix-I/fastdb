@@ -8,6 +8,63 @@ use std::sync::Arc;
 // separate so one test cannot remove catalogs while the other deparses them.
 static CATALOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn inherited_history_is_unavailable(setup: &str, reason: &str) {
+    use futures::FutureExt as _;
+    let Some(config) = test_config() else { return };
+    let catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
+    let outcome = db_wire::get_runtime().block_on(async {
+        let driver = PostgresDriver::new(config);
+        let schema = format!("fastdb_inherit_history_{}", uuid::Uuid::new_v4().simple());
+        driver.execute_schema_ddl(&format!("CREATE SCHEMA {schema}; {}", setup.replace("$schema", &schema))).await.unwrap();
+        let outcome = std::panic::AssertUnwindSafe(async {
+            let details = driver.list_table_details().await.unwrap();
+            let native = &details.iter().find(|(s,t,_)| s == &schema && t == "child").unwrap().2;
+            let ddl = native.ddl.as_ref().unwrap();
+            if !ddl.starts_with("-- DDL unavailable:") {
+                let before = driver.list_columns(&schema, "child").await.unwrap().into_iter().map(|c| c.name).collect::<Vec<_>>();
+                driver.execute_schema_ddl(&format!("DROP TABLE {schema}.child")).await.unwrap();
+                let replay = driver.execute_schema_ddl(ddl).await;
+                let after = driver.list_columns(&schema, "child").await.unwrap_or_default().into_iter().map(|c| c.name).collect::<Vec<_>>();
+                panic!("Unsafe inherited DDL was exported: {reason}; replay={replay:?}; columns before={before:?}, after={after:?}");
+            }
+            assert!(ddl.contains(reason), "{ddl}");
+            assert!(!ddl.contains("CREATE TABLE"), "unavailable source must not include partial SQL");
+            assert!(native.owner.is_some() && native.table_bytes.is_some(), "other Properties metadata remains available");
+            assert!(!driver.list_columns(&schema, "child").await.unwrap().is_empty());
+        }).catch_unwind().await;
+        driver.execute_schema_ddl(&format!("DROP SCHEMA {schema} CASCADE")).await.unwrap();
+        outcome
+    });
+    drop(catalog_guard);
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
+fn postgres_inherited_history_default_conflict_is_unavailable() {
+    inherited_history_is_unavailable(
+        "CREATE TABLE $schema.p (a INTEGER DEFAULT 1); CREATE TABLE $schema.q (a INTEGER DEFAULT 1); CREATE TABLE $schema.child () INHERITS ($schema.p, $schema.q); ALTER TABLE ONLY $schema.q ALTER COLUMN a SET DEFAULT 2",
+        "conflicting parent defaults",
+    );
+}
+
+#[test]
+fn postgres_inherited_history_local_column_without_default_is_unavailable() {
+    inherited_history_is_unavailable(
+        "CREATE TABLE $schema.p (a INTEGER DEFAULT 1); CREATE TABLE $schema.q (a INTEGER DEFAULT 1); CREATE TABLE $schema.child (a INTEGER) INHERITS ($schema.p, $schema.q); ALTER TABLE ONLY $schema.child ALTER COLUMN a DROP DEFAULT; ALTER TABLE ONLY $schema.q ALTER COLUMN a SET DEFAULT 2",
+        "conflicting parent defaults",
+    );
+}
+
+#[test]
+fn postgres_inherited_history_column_order_is_unavailable() {
+    inherited_history_is_unavailable(
+        "CREATE TABLE $schema.p (a INTEGER); CREATE TABLE $schema.child (local_value TEXT) INHERITS ($schema.p); ALTER TABLE $schema.p ADD COLUMN late INTEGER",
+        "inherited column order",
+    );
+}
+
 #[test]
 fn postgres_typed_and_inherited_ddl_preserves_native_column_and_constraint_ownership() {
     use futures::FutureExt as _;
@@ -16,7 +73,7 @@ fn postgres_typed_and_inherited_ddl_preserves_native_column_and_constraint_owner
     db_wire::get_runtime().block_on(async {
         let driver = PostgresDriver::new(config);
         let schema = format!("fastdb_inherit_{}", uuid::Uuid::new_v4().simple());
-        driver.execute_schema_ddl(&format!("CREATE SCHEMA {schema}; CREATE TYPE {schema}.record_type AS (id INTEGER, label TEXT); CREATE TABLE {schema}.typed OF {schema}.record_type (id WITH OPTIONS NOT NULL, label WITH OPTIONS DEFAULT 'typed'); CREATE TABLE {schema}.parent_a (id INTEGER DEFAULT 1, label TEXT DEFAULT 'parent', CONSTRAINT positive CHECK (id > 0)); CREATE TABLE {schema}.parent_b (id INTEGER DEFAULT 1, other INTEGER DEFAULT 2); CREATE TABLE {schema}.child (id INTEGER DEFAULT 5, local_value INTEGER DEFAULT 7, CONSTRAINT positive CHECK (id > 0)) INHERITS ({schema}.parent_a, {schema}.parent_b); ALTER TABLE ONLY {schema}.child ALTER COLUMN label SET DEFAULT 'child'; ALTER TABLE ONLY {schema}.child ALTER COLUMN other DROP DEFAULT; ALTER TABLE ONLY {schema}.child ALTER COLUMN other SET NOT NULL; CREATE TABLE {schema}.pure () INHERITS ({schema}.parent_a); ALTER TABLE ONLY {schema}.pure ALTER COLUMN label DROP DEFAULT")).await.unwrap();
+        driver.execute_schema_ddl(&format!("CREATE SCHEMA {schema}; CREATE TYPE {schema}.record_type AS (id INTEGER, label TEXT); CREATE TABLE {schema}.typed OF {schema}.record_type (id WITH OPTIONS NOT NULL, label WITH OPTIONS DEFAULT 'typed'); CREATE TABLE {schema}.parent_a (id INTEGER DEFAULT 1, label TEXT DEFAULT 'parent', CONSTRAINT positive CHECK (id > 0)); CREATE TABLE {schema}.parent_b (id INTEGER DEFAULT 1, other INTEGER DEFAULT 2); CREATE TABLE {schema}.child (id INTEGER DEFAULT 5, other INTEGER, local_value INTEGER DEFAULT 7, CONSTRAINT positive CHECK (id > 0)) INHERITS ({schema}.parent_a, {schema}.parent_b); ALTER TABLE ONLY {schema}.child ALTER COLUMN label SET DEFAULT 'child'; ALTER TABLE ONLY {schema}.child ALTER COLUMN other DROP DEFAULT; ALTER TABLE ONLY {schema}.child ALTER COLUMN other SET NOT NULL; CREATE TABLE {schema}.pure () INHERITS ({schema}.parent_a); ALTER TABLE ONLY {schema}.pure ALTER COLUMN label DROP DEFAULT; ALTER TABLE ONLY {schema}.parent_b ALTER COLUMN id SET DEFAULT 2")).await.unwrap();
         let result = std::panic::AssertUnwindSafe(async {
             let signature = format!(r#"SELECT jsonb_agg(jsonb_build_object(
                 'name', c.relname, 'type', c.reloftype::regtype::text,
