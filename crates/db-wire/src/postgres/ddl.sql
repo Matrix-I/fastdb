@@ -1,16 +1,57 @@
 -- One catalog snapshot; server-side quoting also handles newlines and quotes in names.
-WITH relations AS (
+WITH visible_relations AS (
     SELECT c.*, n.nspname,
            format('%I.%I', n.nspname, c.relname) AS target,
-           CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END AS object_type,
-           c.relkind NOT IN ('r', 'p', 'v', 'm')
-               OR c.relpersistence = 't' AS unsupported
+           CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END AS object_type
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
       AND (t.table_name IS NOT NULL OR (c.relkind = 'm'
            AND (pg_has_role(c.relowner, 'USAGE')
                 OR has_any_column_privilege(c.oid, 'SELECT'))))
+), parent_columns AS (
+    SELECT h.inhrelid, a.attname, h.inhseqno, a.attnum,
+           pg_get_expr(ad.adbin, ad.adrelid, false) AS default_definition
+    FROM pg_inherits h JOIN visible_relations r ON r.oid = h.inhrelid
+    JOIN pg_attribute a ON a.attrelid = h.inhparent
+    LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+    WHERE NOT r.relispartition AND a.attnum > 0 AND NOT a.attisdropped
+), reconstruction AS (
+    SELECT r.*, CASE
+        WHEN r.relkind NOT IN ('r', 'p', 'v', 'm') OR r.relpersistence = 't'
+            THEN 'temporary or foreign tables are not supported.'
+        WHEN EXISTS (
+            SELECT p.attname FROM parent_columns p
+            JOIN pg_attribute a ON a.attrelid = r.oid AND a.attname = p.attname
+            -- Only a local column with an inline default can resolve the
+            -- conflict before PostgreSQL merges the parent definitions.
+            WHERE p.inhrelid = r.oid AND (NOT a.attislocal OR NOT a.atthasdef)
+            GROUP BY p.attname HAVING count(DISTINCT p.default_definition) > 1
+        ) THEN 'conflicting parent defaults cannot be replayed faithfully.'
+        WHEN EXISTS (SELECT FROM parent_columns p WHERE p.inhrelid = r.oid)
+         AND (SELECT array_agg(a.attname::text ORDER BY a.attnum) FROM pg_attribute a
+              WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped)
+             IS DISTINCT FROM (
+                -- CREATE INHERITS merges parent columns in parent order, then
+                -- appends local-only columns. Later parent ADD COLUMN may have
+                -- produced a different child order that this cannot reproduce.
+                SELECT array_agg(d.attname::text ORDER BY d.inhseqno NULLS LAST, d.parent_attnum NULLS LAST, d.local_attnum)
+                FROM (
+                    SELECT p.attname, p.inhseqno, p.attnum AS parent_attnum, NULL::smallint AS local_attnum
+                    FROM (SELECT DISTINCT ON (p.attname) p.attname, p.inhseqno, p.attnum
+                          FROM parent_columns p WHERE p.inhrelid = r.oid
+                          ORDER BY p.attname, p.inhseqno, p.attnum) p
+                    UNION ALL
+                    SELECT a.attname, NULL::integer, NULL::smallint, a.attnum
+                    FROM pg_attribute a
+                    WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped
+                      AND NOT EXISTS (SELECT FROM parent_columns p WHERE p.inhrelid = r.oid AND p.attname = a.attname)
+                ) d
+             ) THEN 'inherited column order cannot be replayed with the current parents.'
+        END AS unsupported_reason
+    FROM visible_relations r
+), relations AS (
+    SELECT r.*, r.unsupported_reason IS NOT NULL AS unsupported FROM reconstruction r
 ), sequences AS (
     SELECT d.refobjid AS table_oid, a.attnum, d.deptype, sn.nspname, s.relname,
            format('%I.%I', sn.nspname, s.relname) AS target,
@@ -70,7 +111,7 @@ WITH relations AS (
         'SET standard_conforming_strings = on;' AS sql
     FROM relations r WHERE NOT r.unsupported
     UNION ALL
-    SELECT r.oid, 0, '', '-- DDL unavailable: temporary or foreign tables are not supported.'
+    SELECT r.oid, 0, '', '-- DDL unavailable: ' || r.unsupported_reason
     FROM relations r WHERE r.unsupported
     UNION ALL
     SELECT s.table_oid, 10, s.target, 'CREATE ' || CASE WHEN s.relpersistence = 'u' THEN 'UNLOGGED ' ELSE '' END ||
@@ -113,12 +154,15 @@ WITH relations AS (
     -- defaults/nullability that may differ from the required existing parents.
     SELECT r.oid, 27, a.attname, 'ALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
         CASE WHEN ad.oid IS NULL THEN ' DROP DEFAULT' ELSE ' SET DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid, false) END || ';' ||
-        E'\nALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
-        CASE WHEN a.attnotnull THEN ' SET NOT NULL;' ELSE ' DROP NOT NULL;' END
+        CASE WHEN NOT a.attislocal THEN
+            E'\nALTER TABLE ONLY ' || r.target || ' ALTER COLUMN ' || quote_ident(a.attname) ||
+            CASE WHEN a.attnotnull THEN ' SET NOT NULL;' ELSE ' DROP NOT NULL;' END
+        ELSE '' END
     FROM relations r JOIN pg_attribute a ON a.attrelid = r.oid
     LEFT JOIN pg_attrdef ad ON ad.adrelid = r.oid AND ad.adnum = a.attnum
     WHERE NOT r.unsupported AND NOT r.relispartition AND a.attnum > 0 AND NOT a.attisdropped
-      AND NOT a.attislocal AND a.attinhcount > 0 AND a.attgenerated = '' AND a.attidentity = ''
+      AND a.attinhcount > 0 AND a.attgenerated = '' AND a.attidentity = ''
+      AND (NOT a.attislocal OR ad.oid IS NULL)
     UNION ALL
     SELECT s.table_oid, 30, s.target, 'ALTER SEQUENCE ' || s.target || ' OWNED BY ' || r.target || '.' || quote_ident(a.attname) || ';'
     FROM sequences s JOIN relations r ON r.oid = s.table_oid
