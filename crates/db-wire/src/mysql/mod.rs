@@ -227,6 +227,26 @@ impl MySqlDriver {
             .await
     }
 
+    async fn constraint_detail_rows(&self) -> Result<Vec<mysql_async::Row>> {
+        let params = (metadata::MAX_CONSTRAINT_ROWS + 1,);
+        match self
+            .query_rows(metadata::constraint_query(true), params)
+            .await
+        {
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<mysql_async::ServerError>()
+                        .is_some_and(|error| matches!(error.code, 1054 | 1109))
+                }) =>
+            {
+                self.query_rows(metadata::constraint_query(false), params)
+                    .await
+            }
+            result => result,
+        }
+    }
+
     /// Streams a query's rows into a new pager; runs on the shared runtime via the caller
     async fn stream_query(
         pool: Arc<ConnectionPool>,
@@ -838,7 +858,10 @@ impl DatabaseDriver for MySqlDriver {
             ),
         );
         let index_details = tokio::time::timeout(INDEX_DETAILS_TIMEOUT, self.index_detail_rows());
-        let (statistics, indexes) = tokio::join!(statistics, index_details);
+        let constraint_details =
+            tokio::time::timeout(INDEX_DETAILS_TIMEOUT, self.constraint_detail_rows());
+        let (statistics, indexes, constraints) =
+            tokio::join!(statistics, index_details, constraint_details);
         let mut tables =
             metadata::table_statistics(statistics.context("MySQL table statistics timed out")??)?;
         match indexes {
@@ -849,6 +872,16 @@ impl DatabaseDriver for MySqlDriver {
                 }
             }
             Err(_) => tracing::warn!("MySQL index details timed out"),
+        }
+        match constraints {
+            Ok(result) => {
+                if let Err(error) =
+                    result.and_then(|rows| metadata::add_constraints(&mut tables, rows))
+                {
+                    tracing::warn!(%error, "MySQL constraint details are unavailable");
+                }
+            }
+            Err(_) => tracing::warn!("MySQL constraint details timed out"),
         }
         Ok(tables)
     }

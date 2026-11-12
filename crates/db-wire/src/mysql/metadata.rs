@@ -195,9 +195,224 @@ pub(super) fn add_indexes(
     Ok(())
 }
 
+pub(super) const MAX_CONSTRAINT_ROWS: usize = 20_000;
+pub(super) const CONSTRAINT_DETAILS: &str = r#"
+SELECT t.table_schema, t.table_name, t.constraint_name, t.constraint_type,
+       k.ordinal_position, k.column_name, k.referenced_table_schema,
+       k.referenced_table_name, k.referenced_column_name,
+       r.update_rule, r.delete_rule,
+       CASE WHEN OCTET_LENGTH(c.check_clause) <= 2048 THEN c.check_clause END,
+       t.enforced
+FROM information_schema.table_constraints t
+LEFT JOIN information_schema.key_column_usage k
+  ON k.constraint_schema = t.constraint_schema AND k.table_name = t.table_name
+ AND k.constraint_name = t.constraint_name
+ AND ((t.constraint_type = 'FOREIGN KEY' AND k.referenced_table_name IS NOT NULL)
+   OR (t.constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND k.referenced_table_name IS NULL))
+LEFT JOIN information_schema.referential_constraints r
+  ON t.constraint_type = 'FOREIGN KEY' AND r.constraint_schema = t.constraint_schema
+ AND r.table_name = t.table_name AND r.constraint_name = t.constraint_name
+LEFT JOIN (
+    SELECT constraint_schema, constraint_name,
+           CASE WHEN OCTET_LENGTH(check_clause) <= 2048 THEN check_clause END AS check_clause
+    FROM information_schema.check_constraints
+    WHERE constraint_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+    LIMIT 20001
+) c
+  ON t.constraint_type = 'CHECK' AND c.constraint_schema = t.constraint_schema
+ AND c.constraint_name = t.constraint_name
+WHERE t.table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+LIMIT ?
+"#;
+
+pub(super) fn constraint_query(modern: bool) -> String {
+    if modern {
+        return CONSTRAINT_DETAILS.to_owned();
+    }
+    let check_join = CONSTRAINT_DETAILS
+        .find("LEFT JOIN (")
+        .expect("CHECK catalog join");
+    let filters = CONSTRAINT_DETAILS
+        .find("WHERE t.table_schema")
+        .expect("constraint catalog filter");
+    format!("{}{}", &CONSTRAINT_DETAILS[..check_join], &CONSTRAINT_DETAILS[filters..])
+        .replace("CASE WHEN OCTET_LENGTH(c.check_clause) <= 2048 THEN c.check_clause END,\n       t.enforced", "NULL, NULL")
+}
+
+struct ConstraintEntry {
+    detail: crate::ConstraintDetails,
+    columns: std::collections::BTreeMap<u64, (String, Option<String>)>,
+    reference: Option<String>,
+    actions: Option<String>,
+}
+
+impl ConstraintEntry {
+    fn from_row(row: &mysql_async::Row) -> Result<Self> {
+        let kind: String = field(row, 3)?;
+        let mut definition = "See native relation DDL for full definition".into();
+        if kind == "CHECK" {
+            let expression = field::<Option<String>>(row, 11)?;
+            let enforced: Option<String> = field(row, 12)?;
+            let enforcement = match enforced.as_deref() {
+                Some("YES") => "ENFORCED",
+                Some("NO") => "NOT ENFORCED",
+                _ => "enforcement unavailable",
+            };
+            definition = format!(
+                "CHECK ({}) {enforcement}",
+                expression.as_deref().unwrap_or("expression unavailable")
+            );
+        }
+        let (reference, actions) = if kind == "FOREIGN KEY" {
+            let schema: Option<String> = field(row, 6)?;
+            let table: Option<String> = field(row, 7)?;
+            let update: Option<String> = field(row, 9)?;
+            let delete: Option<String> = field(row, 10)?;
+            let reference = schema.zip(table).map(|(schema, table)| {
+                crate::sql::SqlDialect(crate::DbDriverKind::MySql).qualified_table(&schema, &table)
+            });
+            let actions = update
+                .zip(delete)
+                .map(|(update, delete)| format!("ON UPDATE {update} ON DELETE {delete}"));
+            (reference, actions)
+        } else {
+            (None, None)
+        };
+        Ok(Self {
+            detail: crate::ConstraintDetails {
+                name: field(row, 2)?,
+                kind,
+                columns: Vec::new(),
+                definition,
+                validated: false,
+            },
+            columns: Default::default(),
+            reference,
+            actions,
+        })
+    }
+
+    fn finish(mut self) -> crate::ConstraintDetails {
+        let dialect = crate::sql::SqlDialect(crate::DbDriverKind::MySql);
+        let (source, target): (Vec<_>, Vec<_>) = self.columns.into_values().unzip();
+        self.detail.columns = source;
+        if self.detail.kind == "FOREIGN KEY" {
+            self.detail.definition = match (
+                self.reference,
+                self.actions,
+                target.into_iter().collect::<Option<Vec<_>>>(),
+            ) {
+                (Some(reference), Some(actions), Some(target)) if !target.is_empty() => {
+                    let target = target
+                        .iter()
+                        .map(|column| dialect.quote_ident(column))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("REFERENCES {reference} ({target}) {actions}")
+                }
+                _ => "Reference details unavailable".into(),
+            };
+        }
+        self.detail
+    }
+}
+
+pub(super) fn add_constraints(
+    tables: &mut [(String, String, crate::TableDetails)],
+    rows: Vec<mysql_async::Row>,
+) -> Result<()> {
+    use std::collections::{BTreeMap, btree_map::Entry};
+    anyhow::ensure!(
+        rows.len() <= MAX_CONSTRAINT_ROWS,
+        "MySQL constraint details exceed {MAX_CONSTRAINT_ROWS} rows"
+    );
+    let mut constraints = BTreeMap::<(usize, String, String), ConstraintEntry>::new();
+    for row in rows {
+        let schema: String = field(&row, 0)?;
+        let table: String = field(&row, 1)?;
+        let Ok(table_index) =
+            tables.binary_search_by(|item| (&item.0, &item.1).cmp(&(&schema, &table)))
+        else {
+            continue;
+        };
+        let name: String = field(&row, 2)?;
+        let entry = match constraints.entry((table_index, field(&row, 3)?, name)) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(ConstraintEntry::from_row(&row)?),
+        };
+        if let Some(column) = field::<Option<String>>(&row, 5)? {
+            entry
+                .columns
+                .insert(field(&row, 4)?, (column, field(&row, 8)?));
+        }
+    }
+    for ((table, _, _), constraint) in constraints {
+        tables[table].2.constraints.push(constraint.finish());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_constraint_projection_reads_real_ordered_keys() {
+        let Ok(port) = std::env::var("FASTDB_TEST_MYSQL_PORT") else {
+            assert!(
+                std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none(),
+                "MySQL fixture port required"
+            );
+            return;
+        };
+        crate::get_runtime().block_on(async {
+            let driver = MySqlDriver::new(ConnectionConfig {
+                driver: crate::DbDriverKind::MySql,
+                host: std::env::var("FASTDB_TEST_MYSQL_HOST")
+                    .unwrap_or_else(|_| "127.0.0.1".into()),
+                port: port.parse().unwrap(),
+                user: std::env::var("FASTDB_TEST_MYSQL_USER").unwrap_or_else(|_| "root".into()),
+                password: std::env::var("FASTDB_TEST_MYSQL_PASSWORD").ok(),
+                database: std::env::var("FASTDB_TEST_MYSQL_DATABASE")
+                    .unwrap_or_else(|_| "mysql".into()),
+                use_unix_socket: false,
+                ..Default::default()
+            });
+            let schema = format!(
+                "fastdb_legacy_constraints_{}",
+                uuid::Uuid::new_v4().simple()
+            );
+            driver
+                .execute_query(&format!("CREATE DATABASE {schema}"))
+                .await
+                .unwrap();
+            let result: Result<_> = async {
+                driver
+                    .execute_query(&format!(
+                        "CREATE TABLE {schema}.items (a INT, b INT, PRIMARY KEY(b,a))"
+                    ))
+                    .await?;
+                let rows = driver
+                    .query_rows(constraint_query(false), (MAX_CONSTRAINT_ROWS + 1,))
+                    .await?;
+                let mut tables = vec![(
+                    schema.clone(),
+                    "items".into(),
+                    crate::TableDetails::default(),
+                )];
+                add_constraints(&mut tables, rows)?;
+                Ok(tables)
+            }
+            .await;
+            driver
+                .execute_query(&format!("DROP DATABASE {schema}"))
+                .await
+                .unwrap();
+            let tables = result.unwrap();
+            assert_eq!(tables[0].2.constraints.len(), 1);
+            assert_eq!(tables[0].2.constraints[0].columns, ["b", "a"]);
+        });
+    }
 
     #[test]
     fn index_catalog_queries_keep_visibility_without_functional_keys() {

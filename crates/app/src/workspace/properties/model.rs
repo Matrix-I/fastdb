@@ -177,15 +177,16 @@ impl TableProperties {
     }
 
     pub(super) fn constraint_details(&self) -> Option<&db_wire::TableDetails> {
-        self.details
-            .as_ref()
-            .filter(|_| self.kind == DbDriverKind::Postgres)
+        self.details.as_ref().filter(|details| {
+            self.kind == DbDriverKind::Postgres
+                || (self.kind == DbDriverKind::MySql && !details.constraints.is_empty())
+        })
     }
 
     pub(super) fn foreign_key_details(&self) -> Option<&db_wire::TableDetails> {
         self.details.as_ref().filter(|details| {
             self.kind == DbDriverKind::Postgres
-                || (self.kind == DbDriverKind::Sqlite
+                || (matches!(self.kind, DbDriverKind::Sqlite | DbDriverKind::MySql)
                     && details.constraints.iter().any(|c| c.kind == "FOREIGN KEY"))
         })
     }
@@ -270,6 +271,61 @@ impl TableProperties {
 mod tests {
     use super::TableProperties;
     use db_wire::{ColumnMeta, DataType, DbDriverKind};
+
+    #[test]
+    fn mysql_native_constraints_reach_both_properties_sections_with_summary_fallback() {
+        use db_wire::metadata::MetadataFeature as F;
+        let model = TableProperties::new(
+            DbDriverKind::MySql,
+            "db".into(),
+            "child".into(),
+            vec![],
+            vec![("named_fk".into(), "FOREIGN KEY".into())],
+            vec![],
+        );
+        assert!(model.constraint_details().is_none());
+        assert!(model.foreign_key_details().is_none());
+        let model = model
+            .with_metadata(
+                Some(db_wire::TableDetails {
+                    constraints: vec![db_wire::ConstraintDetails {
+                        name: "named_fk".into(),
+                        kind: "FOREIGN KEY".into(),
+                        columns: vec!["b".into(), "a".into()],
+                        definition: "ON DELETE CASCADE".into(),
+                        validated: false,
+                    }],
+                    ..Default::default()
+                }),
+                None,
+            )
+            .with_states(
+                std::sync::Arc::new(std::collections::HashMap::from([
+                    (
+                        F::Constraints,
+                        super::MetadataState::Failed("summary unavailable".into()),
+                    ),
+                    (
+                        F::ForeignKeys,
+                        super::MetadataState::Failed("summary unavailable".into()),
+                    ),
+                ])),
+                vec![],
+            );
+        assert_eq!(
+            model.constraint_details().unwrap().constraints[0].columns,
+            ["b", "a"]
+        );
+        assert!(model.foreign_key_details().is_some());
+        assert_eq!(model.section_notice(F::Constraints), None);
+        assert_eq!(model.section_notice(F::ForeignKeys), None);
+        let fallback = model.with_metadata(None, Some("Details unavailable".into()));
+        assert!(fallback.constraint_details().is_none());
+        assert_eq!(
+            fallback.constraints,
+            [("named_fk".into(), "FOREIGN KEY".into())]
+        );
+    }
 
     #[test]
     fn mysql_statistics_keep_index_summaries_and_use_catalog_labels() {

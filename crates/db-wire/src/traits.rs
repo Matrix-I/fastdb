@@ -344,7 +344,7 @@ pub struct ConstraintDetails {
     pub kind: String,
     pub columns: Vec<String>,
     pub definition: String,
-    /// Validation status from PostgreSQL. SQLite constraint summaries do not report validation.
+    /// Validation status from PostgreSQL. SQLite and MySQL constraint summaries do not report validation.
     pub validated: bool,
 }
 
