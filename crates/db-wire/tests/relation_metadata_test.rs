@@ -555,3 +555,60 @@ async fn sqlite_rejected_foreign_key_details_preserve_index_details_and_estimate
             .all(|constraint| constraint.kind != "FOREIGN KEY")
     );
 }
+
+#[tokio::test]
+async fn sqlite_relation_ddl_replays_ordinary_without_rowid_and_view_definitions() {
+    let source = SqliteDriver::new_memory();
+    let destination = SqliteDriver::new_memory();
+    source.execute_schema_ddl(r#"
+        CREATE TABLE plain (id INTEGER PRIMARY KEY, amount INTEGER DEFAULT 7 CHECK (amount > 0), label TEXT DEFAULT 'NULL');
+        CREATE TABLE "compound key" (a TEXT, b INTEGER, label TEXT DEFAULT '', PRIMARY KEY(b,a)) WITHOUT ROWID;
+        CREATE VIEW "named view" AS SELECT p.amount, p.label AS literal_null, c.label AS empty_text FROM plain p CROSS JOIN "compound key" c;
+    "#).await.unwrap();
+    for table in ["plain", "compound key", "named view"] {
+        let source_ddl = source
+            .load_relation_ddl("main", table)
+            .await
+            .unwrap()
+            .unwrap();
+        destination.execute_schema_ddl(&source_ddl).await.unwrap();
+        assert_eq!(
+            destination.load_relation_ddl("main", table).await.unwrap(),
+            Some(source_ddl)
+        );
+    }
+    destination
+        .execute_query("INSERT INTO plain (id) VALUES (1)")
+        .await
+        .unwrap();
+    destination
+        .execute_query(r#"INSERT INTO "compound key" (a,b) VALUES ('key',1)"#)
+        .await
+        .unwrap();
+    assert!(
+        destination
+            .execute_query("INSERT INTO plain (id,amount) VALUES (2,0)")
+            .await
+            .is_err()
+    );
+    assert!(
+        destination
+            .execute_query(r#"INSERT INTO "compound key" (a,b) VALUES ('key',1)"#)
+            .await
+            .is_err()
+    );
+    assert!(
+        destination
+            .execute_query(r#"SELECT rowid FROM "compound key""#)
+            .await
+            .is_err()
+    );
+    let (rows, count, _) = destination
+        .execute_query(r#"SELECT amount, literal_null, empty_text FROM "named view""#)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(rows.get_cell(0, 0).as_deref(), Some(b"7".as_slice()));
+    assert_eq!(rows.get_cell(0, 1).as_deref(), Some(b"NULL".as_slice()));
+    assert_eq!(rows.get_cell(0, 2).as_deref(), Some(b"".as_slice()));
+}
