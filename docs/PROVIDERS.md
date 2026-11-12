@@ -63,7 +63,11 @@ security labels and extension membership are outside its scope. Typed tables use
 OF with the existing composite type dependency. Inherited tables retain parent
 order, local checks and child defaults when these can be reconstructed. The DDL
 pane explains when conflicting parent defaults or changed column order prevent
-faithful replay. Temporary and foreign tables still report unavailable source.
+faithful replay. Foreign tables retain the existing server name, table and column
+options, and partition attachment. The server and wrapper must already exist.
+Server definitions and user mappings are outside the export. Custom wrappers
+can place sensitive values in table or column options, which the DDL preserves.
+Temporary tables still report unavailable source.
 MySQL/SQLite use their native scoped DDL readers; remaining providers retain a
 partial metadata preview. Catalog DDL is tested on
 PostgreSQL 16; catalog fields require PostgreSQL 14 or later.
