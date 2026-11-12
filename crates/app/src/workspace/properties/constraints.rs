@@ -3,6 +3,7 @@ use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
     pub(in crate::workspace) fn render_constraints(&self, theme: &Theme) -> AnyElement {
+        let sqlite = self.kind == db_wire::DbDriverKind::Sqlite;
         let rows = if let Some(details) = self.constraint_details() {
             details
                 .constraints
@@ -29,7 +30,7 @@ impl TableProperties {
                     vec![
                         name.clone(),
                         kind.clone(),
-                        if kind == "PRIMARY KEY" {
+                        if kind == "PRIMARY KEY" && !sqlite {
                             self.columns
                                 .iter()
                                 .filter(|c| c.is_primary_key)
@@ -40,7 +41,7 @@ impl TableProperties {
                             "Unavailable".into()
                         },
                         "Unavailable".into(),
-                        "Unavailable".into(),
+                        if sqlite { "See DDL" } else { "Unavailable" }.into(),
                     ]
                 })
                 .collect()
@@ -57,6 +58,8 @@ impl TableProperties {
             rows,
             if self.constraint_details().is_some() {
                 "No constraints."
+            } else if sqlite {
+                "No primary, unique, or foreign keys reported. See DDL for CHECK constraints."
             } else {
                 "Constraints loaded: no objects found. Native definitions are unavailable."
             },

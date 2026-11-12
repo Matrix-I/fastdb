@@ -321,8 +321,13 @@ SQLite Statistics reads stored row estimates from sqlite_stat1. It prefers table
 or WITHOUT ROWID primary-key entries and otherwise uses the largest eligible
 full-index estimate. Partial indexes are excluded. Estimates may be stale, and
 absent or malformed estimates remain unavailable. The reader never runs ANALYZE.
-Structured constraints and additional statistics remain in progress. SQLite
-index details and row estimates share the optional TableDetails read. A reader
+SQLite constraint summaries use table_xinfo, index_list and foreign_key_list
+for primary keys, UNIQUE constraints and foreign keys. Summaries use a PRIMARY
+KEY label, backing index names and fk_N labels. Equivalent UNIQUE declarations
+can share a backing index. Declared names, CHECK expressions and full definitions
+are available in stored DDL. Structured constraint details and additional
+statistics remain in progress. SQLite index details and row estimates share
+the optional TableDetails read. A reader
 error is shown in Properties, while index name summaries are loaded separately.
 
 A SQLite 3.46.0 fixture with 1,000 unrelated tables and 60 target columns used

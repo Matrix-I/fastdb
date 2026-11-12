@@ -890,7 +890,7 @@ impl Workspace {
 mod metadata_tests {
     use super::fetch_schema_metadata;
     use crate::workspace::metadata_state::MetadataState;
-    use db_wire::metadata::{MetadataFeature as F, MetadataSupport};
+    use db_wire::metadata::MetadataFeature as F;
     use db_wire::{DatabaseDriver, SqliteDriver};
     #[test]
     fn native_materialized_view_reaches_the_read_only_properties_metadata_pipeline() {
@@ -931,7 +931,8 @@ mod metadata_tests {
             assert!(metadata.tables.iter().any(|t|t.name=="real_table"));
             assert!(matches!(metadata.states.get(&F::Columns),Some(MetadataState::Failed(error)) if error.contains("missing_relation")));
             assert!(metadata.columns.is_empty());
-            assert_eq!(metadata.states.get(&F::Constraints),Some(&MetadataState::Unavailable(MetadataSupport::NotImplemented)));
+            assert_eq!(metadata.states.get(&F::Constraints),Some(&MetadataState::Ready));
+            assert_eq!(metadata.constraints, vec![("main".into(), "real_table".into(), "PRIMARY KEY".into(), "PRIMARY KEY".into())]);
             assert_eq!(metadata.states.get(&F::Indexes),Some(&MetadataState::Ready));
             assert!(metadata.indexes.is_empty());
             assert_eq!(metadata.states.get(&F::ForeignKeys),Some(&MetadataState::Ready));

@@ -50,7 +50,7 @@ fn declarations_match_implemented_provider_readers() {
     assert_eq!(sqlite.support(F::Columns), S::Available);
     assert_eq!(sqlite.support(F::Indexes), S::Available);
     assert_eq!(sqlite.support(F::ForeignKeys), S::Available);
-    assert_eq!(sqlite.support(F::Constraints), S::NotImplemented);
+    assert_eq!(sqlite.support(F::Constraints), S::Available);
     assert_eq!(
         sqlite.support(F::Catalog(CatalogSection::Permissions)),
         S::Unsupported
@@ -75,6 +75,7 @@ fn declarations_match_implemented_provider_readers() {
 async fn available_empty_is_distinct_from_unimplemented() {
     let sqlite = SqliteDriver::new_memory();
     assert_eq!(sqlite.list_foreign_keys().await.unwrap(), Some(vec![]));
+    assert!(sqlite.list_all_constraints().await.unwrap().is_empty());
     assert!(sqlite.list_all_indexes().await.unwrap().is_empty());
     assert_eq!(
         sqlite.metadata_capabilities().support(F::ForeignKeys),
@@ -82,7 +83,7 @@ async fn available_empty_is_distinct_from_unimplemented() {
     );
     assert_eq!(
         sqlite.metadata_capabilities().support(F::Constraints),
-        S::NotImplemented
+        S::Available
     );
     assert!(
         sqlite
