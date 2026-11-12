@@ -313,7 +313,11 @@ ROWID primary-key indexes; a rowid alias has no separate index object. Reads run
 on a blocking worker. A refresh rejects more than 100,000 index objects, a table
 or index name over 128 KiB, or over 16 MiB of aggregate table/index-name bytes,
 with a metadata error instead of silently returning a partial index list.
-Structured index/constraint details beyond the names remain in progress.
+Index Properties includes native key order, collation, sort direction and
+uniqueness from index_xinfo and index_list. The stored CREATE INDEX SQL preserves
+expression text and partial predicates. Implicit indexes identify their origin.
+Index integrity status is unavailable because these reads do not check integrity.
+Structured constraint and statistics readers remain in progress.
 
 A SQLite 3.46.0 fixture with 1,000 unrelated tables and 60 target columns used
 native virtual metadata scans plus a small ORDER BY sort, not user-table data
