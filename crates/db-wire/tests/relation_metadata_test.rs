@@ -2,6 +2,46 @@
 use db_wire::{DatabaseDriver, SqliteDriver};
 
 #[tokio::test]
+async fn sqlite_native_indexes_include_implicit_unique_and_without_rowid_primary_keys() {
+    let driver = SqliteDriver::new_memory();
+    driver
+        .execute_schema_ddl(
+            "CREATE TABLE rowid_only (id INTEGER PRIMARY KEY);
+        CREATE TABLE native_rows (id INTEGER PRIMARY KEY, label TEXT UNIQUE);
+        CREATE INDEX native_partial ON native_rows(label) WHERE label IS NOT NULL;
+        CREATE TABLE compound (a TEXT, b INTEGER, PRIMARY KEY (a,b)) WITHOUT ROWID;
+        CREATE VIEW native_view AS SELECT label FROM native_rows",
+        )
+        .await
+        .unwrap();
+    let indexes = driver.list_all_indexes().await.unwrap();
+    assert_eq!(
+        indexes,
+        vec![
+            (
+                "main".into(),
+                "compound".into(),
+                "sqlite_autoindex_compound_1".into()
+            ),
+            ("main".into(), "native_rows".into(), "native_partial".into()),
+            (
+                "main".into(),
+                "native_rows".into(),
+                "sqlite_autoindex_native_rows_1".into()
+            ),
+        ]
+    );
+    driver
+        .execute_schema_ddl("DROP VIEW native_view; DROP TABLE native_rows; DROP TABLE compound")
+        .await
+        .unwrap();
+    assert!(
+        driver.list_all_indexes().await.unwrap().is_empty(),
+        "a rowid alias has no separate index object"
+    );
+}
+
+#[tokio::test]
 async fn sqlite_csv_import_accepts_the_drivers_native_rowid_metadata() {
     use db_wire::transfer::{
         import::{CommitPolicy, ImportSettings, run_csv_import},
@@ -62,7 +102,7 @@ async fn sqlite_native_columns_work_through_read_only_authorization() {
         ..Default::default()
     };
     let writable = SqliteDriver::new(config.clone()).unwrap();
-    writable.execute_query("CREATE TABLE native_columns (id INTEGER PRIMARY KEY, label TEXT DEFAULT '', generated TEXT AS (upper(label)) STORED)").await.unwrap();
+    writable.execute_query("CREATE TABLE native_columns (id INTEGER PRIMARY KEY, label TEXT UNIQUE DEFAULT '', generated TEXT AS (upper(label)) STORED)").await.unwrap();
     let readonly = SqliteDriver::new(db_wire::ConnectionConfig {
         read_only: true,
         ..config
@@ -75,6 +115,14 @@ async fn sqlite_native_columns_work_through_read_only_authorization() {
     assert_eq!(columns.len(), 3);
     assert_eq!(columns[1].default_val.as_deref(), Some("''"));
     assert_eq!(columns[2].name, "generated");
+    assert_eq!(
+        readonly.list_all_indexes().await.unwrap(),
+        vec![(
+            "main".into(),
+            "native_columns".into(),
+            "sqlite_autoindex_native_columns_1".into()
+        )]
+    );
     assert!(
         readonly
             .execute_query("INSERT INTO native_columns (label) VALUES ('no')")
