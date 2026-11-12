@@ -60,11 +60,10 @@ for deparsed expressions and assumes compatible PostgreSQL and dependency
 versions. This is single-object structural SQL, not a full database dump: data,
 sequence current values, child partitions, incoming foreign keys, publications,
 security labels and extension membership are outside its scope. Typed tables use
-OF with the existing composite type dependency. Inherited source is in progress:
-basic parent order, local checks and child overrides have replay coverage, but
-diverged parent defaults and parent-added column order remain unresolved. Do
-not treat inherited source as release-ready. Temporary and foreign tables still
-return an explicit unavailable message.
+OF with the existing composite type dependency. Inherited tables retain parent
+order, local checks and child defaults when these can be reconstructed. The DDL
+pane explains when conflicting parent defaults or changed column order prevent
+faithful replay. Temporary and foreign tables still report unavailable source.
 MySQL/SQLite use their native scoped DDL readers; remaining providers retain a
 partial metadata preview. Catalog DDL is tested on
 PostgreSQL 16; catalog fields require PostgreSQL 14 or later.
