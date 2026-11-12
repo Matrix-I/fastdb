@@ -324,8 +324,10 @@ absent or malformed estimates remain unavailable. The reader never runs ANALYZE.
 SQLite constraint summaries use table_xinfo, index_list and foreign_key_list
 for primary keys, UNIQUE constraints and foreign keys. Summaries use a PRIMARY
 KEY label, backing index names and fk_N labels. Equivalent UNIQUE declarations
-can share a backing index. Declared names, CHECK expressions and full definitions
-are available in stored DDL. The Foreign Keys grid groups ordered column
+can share a backing index. The Constraints grid uses native index key order
+for indexed primary keys and UNIQUE constraints. For a sole primary-key column
+without index details, it uses the Columns catalog. Declared names, CHECK
+expressions and full definitions are available in stored DDL. The Foreign Keys grid groups ordered column
 mappings by key and shows native update/delete actions. It resolves omitted
 target columns only when the parent primary key is present and has matching
 arity. Deferrability remains in the stored DDL. If FK details fail, Properties

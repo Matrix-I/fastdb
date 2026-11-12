@@ -155,7 +155,7 @@ struct IndexCatalog {
 }
 
 fn index_details(conn: &Connection) -> Result<IndexCatalog> {
-    use crate::{IndexDetails, TableDetails, sql::SqlDialect};
+    use crate::{ConstraintDetails, IndexDetails, TableDetails, sql::SqlDialect};
     const MAX_KEY_ROWS: usize = 200_000;
     let dialect = SqlDialect(crate::DbDriverKind::Sqlite);
     crate::sql_observer::observe!(
@@ -202,9 +202,25 @@ fn index_details(conn: &Connection) -> Result<IndexCatalog> {
                 {
                     catalog.tables.insert(name, details);
                 }
-                let indexes = &mut current_table.as_mut().unwrap().1.indexes;
+                let details = &mut current_table.as_mut().unwrap().1;
+                let origin = row.get_ref(3)?.as_str()?;
+                let constraint_kind = match origin {
+                    "pk" => Some("PRIMARY KEY"),
+                    "u" => Some("UNIQUE"),
+                    _ => None,
+                };
+                let indexes = &mut details.indexes;
                 if indexes.last().is_none_or(|index| index.name != name) {
-                    let definition = match (source, row.get_ref(3)?.as_str()?) {
+                    if let Some(kind) = constraint_kind {
+                        details.constraints.push(ConstraintDetails {
+                            name: if kind == "PRIMARY KEY" { kind } else { name }.into(),
+                            kind: kind.into(),
+                            columns: Vec::new(),
+                            definition: format!("Backing index {}", dialect.quote_ident(name)),
+                            validated: false,
+                        });
+                    }
+                    let definition = match (source, origin) {
                         (Some(sql), _) => sql.into(),
                         (None, "pk") => "Implicit primary-key index".into(),
                         (None, "u") => "Implicit unique-constraint index".into(),
@@ -225,6 +241,13 @@ fn index_details(conn: &Connection) -> Result<IndexCatalog> {
                         valid: true,
                         definition,
                     });
+                }
+                if constraint_kind.is_some() {
+                    details.constraints.last_mut().unwrap().columns.push(
+                        column
+                            .context("Missing SQLite constraint column name")?
+                            .into(),
+                    );
                 }
                 let key = match (column, row.get::<_, i32>(4)?) {
                     (Some(column), _) => dialect.quote_ident(column),
