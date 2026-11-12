@@ -299,7 +299,7 @@ impl DatabaseDriver for SqliteDriver {
         use crate::catalog::CatalogSection as C;
         use crate::metadata::{MetadataCapabilities, MetadataFeature as F};
         MetadataCapabilities::new(
-            &[F::Columns, F::Indexes, F::ForeignKeys],
+            &[F::Columns, F::Indexes, F::ForeignKeys, F::TableDetails],
             &[
                 F::Catalog(C::Partitions),
                 F::Catalog(C::Rules),
@@ -461,6 +461,13 @@ impl DatabaseDriver for SqliteDriver {
             .await,
             |rows| rows.as_ref().map(|rows| rows.len() as u64)
         )
+    }
+
+    async fn list_table_details(&self) -> Result<Vec<(String, String, crate::TableDetails)>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || metadata::index_details(&conn.lock()))
+            .await
+            .context("SQLite index details worker failed")?
     }
 
     async fn list_all_indexes(&self) -> Result<Vec<(String, String, String)>> {

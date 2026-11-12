@@ -66,6 +66,112 @@ fn bounded_index_names(conn: &Connection, limit: usize) -> Result<Vec<(String, S
     )
 }
 
+// WITHOUT ROWID primary keys are reported by index_list even when they have
+// no sqlite_schema index row. index_xinfo excludes auxiliary storage columns.
+const INDEX_DETAILS: &str = r#"
+SELECT CASE WHEN length(CAST(m.name AS BLOB)) <= ?2 THEN m.name END AS table_name,
+       CASE WHEN length(CAST(i.name AS BLOB)) <= ?2 THEN i.name END AS index_name,
+       i."unique", i.origin, x.cid,
+       CASE WHEN length(CAST(x.name AS BLOB)) <= ?2 THEN x.name END,
+       x."desc",
+       CASE WHEN length(CAST(x.coll AS BLOB)) <= ?2 THEN x.coll END,
+       CASE WHEN x.seqno = 0 AND length(CAST(d.sql AS BLOB)) <= ?2 THEN d.sql END,
+       x.seqno = 0 AND coalesce(length(CAST(d.sql AS BLOB)) > ?2, 0)
+FROM main.sqlite_schema m
+JOIN pragma_index_list(m.name, 'main') i
+JOIN pragma_index_xinfo(i.name, 'main') x
+LEFT JOIN main.sqlite_schema d ON d.type = 'index' AND d.name = i.name
+WHERE m.type = 'table' AND m.name NOT GLOB 'sqlite_*' AND x."key" = 1
+ORDER BY table_name, index_name, x.seqno
+LIMIT ?1
+"#;
+
+pub(super) fn index_details(
+    conn: &Connection,
+) -> Result<Vec<(String, String, crate::TableDetails)>> {
+    use crate::{IndexDetails, TableDetails, sql::SqlDialect};
+    const MAX_KEY_ROWS: usize = 200_000;
+    let dialect = SqlDialect(crate::DbDriverKind::Sqlite);
+    crate::sql_observer::observe!(
+        "SQLite",
+        INDEX_DETAILS,
+        |query| {
+            let mut statement = conn.prepare(query)?;
+            let mut rows =
+                statement.query(rusqlite::params![MAX_KEY_ROWS + 1, MAX_INDEX_NAME_BYTES])?;
+            let mut tables: Vec<(String, String, TableDetails)> = Vec::new();
+            let mut key_rows = 0;
+            let mut bytes = 0;
+            while let Some(row) = rows.next()? {
+                key_rows += 1;
+                anyhow::ensure!(
+                    key_rows <= MAX_KEY_ROWS,
+                    "SQLite index details exceed {MAX_KEY_ROWS} keys"
+                );
+                let mut field = |column| -> Result<Option<&str>> {
+                    match row.get_ref(column)? {
+                        rusqlite::types::ValueRef::Null => Ok(None),
+                        value => {
+                            let text = value.as_str()?;
+                            bytes += text.len();
+                            anyhow::ensure!(
+                                bytes <= MAX_INDEX_METADATA_BYTES,
+                                "SQLite index details exceed 16 MiB"
+                            );
+                            Ok(Some(text))
+                        }
+                    }
+                };
+                let table = field(0)?.context("SQLite index table name exceeds 128 KiB")?;
+                let name = field(1)?.context("SQLite index name exceeds 128 KiB")?;
+                let column = field(5)?;
+                let collation =
+                    field(7)?.context("SQLite index collation is missing or exceeds 128 KiB")?;
+                anyhow::ensure!(!row.get::<_, bool>(9)?, "SQLite index SQL exceeds 128 KiB");
+                let source = field(8)?;
+                if tables.last().is_none_or(|(_, last, _)| last != table) {
+                    tables.push(("main".into(), table.into(), TableDetails::default()));
+                }
+                let indexes = &mut tables.last_mut().unwrap().2.indexes;
+                if indexes.last().is_none_or(|index| index.name != name) {
+                    let definition = match (source, row.get_ref(3)?.as_str()?) {
+                        (Some(sql), _) => sql.into(),
+                        (None, "pk") => "Implicit primary-key index".into(),
+                        (None, "u") => "Implicit unique-constraint index".into(),
+                        _ => "Definition unavailable".into(),
+                    };
+                    indexes.push(IndexDetails {
+                        name: name.into(),
+                        method: "B-tree".into(),
+                        columns: Vec::new(),
+                        unique: row.get(2)?,
+                        valid: true,
+                        definition,
+                    });
+                }
+                let key = match (column, row.get::<_, i32>(4)?) {
+                    (Some(column), _) => dialect.quote_ident(column),
+                    (None, -2) => "(expression)".into(),
+                    (None, -1) => "rowid".into(),
+                    _ => anyhow::bail!("Missing SQLite index key name"),
+                };
+                let direction = if row.get::<_, bool>(6)? {
+                    "DESC"
+                } else {
+                    "ASC"
+                };
+                indexes
+                    .last_mut()
+                    .unwrap()
+                    .columns
+                    .push(format!("{key} COLLATE {collation} {direction}"));
+            }
+            Ok(tables)
+        },
+        |rows| Some(rows.len() as u64)
+    )
+}
+
 pub(super) fn columns(
     conn: &Connection,
     schema: &str,

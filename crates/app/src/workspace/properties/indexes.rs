@@ -13,7 +13,14 @@ impl TableProperties {
                         i.method.clone(),
                         i.columns.join(", "),
                         if i.unique { "Yes" } else { "No" }.into(),
-                        if i.valid { "Valid" } else { "Invalid" }.into(),
+                        if self.kind == db_wire::DbDriverKind::Sqlite {
+                            "Unavailable"
+                        } else if i.valid {
+                            "Valid"
+                        } else {
+                            "Invalid"
+                        }
+                        .into(),
                         i.definition.clone(),
                     ]
                 })

@@ -3,7 +3,7 @@ use gpui::*;
 use ui_core::theme::Theme;
 impl TableProperties {
     pub(in crate::workspace) fn render_constraints(&self, theme: &Theme) -> AnyElement {
-        let rows = if let Some(details) = &self.details {
+        let rows = if let Some(details) = self.constraint_details() {
             details
                 .constraints
                 .iter()
@@ -55,7 +55,7 @@ impl TableProperties {
                 ("Definition", 620.0),
             ],
             rows,
-            if self.details.is_some() {
+            if self.constraint_details().is_some() {
                 "No constraints."
             } else {
                 "Constraints loaded: no objects found. Native definitions are unavailable."

@@ -4,6 +4,7 @@ use db_wire::{ColumnMeta, DbDriverKind, sql::generate_table_ddl};
 use std::sync::Arc;
 #[derive(Clone)]
 pub(in crate::workspace) struct TableProperties {
+    pub(super) kind: DbDriverKind,
     pub schema: String,
     pub table: String,
     pub columns: Vec<ColumnMeta>,
@@ -43,12 +44,16 @@ impl TableProperties {
             ("Tablespace", text(d.and_then(|d| d.tablespace.as_ref()))),
             (
                 "Comment",
-                d.map(|d| d.comment.clone().unwrap_or_else(|| "None".into()))
-                    .unwrap_or_else(|| "Unavailable".into()),
+                d.and_then(|d| {
+                    d.comment
+                        .clone()
+                        .or_else(|| (self.kind == DbDriverKind::Postgres).then(|| "None".into()))
+                })
+                .unwrap_or_else(|| "Unavailable".into()),
             ),
             (
                 "Has Primary Key",
-                if let Some(d) = d {
+                if let Some(d) = d.filter(|_| self.kind == DbDriverKind::Postgres) {
                     flag(Some(d.constraints.iter().any(|c| c.kind == "PRIMARY KEY")))
                 } else if self.columns.is_empty() {
                     "Unavailable".into()
@@ -110,6 +115,7 @@ impl TableProperties {
     ) -> Self {
         let ddl = generate_table_ddl(kind, &schema, &table, &columns, &constraints, &indexes);
         Self {
+            kind,
             schema,
             table,
             columns,
@@ -144,14 +150,28 @@ impl TableProperties {
             self.section_notice(MetadataFeature::Columns)
         }
     }
+    pub(super) fn constraint_details(&self) -> Option<&db_wire::TableDetails> {
+        self.details
+            .as_ref()
+            .filter(|_| self.kind == DbDriverKind::Postgres)
+    }
+
+    pub(in crate::workspace) fn statistics_notice(&self) -> Option<String> {
+        if self.kind == DbDriverKind::Sqlite {
+            Some("Native table statistics are unavailable for SQLite.".into())
+        } else {
+            self.section_notice(MetadataFeature::TableDetails)
+        }
+    }
+
     pub fn section_notice(&self, feature: MetadataFeature) -> Option<String> {
         if self.details.is_some()
-            && matches!(
-                feature,
-                MetadataFeature::Constraints
-                    | MetadataFeature::Indexes
-                    | MetadataFeature::ForeignKeys
-            )
+            && (feature == MetadataFeature::Indexes
+                || (self.kind == DbDriverKind::Postgres
+                    && matches!(
+                        feature,
+                        MetadataFeature::Constraints | MetadataFeature::ForeignKeys
+                    )))
         {
             return None;
         }
@@ -207,6 +227,41 @@ impl TableProperties {
 mod tests {
     use super::TableProperties;
     use db_wire::{ColumnMeta, DataType, DbDriverKind};
+
+    #[test]
+    fn sqlite_index_details_do_not_replace_constraint_availability_or_primary_key() {
+        use db_wire::metadata::{MetadataFeature, MetadataSupport};
+        let model = TableProperties::new(
+            DbDriverKind::Sqlite,
+            "main".into(),
+            "items".into(),
+            vec![ColumnMeta::new("id", DataType::Int4).with_pk(true)],
+            vec![],
+            vec![],
+        )
+        .with_metadata(Some(db_wire::TableDetails::default()), None)
+        .with_states(
+            std::sync::Arc::new(std::collections::HashMap::from([
+                (
+                    MetadataFeature::Constraints,
+                    super::MetadataState::Unavailable(MetadataSupport::NotImplemented),
+                ),
+                (MetadataFeature::TableDetails, super::MetadataState::Ready),
+            ])),
+            vec![],
+        );
+        assert!(model.section_notice(MetadataFeature::Constraints).is_some());
+        assert_eq!(model.section_notice(MetadataFeature::Indexes), None);
+        assert!(model.constraint_details().is_none());
+        assert_eq!(model.section_notice(MetadataFeature::TableDetails), None);
+        assert_eq!(
+            model.statistics_notice().as_deref(),
+            Some("Native table statistics are unavailable for SQLite.")
+        );
+        let rows = model.statistics_rows();
+        assert!(rows.contains(&("Has Primary Key", "Yes".into())));
+        assert!(rows.contains(&("Comment", "Unavailable".into())));
+    }
 
     #[test]
     fn native_details_remain_available_when_summary_readers_fail() {
