@@ -158,7 +158,7 @@ impl Workspace {
         ];
 
         let mut left_nav = div()
-            .w(px(145.0))
+            .w(px(160.0))
             .flex_shrink_0()
             .h_full()
             .flex()
@@ -177,9 +177,11 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .h(px(22.0))
+                    .h(px(26.0))
+                    .border_b_1()
+                    .border_color(theme.border)
                     .flex_shrink_0()
-                    .px_2()
+                    .pr_2()
                     .bg(if is_selected {
                         theme.bg_surface_selected
                     } else {
@@ -199,6 +201,17 @@ impl Workspace {
                                 }
                             }))
                     })
+                    .child(
+                        div()
+                            .w(px(2.0))
+                            .h_full()
+                            .flex_shrink_0()
+                            .bg(if is_selected {
+                                theme.text_accent
+                            } else {
+                                theme.bg_surface
+                            }),
+                    )
                     .child(img(icon).w(px(13.0)).h(px(13.0)))
                     .child(
                         div()
@@ -286,7 +299,11 @@ impl Workspace {
                     )));
             }
             if active_property_sec == PropertySection::Ddl
-                && !matches!(tab.catalog.relation_ddl, Some(Ok(_)))
+                && model
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.ddl.as_ref())
+                    .is_none()
                 && let Some(notice) = model.section_notice(F::TableDetails)
             {
                 right_content =

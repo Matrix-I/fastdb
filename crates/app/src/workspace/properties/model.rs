@@ -11,6 +11,7 @@ pub(in crate::workspace) struct TableProperties {
     pub constraints: Vec<(String, String)>,
     pub indexes: Vec<String>,
     pub ddl: String,
+    pub(super) ddl_document: Option<Arc<super::ddl_document::DdlDocument>>,
     pub details: Option<db_wire::TableDetails>,
     pub metadata_error: Option<String>,
     pub states: Arc<MetadataStates>,
@@ -142,6 +143,7 @@ impl TableProperties {
             constraints,
             indexes,
             ddl,
+            ddl_document: None,
             details: None,
             metadata_error: None,
             states: Arc::default(),
@@ -230,6 +232,11 @@ impl TableProperties {
             None => Some("Metadata has not been loaded. Connect and refresh to retry.".into()),
         }
     }
+    pub(in crate::workspace) fn prepare_ddl(mut self) -> Self {
+        self.ddl_document = Some(Arc::new(super::ddl_document::DdlDocument::new(&self.ddl)));
+        self
+    }
+
     pub fn with_metadata(
         mut self,
         details: Option<db_wire::TableDetails>,
@@ -261,6 +268,7 @@ impl TableProperties {
                 ));
             }
         }
+        self.ddl_document = None;
         self.details = details;
         self.metadata_error = error;
         self
@@ -271,6 +279,71 @@ impl TableProperties {
 mod tests {
     use super::TableProperties;
     use db_wire::{ColumnMeta, DataType, DbDriverKind};
+
+    #[test]
+    fn prepared_metadata_preview_retains_the_native_source_warning() {
+        use db_wire::metadata::MetadataFeature as F;
+        let preview = TableProperties::new(
+            DbDriverKind::Postgres,
+            "public".into(),
+            "t".into(),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .with_states(
+            std::sync::Arc::new(std::collections::HashMap::from([(
+                F::TableDetails,
+                super::MetadataState::Failed("Permission denied".into()),
+            )])),
+            vec![],
+        )
+        .prepare_ddl();
+        assert!(preview.ddl_document.is_some());
+        assert!(
+            preview
+                .details
+                .as_ref()
+                .and_then(|details| details.ddl.as_ref())
+                .is_none()
+        );
+        assert_eq!(
+            preview.section_notice(F::TableDetails).as_deref(),
+            Some("Metadata load failed. Permission denied")
+        );
+    }
+
+    #[test]
+    fn ddl_preparation_preserves_source_and_invalidates_on_metadata_refresh() {
+        for kind in [
+            DbDriverKind::Postgres,
+            DbDriverKind::MySql,
+            DbDriverKind::Sqlite,
+        ] {
+            let source = "CREATE TABLE t (id INTEGER);\n";
+            let model =
+                TableProperties::new(kind, "main".into(), "t".into(), vec![], vec![], vec![])
+                    .with_metadata(
+                        Some(db_wire::TableDetails {
+                            ddl: Some(source.into()),
+                            ..Default::default()
+                        }),
+                        None,
+                    )
+                    .prepare_ddl();
+            assert_eq!(model.ddl, source);
+            assert!(model.ddl_document.is_some());
+            let model = model.with_metadata(
+                Some(db_wire::TableDetails {
+                    ddl: Some("SELECT 1;".into()),
+                    ..Default::default()
+                }),
+                None,
+            );
+            assert!(model.ddl_document.is_none());
+            assert_eq!(model.ddl, "SELECT 1;");
+        }
+    }
 
     #[test]
     fn mysql_native_constraints_reach_both_properties_sections_with_summary_fallback() {
