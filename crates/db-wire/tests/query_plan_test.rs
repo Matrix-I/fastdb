@@ -62,7 +62,14 @@ fn config(prefix: &str, kind: DbDriverKind) -> Option<ConnectionConfig> {
             .into()
         }),
         password: env("PASSWORD"),
-        database: env("DATABASE").unwrap_or_else(|| "fastdb_test".into()),
+        database: env("DATABASE").unwrap_or_else(|| {
+            if kind == DbDriverKind::Postgres {
+                "postgres"
+            } else {
+                "fastdb_test"
+            }
+            .into()
+        }),
         use_unix_socket: false,
         connect_timeout: Duration::from_secs(5),
         ..Default::default()
