@@ -972,3 +972,37 @@ fn postgres_application_name_reaches_normal_and_script_connections() {
         session.finish().await.unwrap();
     });
 }
+
+#[test]
+fn postgres_driver_reports_visible_temporary_structure_with_commit_warning() {
+    let Some(config) = test_config() else { return };
+    let _catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
+    db_wire::get_runtime().block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let driver = PostgresDriver::new(config);
+            let table = format!("fastdb_temp_{}", uuid::Uuid::new_v4().simple());
+            driver
+                .execute_query(&format!(
+                    "CREATE TEMP TABLE {table}(id integer PRIMARY KEY) ON COMMIT DELETE ROWS"
+                ))
+                .await
+                .unwrap();
+            let outcome = driver.list_table_details().await;
+            driver
+                .execute_query(&format!("DROP TABLE {table}"))
+                .await
+                .unwrap();
+            let details = outcome.unwrap();
+            let (_, _, details) = details.iter().find(|(_, name, _)| name == &table).unwrap();
+            assert_eq!(details.persistence.as_deref(), Some("Temporary"));
+            let source = details.ddl.as_deref().unwrap();
+            assert!(
+                source.contains(&format!("CREATE TEMPORARY TABLE pg_temp.{table}")),
+                "{source}"
+            );
+            assert!(source.contains("ON COMMIT is unknown"), "{source}");
+        })
+        .await
+        .expect("temporary driver fixture timed out");
+    });
+}

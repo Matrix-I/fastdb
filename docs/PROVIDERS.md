@@ -67,7 +67,15 @@ faithful replay. Foreign tables retain the existing server name, table and colum
 options, and partition attachment. The server and wrapper must already exist.
 Server definitions and user mappings are outside the export. Custom wrappers
 can place sensitive values in table or column options, which the DDL preserves.
-Temporary tables still report unavailable source.
+Temporary relations visible to the metadata connection emit structural
+TEMPORARY source, with current-session identifiers formatted through pg_temp.
+For temporary tables, a prominent comment states that ON COMMIT is unknown and
+omitted. Replay therefore uses PostgreSQL's PRESERVE ROWS default. The source
+does not reproduce the original temporary commit policy. SQL-tab temporary
+objects follow their separate session visibility. Native tests cover source
+replay between distinct temp namespaces, serial/identity, view/index/comment,
+inheritance, partition and extended-statistics structures.
+[PostgreSQL CREATE TABLE](https://www.postgresql.org/docs/16/sql-createtable.html)
 MySQL/SQLite use their native scoped DDL readers; remaining providers retain a
 partial metadata preview. Catalog DDL is tested on
 PostgreSQL 16; catalog fields require PostgreSQL 14 or later.

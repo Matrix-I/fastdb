@@ -268,3 +268,82 @@ mod permission_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod temporary_source_tests {
+    #[test]
+    fn temporary_structure_replays_across_sessions_with_unknown_commit_note() {
+        let Ok(port) = std::env::var("FASTDB_TEST_PG_PORT") else {
+            assert!(
+                std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none(),
+                "FASTDB_TEST_PG_PORT required"
+            );
+            return;
+        };
+        crate::get_runtime().block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                let mut config = tokio_postgres::Config::new();
+                config.host(std::env::var("FASTDB_TEST_PG_HOST").unwrap_or_else(|_| "127.0.0.1".into()))
+                    .port(port.parse().unwrap()).dbname("postgres")
+                    .user(std::env::var("FASTDB_TEST_PG_USER").unwrap_or_else(|_| "postgres".into()));
+                if let Ok(password) = std::env::var("FASTDB_TEST_PG_PASSWORD") { config.password(password); }
+                config.connect_timeout(std::time::Duration::from_secs(5));
+                let (source, source_connection) = config.connect(tokio_postgres::NoTls).await.unwrap();
+                let _source_task = crate::AbortOnDrop(tokio::spawn(source_connection));
+                let (destination, destination_connection) = config.connect(tokio_postgres::NoTls).await.unwrap();
+                let _destination_task = crate::AbortOnDrop(tokio::spawn(destination_connection));
+                source.batch_execute(r#"
+                    SET statement_timeout='5s'; BEGIN;
+                    SET LOCAL search_path=pg_temp,public;
+                    CREATE TEMP TABLE "temp preview" (
+                        id serial PRIMARY KEY, label text DEFAULT 'pg_temp_3',
+                        calculated text GENERATED ALWAYS AS (upper(label)) STORED,
+                        CHECK(label <> 'bad')
+                    ) ON COMMIT DELETE ROWS;
+                    CREATE INDEX preview_label ON "temp preview"(label);
+                    COMMENT ON TABLE "temp preview" IS 'Temporary source';
+                    COMMENT ON INDEX preview_label IS 'Temporary index';
+                    CREATE TEMP TABLE drop_preview(id integer) ON COMMIT DROP;
+                    CREATE TEMP TABLE preserve_preview(id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY) ON COMMIT PRESERVE ROWS;
+                    CREATE TEMP VIEW preview_view AS SELECT id,calculated FROM "temp preview";
+                    INSERT INTO "temp preview"(label) VALUES('source row');
+                    CREATE STATISTICS preview_stats (dependencies) ON id,label FROM "temp preview";
+                    COMMENT ON STATISTICS pg_temp.preview_stats IS 'Temporary statistics';
+                    CREATE TEMP TABLE temp_parent(a integer);
+                    CREATE TEMP TABLE temp_child(b text) INHERITS(temp_parent);
+                    CREATE TEMP TABLE temp_partitioned(id integer) PARTITION BY RANGE(id);
+                    CREATE TEMP TABLE temp_leaf PARTITION OF temp_partitioned FOR VALUES FROM (0) TO (10);
+                "#).await.unwrap();
+                destination.batch_execute("SET statement_timeout='5s'; CREATE TEMP TABLE anchor(id integer); BEGIN").await.unwrap();
+                let source_schema: String = source.query_one("SELECT nspname FROM pg_namespace WHERE oid=pg_my_temp_schema()", &[]).await.unwrap().get(0);
+                let destination_schema: String = destination.query_one("SELECT nspname FROM pg_namespace WHERE oid=pg_my_temp_schema()", &[]).await.unwrap().get(0);
+                assert_ne!(source_schema, destination_schema);
+                let details = super::load(&source).await.unwrap();
+                for name in ["temp preview", "drop_preview", "preserve_preview", "preview_view", "temp_parent", "temp_child", "temp_partitioned", "temp_leaf"] {
+                    let ddl = details.iter().find(|(schema, table, _)| schema == &source_schema && table == name).unwrap().2.ddl.as_ref().unwrap();
+                    assert!(ddl.contains("CREATE TEMPORARY"), "{ddl}");
+                    if name != "preview_view" {
+                        assert!(ddl.contains("ON COMMIT is unknown"), "{ddl}");
+                        assert!(ddl.contains("PRESERVE ROWS"), "{ddl}");
+                    }
+                    assert!(!ddl.contains(&format!("{source_schema}.")), "{ddl}");
+                    destination.batch_execute(ddl).await.unwrap();
+                }
+                assert_eq!(destination.query_one(r#"SELECT count(*) FROM "temp preview""#, &[]).await.unwrap().get::<_,i64>(0), 0);
+                destination.batch_execute(r#"INSERT INTO "temp preview" DEFAULT VALUES; INSERT INTO preserve_preview DEFAULT VALUES; INSERT INTO drop_preview VALUES(7); COMMIT"#).await.unwrap();
+                let row = destination.query_one("SELECT id,calculated FROM preview_view", &[]).await.unwrap();
+                assert_eq!(row.get::<_,i32>(0), 1);
+                assert_eq!(row.get::<_,String>(1), "PG_TEMP_3");
+                assert_eq!(destination.query_one("SELECT count(*) FROM drop_preview", &[]).await.unwrap().get::<_,i64>(0), 1);
+                assert_eq!(destination.query_one("SELECT id FROM preserve_preview", &[]).await.unwrap().get::<_,i32>(0), 1);
+                assert!(destination.batch_execute(r#"INSERT INTO "temp preview"(label) VALUES('bad')"#).await.is_err());
+                destination.batch_execute("INSERT INTO temp_child(a,b) VALUES(1,'child'); INSERT INTO temp_partitioned(id) VALUES(1)").await.unwrap();
+                assert_eq!(destination.query_one("SELECT count(*) FROM temp_parent", &[]).await.unwrap().get::<_,i64>(0), 1);
+                assert_eq!(destination.query_one("SELECT count(*) FROM temp_leaf", &[]).await.unwrap().get::<_,i64>(0), 1);
+                source.batch_execute("COMMIT").await.unwrap();
+                assert!(source.query_one("SELECT to_regclass('pg_temp.drop_preview') IS NULL", &[]).await.unwrap().get::<_,bool>(0));
+                assert_eq!(source.query_one(r#"SELECT count(*) FROM "temp preview""#, &[]).await.unwrap().get::<_,i64>(0), 0);
+            }).await.expect("temporary-source fixture timed out");
+        });
+    }
+}
