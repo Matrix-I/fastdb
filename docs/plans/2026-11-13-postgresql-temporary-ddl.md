@@ -392,3 +392,10 @@ Clippy passed; full native workspace tests/build/review follow.
 - Isolated `./target/debug/fastdb` 5-second startup check with temporary `FASTDB_CONFIG_DIR`: stayed running 5 seconds and initialized cleanly.
 - Independent code review (`code-review-strict` via internal reviewer subagent; external Opus route unavailable due to automatic approval policy): Round 1 found zero code/SQL/test defects and one Important checklist-reconciliation finding (`docs/plans/2026-11-12-p2-05-completion.md`). After reconciling the checklists, Round 2 returned **Approved** (zero Critical, zero Important, zero Minor findings).
 - Owned database fixtures (`fastdb-p205-postgres`, `fastdb-p205-mysql`) are stopped, keeping the runnable binary and reusable build dependencies. Manual GUI acceptance remains pending with the user.
+
+
+## Acceptance closure — 2026-11-13
+
+The user confirmed the P2-05 GUI checklist passed ("test ổn"). This closes the
+manual acceptance pending above for PostgreSQL/MySQL/SQLite; see the main
+completion plan's dated user acceptance record. No source changed afterward.
