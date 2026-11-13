@@ -4,8 +4,8 @@
 use db_wire::{ConnectionConfig, DatabaseDriver, DbDriverKind, PostgresDriver};
 use std::sync::Arc;
 
-// Both fixtures enumerate all visible relations; keep their DROP/CREATE phases
-// separate so one test cannot remove catalogs while the other deparses them.
+// Catalog readers enumerate all visible relations. Serialize permanent relation
+// DDL so another fixture cannot drop a relation while its source is deparsed.
 static CATALOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
@@ -687,6 +687,7 @@ fn postgres_foreign_keys_preserve_schema_identity_and_composite_mapping() {
     let Some(cfg) = test_config() else {
         return;
     };
+    let _catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
     db_wire::get_runtime().block_on(async {
         let driver = PostgresDriver::new(cfg);
         let schema = format!("fastdb_er_{}", std::process::id());
