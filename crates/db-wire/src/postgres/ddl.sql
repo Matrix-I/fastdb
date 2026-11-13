@@ -7,9 +7,9 @@ WITH visible_relations AS (
            format('%I.%I', CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END, c.relname) AS target,
            CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END AS object_type
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
-      AND (t.table_name IS NOT NULL OR (c.relkind = 'm'
+      AND (EXISTS (SELECT FROM information_schema.tables t
+                   WHERE t.table_schema = n.nspname AND t.table_name = c.relname) OR (c.relkind = 'm'
            AND (pg_has_role(c.relowner, 'USAGE')
                 OR has_any_column_privilege(c.oid, 'SELECT'))))
 ), parent_columns AS (
