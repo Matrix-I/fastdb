@@ -400,3 +400,10 @@ timed out. No other rule was skipped.
 Manual visual/scroll/clipboard acceptance and large-source runtime benchmarking
 remain unverified. No speedup is claimed. Existing theme and typography were
 chosen to translate the screenshot reference to the application's scale.
+
+
+## User acceptance — 2026-11-13
+
+The user confirmed the P2-05 GUI checklist, including Properties/DDL layout,
+scrolling and SQL copy, passed. Earlier manual acceptance notes are superseded.
+Large-source runtime benchmarking remains outside this layout acceptance.
