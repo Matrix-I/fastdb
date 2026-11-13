@@ -65,7 +65,7 @@ Interfaces
 - Consume the existing `Client` and `load(&Client)` result.
 - Produce unchanged `(schema, table, TableDetails)` data with temporary DDL.
 
-- [ ] Add the following native regression before the query edit:
+- [x] Add the following native regression before the query edit:
 
 ```rust
 #[cfg(test)]
@@ -136,9 +136,9 @@ mod temporary_source_tests {
 }
 ```
 
-- [ ] Run `FASTDB_TEST_PG_PORT=55449 cargo test -p db-wire --lib temporary_structure --locked`.
+- [x] Run `FASTDB_TEST_PG_PORT=55449 cargo test -p db-wire --lib temporary_structure --locked`.
   Expect failure because the existing output says temporary tables unsupported.
-- [ ] Apply these exact query transformations:
+- [x] Apply these exact query transformations:
 
   1. In formatted `%I.%I` targets, map a namespace equal to pg_my_temp_schema()
      to pg_temp. The real schema output column remains unchanged.
@@ -186,29 +186,29 @@ CASE WHEN r.relpersistence = 'u' THEN 'UNLOGGED '
   temporary modifier when r.relpersistence='t'. Existing materialized-view,
   foreign-table, inherited-source and permanent branches remain applicable.
 
-- [ ] Rerun the regression and full PostgreSQL provider tests. Verify ordinary
+- [x] Rerun the regression and full PostgreSQL provider tests. Verify ordinary
   permanent/unlogged source remains unchanged by the existing replay fixtures.
 
 ## Task 2 — Query plans, docs, verification and review
 
-- [ ] Measure the existing and changed catalog statement using EXPLAIN
+- [x] Measure the existing and changed catalog statement using EXPLAIN
   (ANALYZE, BUFFERS) on a disposable 300-table fixture with indexed keys and
   100,000 user rows. Include temporary relations in the measured connection.
   Record metadata rows, time, buffers and plan shape. Do not claim a speedup.
-- [ ] Update docs/PROVIDERS.md, docs/guide/navigator-and-tables.md and
+- [x] Update docs/PROVIDERS.md, docs/guide/navigator-and-tables.md and
   docs/guide/not-built-yet.md with the approved warning/default and session
   visibility. Record the confirmed choice in the main completion plan.
-- [ ] Read full tracked/untracked diff, check scope and secrets.
-- [ ] Run cargo fmt --all, cargo clippy --workspace --all-targets --locked,
+- [x] Read full tracked/untracked diff, check scope and secrets.
+- [x] Run cargo fmt --all, cargo clippy --workspace --all-targets --locked,
   cargo test --workspace --locked, cargo build --workspace --locked and live
   isolated PostgreSQL/MySQL suites with real SQLite. Report any failure/skip.
-- [ ] Use code-review-strict with a full review package. The external Opus
+- [x] Use code-review-strict with a full review package. The external Opus
   invocation was previously blocked by automatic approval review for external
   code transmission. Use the internal reviewer as the safer alternative and
   disclose that model-specific exception, without bypassing the rejection.
-- [ ] Apply receiving-code-review, reverify any fix, then commit the feature and
+- [x] Apply receiving-code-review, reverify any fix, then commit the feature and
   matching guides. Save final checkpoint/checklist state separately as needed.
-- [ ] Stop only the owned database fixtures. Keep runnable binary/dependencies.
+- [x] Stop only the owned database fixtures. Keep runnable binary/dependencies.
   GUI acceptance remains with the user. P2-05 requires its final audit.
 
 
@@ -323,3 +323,72 @@ internal reviews cover the plan/refinements only. The exact Opus review model
 was unavailable through the approved route: automatic approval rejected the
 external CLI because it could transmit private source externally. Do not retry
 that route. Manual GUI acceptance remains pending with the user. No push.
+
+
+## Resume: visibility semijoin refinement
+
+The existing five-second regression and prior final-gate log remain the
+performance reproduction. Replace only the visible_relations LEFT JOIN plus
+nonnull check with the equivalent information_schema EXISTS predicate:
+
+```sql
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')
+  AND (EXISTS (SELECT FROM information_schema.tables t
+               WHERE t.table_schema = n.nspname AND t.table_name = c.relname)
+       OR (c.relkind = 'm' AND (pg_has_role(c.relowner, 'USAGE')
+            OR has_any_column_privilege(c.oid, 'SELECT'))))
+```
+
+This retains the native visibility view and materialized-view grant branch,
+with no copied authorization predicates or session settings. Each catalog
+relation has at most one matching schema/name row. First compare exact source
+multisets under owner and restricted column grants using sequential temporary
+result tables in one rolled-back transaction; avoid inlining four copies of
+the query into EXCEPT ALL. Run existing permissions and replay tests, retain
+the unchanged timeout, profile both forms, then full gates and code review.
+Rollback is to restore the scoped visibility join.
+
+The first resume regression failed before useful query evidence: PostgreSQL
+was recovering after the combined equivalence query's backend was killed.
+Container cgroup memory.events reported oom_kill=1; the Podman VM has about
+940 MiB usable memory and the MySQL fixture again exited 137. No user service
+was modified. Sequential comparison bounds JIT memory and runs while the
+owned MySQL fixture is stopped. Restore MySQL for the native full gate only
+after this profiling transaction completes.
+
+
+### Semijoin evidence
+
+Internal plan-refinement review approved with no Critical/Important issue.
+Corrected sequential same-snapshot comparisons returned zero multiset
+differences for owner and restricted column-granted role. The initial one-row
+difference was the comparison's own old_result table, excluded symmetrically
+from both result sets in the corrected script. All setup rolled back.
+
+At checkpoint 94357ed, the isolated regression reproduced native statement
+timeout (7.91 s overall). After the visibility semijoin, the unchanged test
+passed in 0.25 s. On 300 tables, 100,000 data rows and temp serial/index source,
+EXPLAIN (ANALYZE, BUFFERS) returned 303 rows for both forms. Execution was
+6,496.609 ms before and 722.456 ms after; JIT was 6,267.432 / 635.256 ms; shared
+hits 31,681 / 29,618, physical reads and temp blocks zero, disk sorts zero,
+maximum hash batches one. Only catalog relations were scanned; user data was
+not read. Estimated cost fell from 1,149,568 to 362,924, avoiding expensive
+JIT optimization on this fixture. Session JIT settings stayed unchanged. These
+are fixture measurements, not a production latency guarantee.
+
+Logs: /tmp/fastdb-temp-ddl-stable-red.log,
+/tmp/fastdb-temp-ddl-exists-green.log,
+/tmp/fastdb-temp-ddl-exists-equivalence.log and
+/tmp/fastdb-temp-ddl-exists-final-profile.log. Formatter check and workspace
+Clippy passed; full native workspace tests/build/review follow.
+
+### Final verification and review
+
+- `cargo fmt --all -- --check`: passed (exit 0).
+- `cargo clippy --workspace --all-targets --locked`: passed (exit 0).
+- `FASTDB_TEST_PG_PORT=55449 FASTDB_TEST_MYSQL_PORT=55448 FASTDB_REQUIRE_DB_TESTS=1 cargo test --workspace --locked -- --test-threads=1`: passed across every workspace crate and integration suite (0 failed, 0 ignored), including live PostgreSQL 16.15 and MySQL 8.4.13 tests and real in-process SQLite coverage.
+- `cargo build --workspace --locked`: passed (exit 0).
+- Isolated `./target/debug/fastdb` 5-second startup check with temporary `FASTDB_CONFIG_DIR`: stayed running 5 seconds and initialized cleanly.
+- Independent code review (`code-review-strict` via internal reviewer subagent; external Opus route unavailable due to automatic approval policy): Round 1 found zero code/SQL/test defects and one Important checklist-reconciliation finding (`docs/plans/2026-11-12-p2-05-completion.md`). After reconciling the checklists, Round 2 returned **Approved** (zero Critical, zero Important, zero Minor findings).
+- Owned database fixtures (`fastdb-p205-postgres`, `fastdb-p205-mysql`) are stopped, keeping the runnable binary and reusable build dependencies. Manual GUI acceptance remains pending with the user.
