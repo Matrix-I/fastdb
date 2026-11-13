@@ -1,7 +1,10 @@
 -- One catalog snapshot; server-side quoting also handles newlines and quotes in names.
 WITH visible_relations AS (
-    SELECT c.*, n.nspname,
-           format('%I.%I', n.nspname, c.relname) AS target,
+    SELECT c.oid, c.relname, c.relkind, c.relpersistence,
+           c.relowner, c.relacl, c.relam, c.relforcerowsecurity,
+           c.relispartition, c.reloftype, c.reloptions, c.relpartbound,
+           c.relreplident, c.relrowsecurity, c.reltablespace, n.nspname,
+           format('%I.%I', CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END, c.relname) AS target,
            CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END AS object_type
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN information_schema.tables t ON t.table_schema = n.nspname AND t.table_name = c.relname
@@ -17,9 +20,13 @@ WITH visible_relations AS (
     LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
     WHERE NOT r.relispartition AND a.attnum > 0 AND NOT a.attisdropped
 ), reconstruction AS (
-    SELECT r.*, CASE
-        WHEN r.relkind NOT IN ('r', 'p', 'v', 'm', 'f') OR r.relpersistence = 't'
-            THEN 'temporary tables are not supported.'
+    SELECT r.oid, r.relname, r.relkind, r.relpersistence,
+           r.relowner, r.relacl, r.relam, r.relforcerowsecurity,
+           r.relispartition, r.reloftype, r.reloptions, r.relpartbound,
+           r.relreplident, r.relrowsecurity, r.reltablespace, r.nspname,
+           r.target, r.object_type, CASE
+        WHEN r.relkind NOT IN ('r', 'p', 'v', 'm', 'f')
+            THEN 'this relation kind is not supported.'
         WHEN EXISTS (
             SELECT p.attname FROM parent_columns p
             JOIN pg_attribute a ON a.attrelid = r.oid AND a.attname = p.attname
@@ -51,10 +58,15 @@ WITH visible_relations AS (
         END AS unsupported_reason
     FROM visible_relations r
 ), relations AS (
-    SELECT r.*, r.unsupported_reason IS NOT NULL AS unsupported FROM reconstruction r
+    SELECT r.oid, r.relname, r.relkind, r.relpersistence,
+           r.relowner, r.relacl, r.relam, r.relforcerowsecurity,
+           r.relispartition, r.reloftype, r.reloptions, r.relpartbound,
+           r.relreplident, r.relrowsecurity, r.reltablespace, r.nspname,
+           r.target, r.object_type, r.unsupported_reason,
+           r.unsupported_reason IS NOT NULL AS unsupported FROM reconstruction r
 ), sequences AS (
     SELECT d.refobjid AS table_oid, a.attnum, d.deptype, sn.nspname, s.relname,
-           format('%I.%I', sn.nspname, s.relname) AS target,
+           format('%I.%I', CASE WHEN sn.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE sn.nspname END, s.relname) AS target,
            format_type(q.seqtypid, NULL) AS data_type,
            format(' INCREMENT BY %s MINVALUE %s MAXVALUE %s START WITH %s CACHE %s %s',
                q.seqincrement, q.seqmin, q.seqmax,
@@ -99,7 +111,7 @@ WITH visible_relations AS (
     FROM pg_constraint con JOIN relations r ON r.oid = con.conrelid
     WHERE con.contype = 'c' AND con.conislocal AND con.coninhcount > 0 AND NOT r.relispartition
 ), inheritance AS (
-    SELECT h.inhrelid, string_agg(format('%I.%I', n.nspname, p.relname), ', ' ORDER BY h.inhseqno) AS parents
+    SELECT h.inhrelid, string_agg(format('%I.%I', CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END, p.relname), ', ' ORDER BY h.inhseqno) AS parents
     FROM pg_inherits h JOIN relations r ON r.oid = h.inhrelid
     JOIN pg_class p ON p.oid = h.inhparent JOIN pg_namespace n ON n.oid = p.relnamespace
     WHERE NOT r.relispartition
@@ -107,14 +119,19 @@ WITH visible_relations AS (
 ), statements AS (
     SELECT r.oid, 0 AS phase, '' AS sort_key,
         '-- PostgreSQL structural DDL. Dependencies must already exist; sequence values and data are not included.' || E'\n' ||
-        'SET search_path = ' || COALESCE((SELECT string_agg(quote_ident(s), ', ' ORDER BY pos) FROM unnest(current_schemas(false)) WITH ORDINALITY path(s, pos)), 'pg_catalog') || E';\n' ||
+        CASE WHEN r.relpersistence = 't' AND r.relkind IN ('r', 'p') THEN
+            E'-- WARNING: ON COMMIT is unknown from PostgreSQL catalogs and is omitted. Replay defaults to PRESERVE ROWS.\n'
+        ELSE '' END ||
+        'SET search_path = ' || COALESCE((SELECT string_agg(CASE WHEN s = (SELECT nspname FROM pg_namespace WHERE oid = pg_my_temp_schema())
+            THEN 'pg_temp' ELSE quote_ident(s) END, ', ' ORDER BY pos) FROM unnest(current_schemas(false)) WITH ORDINALITY path(s, pos)), 'pg_catalog') || E';\n' ||
         'SET standard_conforming_strings = on;' AS sql
     FROM relations r WHERE NOT r.unsupported
     UNION ALL
     SELECT r.oid, 0, '', '-- DDL unavailable: ' || r.unsupported_reason
     FROM relations r WHERE r.unsupported
     UNION ALL
-    SELECT s.table_oid, 10, s.target, 'CREATE ' || CASE WHEN s.relpersistence = 'u' THEN 'UNLOGGED ' ELSE '' END ||
+    SELECT s.table_oid, 10, s.target, 'CREATE ' || CASE WHEN s.relpersistence = 'u' THEN 'UNLOGGED '
+            WHEN s.relpersistence = 't' THEN 'TEMPORARY ' ELSE '' END ||
         'SEQUENCE ' || s.target || ' AS ' || s.data_type || s.options || ';'
     FROM sequences s JOIN relations r ON r.oid = s.table_oid WHERE s.deptype = 'a' AND NOT r.unsupported
     UNION ALL
@@ -125,10 +142,11 @@ WITH visible_relations AS (
             COALESCE((SELECT ' USING ' || quote_ident(am.amname) FROM pg_am am WHERE am.oid = r.relam), '') ||
             COALESCE((SELECT ' TABLESPACE ' || quote_ident(ts.spcname) FROM pg_tablespace ts WHERE ts.oid = r.reltablespace), '') ||
             ' AS ' || rtrim(pg_get_viewdef(r.oid, false), E';\n\r ') || ' WITH NO DATA;'
-        WHEN r.relkind = 'v' THEN 'CREATE VIEW ' || r.target || ' (' ||
+        WHEN r.relkind = 'v' THEN 'CREATE ' || CASE WHEN r.relpersistence = 't' THEN 'TEMPORARY ' ELSE '' END || 'VIEW ' || r.target || ' (' ||
             (SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) FROM pg_attribute a
              WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped) || ') AS ' || pg_get_viewdef(r.oid, false)
-        ELSE 'CREATE ' || CASE WHEN r.relpersistence = 'u' THEN 'UNLOGGED ' ELSE '' END ||
+        ELSE 'CREATE ' || CASE WHEN r.relpersistence = 'u' THEN 'UNLOGGED '
+            WHEN r.relpersistence = 't' THEN 'TEMPORARY ' ELSE '' END ||
             r.object_type || ' ' || r.target ||
             CASE WHEN r.reloftype <> 0 THEN ' OF ' || format_type(r.reloftype, NULL) ELSE '' END || E' (\n' ||
             COALESCE((SELECT string_agg(c.definition, E',\n' ORDER BY c.attnum NULLS LAST, c.constraint_name) FROM definitions c WHERE c.attrelid = r.oid), '') || E'\n)' ||
@@ -201,7 +219,7 @@ WITH visible_relations AS (
     FROM relations r JOIN pg_index i ON i.indrelid = r.oid JOIN pg_class ic ON ic.oid = i.indexrelid
     WHERE NOT r.unsupported AND i.indisvalid AND i.indisclustered
     UNION ALL
-    SELECT r.oid, 55, '', 'ALTER TABLE ' || format('%I.%I', pn.nspname, p.relname) ||
+    SELECT r.oid, 55, '', 'ALTER TABLE ' || format('%I.%I', CASE WHEN pn.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE pn.nspname END, p.relname) ||
         ' ATTACH PARTITION ' || r.target || ' ' || pg_get_expr(r.relpartbound, r.oid, false) || ';'
     FROM relations r JOIN pg_inherits h ON h.inhrelid = r.oid
     JOIN pg_class p ON p.oid = h.inhparent JOIN pg_namespace pn ON pn.oid = p.relnamespace
@@ -218,7 +236,7 @@ WITH visible_relations AS (
     FROM relations r JOIN pg_constraint con ON con.conrelid = r.oid
     WHERE NOT r.unsupported AND obj_description(con.oid, 'pg_constraint') IS NOT NULL
     UNION ALL
-    SELECT r.oid, 60, ic.relname, format('COMMENT ON INDEX %I.%I IS %L;', n.nspname, ic.relname, obj_description(ic.oid, 'pg_class'))
+    SELECT r.oid, 60, ic.relname, format('COMMENT ON INDEX %I.%I IS %L;', CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END, ic.relname, obj_description(ic.oid, 'pg_class'))
     FROM relations r JOIN pg_index i ON i.indrelid = r.oid JOIN pg_class ic ON ic.oid = i.indexrelid
     JOIN pg_namespace n ON n.oid = ic.relnamespace
     WHERE NOT r.unsupported AND i.indisvalid AND obj_description(ic.oid, 'pg_class') IS NOT NULL
@@ -258,9 +276,9 @@ WITH visible_relations AS (
     FROM relations r JOIN pg_rewrite rw ON rw.ev_class = r.oid WHERE NOT r.unsupported AND rw.rulename <> '_RETURN'
     UNION ALL
     SELECT r.oid, 77, st.stxname, pg_get_statisticsobjdef(st.oid) || ';' ||
-        CASE WHEN st.stxstattarget >= 0 THEN E'\nALTER STATISTICS ' || format('%I.%I', n.nspname, st.stxname) || ' SET STATISTICS ' || st.stxstattarget || ';' ELSE '' END ||
-        E'\nALTER STATISTICS ' || format('%I.%I', n.nspname, st.stxname) || ' OWNER TO ' || quote_ident(pg_get_userbyid(st.stxowner)) || ';' ||
-        CASE WHEN obj_description(st.oid, 'pg_statistic_ext') IS NOT NULL THEN E'\n' || format('COMMENT ON STATISTICS %I.%I IS %L;', n.nspname, st.stxname, obj_description(st.oid, 'pg_statistic_ext')) ELSE '' END
+        CASE WHEN st.stxstattarget >= 0 THEN E'\nALTER STATISTICS ' || format('%I.%I', CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END, st.stxname) || ' SET STATISTICS ' || st.stxstattarget || ';' ELSE '' END ||
+        E'\nALTER STATISTICS ' || format('%I.%I', CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END, st.stxname) || ' OWNER TO ' || quote_ident(pg_get_userbyid(st.stxowner)) || ';' ||
+        CASE WHEN obj_description(st.oid, 'pg_statistic_ext') IS NOT NULL THEN E'\n' || format('COMMENT ON STATISTICS %I.%I IS %L;', CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END, st.stxname, obj_description(st.oid, 'pg_statistic_ext')) ELSE '' END
     FROM relations r JOIN pg_statistic_ext st ON st.stxrelid = r.oid JOIN pg_namespace n ON n.oid = st.stxnamespace WHERE NOT r.unsupported
     UNION ALL
     SELECT r.oid, 80, '', 'ALTER TABLE ' || r.target || ' REPLICA IDENTITY ' ||
@@ -302,6 +320,9 @@ WITH visible_relations AS (
         CASE WHEN acl.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END || ';'
     FROM sequences s JOIN relations r ON r.oid = s.table_oid CROSS JOIN LATERAL aclexplode(s.relacl) acl WHERE NOT r.unsupported
 )
-SELECT r.nspname::text, r.relname::text, string_agg(s.sql, E'\n' ORDER BY s.phase, s.sort_key) AS ddl
-FROM relations r JOIN statements s ON s.oid = r.oid GROUP BY r.oid, r.nspname, r.relname
+SELECT r.nspname::text, r.relname::text, s.ddl
+FROM relations r JOIN (
+    SELECT oid, string_agg(sql, E'\n' ORDER BY phase, sort_key) AS ddl
+    FROM statements GROUP BY oid
+) s ON s.oid = r.oid
 ORDER BY r.nspname, r.relname

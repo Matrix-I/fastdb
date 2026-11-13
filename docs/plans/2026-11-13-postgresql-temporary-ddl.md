@@ -221,3 +221,105 @@ against unsafe namespace text replacement. The exact Opus-model requirement
 cannot be fulfilled through the external CLI because automatic approval review
 previously rejected transmitting private source to that external destination.
 The internal reviewer is the safer substitute. This exception will be reported.
+
+
+## SQL strict projection refinement
+
+The edited query's three c.*/r.* CTE projections are expanded to the named
+columns already consumed downstream. This honors sql-strict without changing
+the final schema/table/DDL interface. Existing native replay tests and the new
+fixture verify the expanded fields. No unrelated query or schema is changed.
+The exact pg_class fields are oid, relname, relkind, relpersistence, relowner,
+relacl, relam, relforcerowsecurity, relispartition, reloftype, reloptions,
+relpartbound, relreplident, relrowsecurity and reltablespace. Subsequent CTEs
+also carry nspname, target, object_type and unsupported_reason as applicable.
+
+The native fixture also covers temporary inheritance, partition attachment and
+extended statistics/comments because those existing source branches format
+namespace references. Its replay assertions insert through the inherited and
+partitioned parents and read the resulting child rows. This extends the same
+cross-session acceptance rather than introducing a new feature surface.
+
+## Measured aggregate refinement
+
+The initial 300-table plan estimated 429,766 join rows for 2,463 statements,
+which crossed the server's JIT optimization threshold. Source generation spent
+4,650.034 ms in JIT and took 4,704.057 ms overall. Aggregating statement source
+by OID before joining relation names bounds the join to one source per relation:
+
+```sql
+SELECT r.nspname::text, r.relname::text, s.ddl
+FROM relations r JOIN (
+    SELECT oid, string_agg(sql, E'\n' ORDER BY phase, sort_key) AS ddl
+    FROM statements GROUP BY oid
+) s ON s.oid = r.oid
+ORDER BY r.nspname, r.relname
+```
+
+The same-fixture candidate took 377.587 ms, with 338.389 ms in JIT. Server JIT
+settings remain unchanged. Both returned 303 relations. A separate same-snapshot
+EXCEPT ALL comparison in both directions returned zero source differences on
+300 tables, 100,000 user rows and temporary serial/index source. Apply this
+small final aggregation refinement, rerun native replay suites and review the
+whole query. Measurements describe this PostgreSQL 16.15 fixture only.
+
+## Public driver entry-point verification
+
+Also add this fixture to crates/db-wire/tests/postgres_test.rs, using its
+existing test_config and CATALOG_TEST_LOCK. This proves source reaches the
+normal DatabaseDriver API for temporary objects visible to that connection.
+SQL-tab temporary objects retain their existing separate-session visibility.
+
+```rust
+#[test]
+fn postgres_driver_reports_visible_temporary_structure_with_commit_warning() {
+    let Some(config) = test_config() else { return };
+    let _catalog_guard = CATALOG_TEST_LOCK.lock().unwrap();
+    db_wire::get_runtime().block_on(async {
+        let driver = PostgresDriver::new(config);
+        let table = format!("fastdb_temp_{}", uuid::Uuid::new_v4().simple());
+        driver.execute_query(&format!("CREATE TEMP TABLE {table}(id integer PRIMARY KEY) ON COMMIT DELETE ROWS")).await.unwrap();
+        let outcome = driver.list_table_details().await;
+        driver.execute_query(&format!("DROP TABLE {table}")).await.unwrap();
+        let details = outcome.unwrap();
+        let (_, _, details) = details.iter().find(|(_, name, _)| name == &table).unwrap();
+        assert_eq!(details.persistence.as_deref(), Some("Temporary"));
+        let source = details.ddl.as_deref().unwrap();
+        assert!(source.contains(&format!("CREATE TEMPORARY TABLE pg_temp.{table}")), "{source}");
+        assert!(source.contains("ON COMMIT is unknown"), "{source}");
+    });
+}
+```
+
+
+## Paused checkpoint: final verification is not green
+
+This is an incomplete local checkpoint requested by the user, not acceptance.
+The initial full native workspace test, clippy, build and startup smoke passed.
+After adding the public fixture's overall timeout, final clippy passed but
+`FASTDB_TEST_PG_PORT=55449 FASTDB_TEST_MYSQL_PORT=55448 FASTDB_REQUIRE_DB_TESTS=1 cargo test --workspace --locked -- --test-threads=1`
+failed: db-wire library tests had 128 passes and two failures. The temporary
+source fixture hit its unchanged five-second statement timeout; the SSH/MySQL
+fixture received connection EOF. The owned MySQL container was subsequently
+observed stopped with exit 137 (OOM flag false); its exact termination cause
+remains unknown. The final build did not run after the failed test command.
+Logs: /tmp/fastdb-temp-ddl-clippy-final.log and
+/tmp/fastdb-temp-ddl-workspace-native-final.log.
+
+The aggregation refinement alone is not reliably sufficient: a later
+300-table profile estimated cost 1,148,874 and took 4,709 ms, mostly JIT.
+A candidate replacing the information_schema.tables LEFT JOIN visibility
+check with EXISTS took 450 ms at estimated cost 363,116 on that same snapshot.
+It is only an experiment in /tmp/fastdb-temp-ddl-exists.sql, not applied source.
+The profiler and evidence are /tmp/fastdb-temp-ddl-profile.py and
+/tmp/fastdb-temp-ddl-exists-profile.log. Preserve the information_schema
+visibility rules; do not weaken deadlines or change shared session JIT settings.
+
+Resume with candidate equivalence/permissions verification and a durable query
+performance fix, restore and check the isolated MySQL fixture, then rerun fmt,
+workspace clippy, native workspace tests and build. Complete independent final
+code review only after gates pass. Final code review remains pending; earlier
+internal reviews cover the plan/refinements only. The exact Opus review model
+was unavailable through the approved route: automatic approval rejected the
+external CLI because it could transmit private source externally. Do not retry
+that route. Manual GUI acceptance remains pending with the user. No push.
