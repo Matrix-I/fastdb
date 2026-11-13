@@ -1,6 +1,7 @@
 mod columns;
 mod constraints;
 mod ddl;
+mod ddl_document;
 mod foreignkeys;
 pub(super) mod grid;
 mod header;

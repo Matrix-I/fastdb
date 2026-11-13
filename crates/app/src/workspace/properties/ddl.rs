@@ -2,6 +2,8 @@ use super::model::TableProperties;
 use crate::workspace::Workspace;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use sql_intel::TokenKind;
+use std::ops::Range;
 use ui_core::theme::Theme;
 impl TableProperties {
     pub(in crate::workspace) fn render_ddl_toolbar(
@@ -75,70 +77,135 @@ impl TableProperties {
     }
 
     pub(in crate::workspace) fn render_ddl(&self, theme: &Theme, selected: bool) -> AnyElement {
-        let ddl_code = self.ddl.clone();
-        // Reserve the intrinsic width of the monospaced lines inside the shared viewport.
-        let code_width = ddl_code
-            .lines()
-            .map(|line| line.chars().count())
-            .max()
-            .unwrap_or(0) as f32
-            * 7.3
-            + 76.0;
-
-        let ddl_view = div()
+        // Native DDL is prepared by the background loader. An unprepared preview
+        // retains plain rendering while that request is pending.
+        let characters = self.ddl_document.as_ref().map_or_else(
+            || {
+                self.ddl
+                    .lines()
+                    .map(|line| line.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            },
+            |document| document.max_chars,
+        );
+        let lines: Box<dyn Iterator<Item = AnyElement> + '_> = match &self.ddl_document {
+            Some(document) => Box::new(document.lines.iter().enumerate().map(|(idx, line)| {
+                render_line(
+                    idx,
+                    &self.ddl[line.range.clone()],
+                    &line.highlights,
+                    selected,
+                    theme,
+                )
+            })),
+            None => Box::new(
+                self.ddl
+                    .lines()
+                    .enumerate()
+                    .map(|(idx, text)| render_line(idx, text, &[], selected, theme)),
+            ),
+        };
+        const MONO_CHARACTER_WIDTH: f32 = 7.3;
+        const GUTTER_AND_PADDING: f32 = 76.0;
+        div()
             .flex()
             .flex_col()
             .flex_shrink_0()
             .min_w_full()
-            .w(px(code_width))
+            .w(px(
+                characters as f32 * MONO_CHARACTER_WIDTH + GUTTER_AND_PADDING
+            ))
             .whitespace_nowrap()
             .bg(theme.bg_editor)
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .p_3()
-                    .text_size(px(12.0))
-                    .line_height(px(18.0))
-                    .font_family(".AppleSystemUIFontMonospaced, Menlo, monospace")
-                    .text_color(rgb(0x9cdcfe))
-                    .id("props-ddl-code-scroll")
-                    .child(div().flex().flex_col().gap_0p5().children(
-                        ddl_code.lines().enumerate().map(|(idx, line)| {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .w(px(28.0))
-                                        .flex_shrink_0()
-                                        .text_color(theme.text_muted)
-                                        .text_size(px(11.0))
-                                        .child(format!("{}", idx + 1)),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(if line.starts_with("--") {
-                                            theme.text_muted
-                                        } else if line.starts_with("CREATE")
-                                            || line.starts_with(");")
-                                        {
-                                            rgb(0xc586c0)
-                                        } else if line.contains("CONSTRAINT")
-                                            || line.contains("PRIMARY KEY")
-                                        {
-                                            rgb(0x4ec9b0)
-                                        } else {
-                                            rgb(0x9cdcfe)
-                                        })
-                                        .when(selected, |line| line.bg(theme.bg_surface_selected))
-                                        .child(line.to_string()),
-                                )
-                        }),
-                    )),
-            );
+            .text_size(px(12.0))
+            .line_height(px(18.0))
+            .font_family(".AppleSystemUIFontMonospaced, Menlo, monospace")
+            .text_color(theme.text_primary)
+            .id("props-ddl-code-scroll")
+            .py_2()
+            .children(lines)
+            .into_any_element()
+    }
+}
 
-        ddl_view.into_any_element()
+fn render_line(
+    index: usize,
+    text: &str,
+    highlights: &[(Range<usize>, TokenKind)],
+    selected: bool,
+    theme: &Theme,
+) -> AnyElement {
+    let code = StyledText::new(text.to_owned()).with_highlights(
+        highlights
+            .iter()
+            .map(|(range, kind)| (range.clone(), token_style(*kind, theme))),
+    );
+    div()
+        .flex()
+        .h(px(18.0))
+        .flex_shrink_0()
+        .min_w_full()
+        .child(
+            div()
+                .w(px(36.0))
+                .h_full()
+                .flex_shrink_0()
+                .pr_2()
+                .text_right()
+                .border_r_1()
+                .border_color(theme.border)
+                .text_color(theme.text_muted)
+                .child((index + 1).to_string()),
+        )
+        .child(
+            div()
+                .pl_3()
+                .when(selected, |line| line.bg(theme.bg_surface_selected))
+                .child(code),
+        )
+        .into_any_element()
+}
+
+fn token_style(kind: TokenKind, theme: &Theme) -> HighlightStyle {
+    let color = match kind {
+        TokenKind::Keyword => theme.text_accent,
+        TokenKind::Comment | TokenKind::StringLiteral => theme.text_success,
+        TokenKind::NumberLiteral => theme.text_warning,
+        TokenKind::Identifier => theme.text_primary,
+        _ => theme.text_secondary,
+    };
+    HighlightStyle {
+        color: Some(color.into()),
+        font_weight: (kind == TokenKind::Keyword).then_some(FontWeight::SEMIBOLD),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_style;
+    use sql_intel::TokenKind;
+    use ui_core::theme::Theme;
+    #[test]
+    fn ddl_token_colors_follow_the_active_theme() {
+        for theme in [Theme::dark(), Theme::light()] {
+            assert_eq!(
+                token_style(TokenKind::Keyword, &theme).color,
+                Some(theme.text_accent.into())
+            );
+            assert_eq!(
+                token_style(TokenKind::Comment, &theme).color,
+                Some(theme.text_success.into())
+            );
+            assert_eq!(
+                token_style(TokenKind::StringLiteral, &theme).color,
+                Some(theme.text_success.into())
+            );
+            assert_eq!(
+                token_style(TokenKind::NumberLiteral, &theme).color,
+                Some(theme.text_warning.into())
+            );
+        }
     }
 }

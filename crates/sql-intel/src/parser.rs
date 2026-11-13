@@ -66,6 +66,24 @@ impl SqlParser {
             let end = node.end_byte();
 
             let token_kind = match kind {
+                _ if kind.starts_with("keyword_") => Some(TokenKind::Keyword),
+                "marginalia" => Some(TokenKind::Comment),
+                "literal" => {
+                    let text = &source[start..end];
+                    if matches!(
+                        text.to_ascii_uppercase().as_str(),
+                        "TRUE" | "FALSE" | "NULL"
+                    ) {
+                        Some(TokenKind::Keyword)
+                    } else if text
+                        .starts_with(|c: char| c.is_ascii_digit() || matches!(c, '+' | '-' | '.'))
+                    {
+                        Some(TokenKind::NumberLiteral)
+                    } else {
+                        Some(TokenKind::StringLiteral)
+                    }
+                }
+
                 "keyword" | "select" | "from" | "where" | "insert" | "update" | "delete"
                 | "create" | "table" | "join" | "left" | "right" | "inner" | "outer" | "on"
                 | "group" | "by" | "order" | "limit" | "having" | "as" | "distinct" | "into"
@@ -260,5 +278,24 @@ mod tests {
         let sql = "SELECT id, 'hello' FROM accounts WHERE id = 10;";
         let spans = parser.highlight(sql);
         assert!(!spans.is_empty());
+    }
+    #[test]
+    fn highlighting_recognizes_native_grammar_keywords_literals_and_comments() {
+        let source = "CREATE TABLE t (n INTEGER DEFAULT 42, s TEXT DEFAULT 'value'); /* note */";
+        let mut parser = SqlParser::new().unwrap();
+        let spans = parser.highlight(source);
+        for (text, kind) in [
+            ("CREATE", TokenKind::Keyword),
+            ("42", TokenKind::NumberLiteral),
+            ("'value'", TokenKind::StringLiteral),
+            ("/* note */", TokenKind::Comment),
+        ] {
+            assert!(
+                spans.iter().any(
+                    |span| &source[span.start_byte..span.end_byte] == text && span.kind == kind
+                ),
+                "missing {text}"
+            );
+        }
     }
 }

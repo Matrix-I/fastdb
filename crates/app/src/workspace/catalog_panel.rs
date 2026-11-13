@@ -57,10 +57,14 @@ impl Workspace {
     }
     pub(super) fn ensure_relation_ddl(&mut self, index: usize, cx: &mut Context<Self>) {
         let session = self.tab_session(index);
-        if !matches!(session.kind, DbDriverKind::Sqlite | DbDriverKind::MySql) {
+        if !matches!(
+            session.kind,
+            DbDriverKind::Postgres | DbDriverKind::Sqlite | DbDriverKind::MySql
+        ) {
             return;
         }
         let generation = session.metadata_generation;
+        let kind = session.kind;
         let Some(driver) = session.driver.clone() else {
             return;
         };
@@ -90,6 +94,9 @@ impl Workspace {
         let expected = driver.clone();
         cx.spawn(async move |this, cx| {
             let result = db_wire::run_on_shared_runtime(async move {
+                if kind == DbDriverKind::Postgres {
+                    return Ok(Arc::new((*model).clone().prepare_ddl()));
+                }
                 let ddl = tokio::time::timeout(
                     std::time::Duration::from_secs(20),
                     driver.load_relation_ddl(&schema, &table),
@@ -103,7 +110,8 @@ impl Workspace {
                 Ok(Arc::new(
                     (*model)
                         .clone()
-                        .with_metadata(Some(details), metadata_error),
+                        .with_metadata(Some(details), metadata_error)
+                        .prepare_ddl(),
                 ))
             })
             .await;
