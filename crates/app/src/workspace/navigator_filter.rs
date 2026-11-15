@@ -56,6 +56,12 @@ impl Default for NavigatorFilter {
     }
 }
 
+impl NavigatorFilter {
+    fn accepts_keyboard_input(&self, session_monitor_open: bool) -> bool {
+        !session_monitor_open && (self.menu_open || self.field_focused)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum NavigatorFilterMode {
     Connections,
@@ -327,6 +333,9 @@ impl Workspace {
 
     pub(super) fn navigator_filter_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool {
         let filter = &mut self.navigator_filter;
+        if !filter.accepts_keyboard_input(self.session_monitor.is_some()) {
+            return false;
+        }
         if filter.menu_open {
             match key.key.as_str() {
                 "escape" => filter.menu_open = false,
@@ -346,9 +355,6 @@ impl Workspace {
             }
             cx.notify();
             return true;
-        }
-        if !filter.field_focused {
-            return false;
         }
         if key.key == "escape" {
             if !ui_editor::line_input::clear_selection(
@@ -771,8 +777,22 @@ fn search_empty_message(query: &str, message: &str) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{
-        NavigatorFilterMode, active_database_name, matches_text, relation_snapshot_is_current,
+        NavigatorFilter, NavigatorFilterMode, active_database_name, matches_text,
+        relation_snapshot_is_current,
     };
+
+    #[test]
+    fn session_monitor_takes_keyboard_input_from_the_navigator_filter() {
+        for (field_focused, menu_open) in [(true, false), (false, true)] {
+            let filter = NavigatorFilter {
+                field_focused,
+                menu_open,
+                ..NavigatorFilter::default()
+            };
+            assert!(filter.accepts_keyboard_input(false));
+            assert!(!filter.accepts_keyboard_input(true));
+        }
+    }
 
     #[test]
     fn filter_modes_have_distinct_labels_and_tooltips() {

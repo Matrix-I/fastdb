@@ -7,6 +7,7 @@ mod objects;
 mod query_edit;
 mod read_only;
 mod script;
+pub mod session_monitor;
 mod transfer;
 
 use anyhow::{Context, Result};

@@ -112,7 +112,10 @@ impl Workspace {
             return;
         }
 
-        if self.drop_object_modal.is_some() && !self.updates.read(cx).is_open() {
+        if self.session_monitor.is_none()
+            && self.drop_object_modal.is_some()
+            && !self.updates.read(cx).is_open()
+        {
             self.drop_object_key(&event.keystroke, cx);
             return;
         }
@@ -143,6 +146,25 @@ impl Workspace {
             return;
         }
 
+        if self.session_monitor.is_some() {
+            if self.updates.read(cx).is_open() {
+                if event.keystroke.key == "escape" {
+                    self.updates.update(cx, |updates, cx| updates.dismiss(cx));
+                }
+            } else if self
+                .column_pending
+                .as_ref()
+                .is_some_and(|pending| !pending.awaiting_save)
+            {
+                if event.keystroke.key == "escape" {
+                    self.column_pending = None;
+                    cx.notify();
+                }
+            } else {
+                self.session_monitor_key(&event.keystroke, cx);
+            }
+            return;
+        }
         if self.object_browser.is_some()
             && !self.updates.read(cx).is_open()
             && self.column_pending.is_none()

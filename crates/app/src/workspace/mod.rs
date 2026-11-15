@@ -68,6 +68,7 @@ mod script_lines;
 mod script_search;
 mod script_tabs;
 mod script_tools;
+mod session_monitor;
 mod snippet_modal;
 mod tab_state;
 use operations::{OperationKind, Operations};
@@ -212,6 +213,7 @@ pub struct Workspace {
     pub(super) allow_quit: bool,
     /// "Choose SQL script" dialog, if open
     object_browser: Option<object_browser::ObjectBrowser>,
+    session_monitor: Option<session_monitor::SessionMonitorDialog>,
     object_search: Option<object_search::ObjectSearch>,
     definition_search: Option<definition_search::DefinitionSearch>,
     drop_object_modal: Option<drop_object_modal::DropObjectModal>,
@@ -304,6 +306,7 @@ impl Workspace {
             clipboard_request_id: 0,
             allow_quit: false,
             object_browser: None,
+            session_monitor: None,
             object_search: None,
             definition_search: None,
             drop_object_modal: None,
@@ -428,7 +431,10 @@ impl Render for Workspace {
         let theme = &self.theme;
         let panes = self.panes.get_or_insert_with(|| Panes::new(cx)).clone();
 
-        if self.form.show_connection_modal || self.transaction_log.is_some() {
+        if self.form.show_connection_modal
+            || self.transaction_log.is_some()
+            || self.session_monitor.is_some()
+        {
             window.focus(&self.focus_handle);
         }
 
@@ -642,6 +648,9 @@ impl Render for Workspace {
         }
         if self.result_search.is_some() {
             root = root.child(self.render_result_search(cx));
+        }
+        if self.session_monitor.is_some() {
+            root = root.child(self.render_session_monitor(cx));
         }
         if self.updates.read(cx).is_open() {
             root = root.child(self.updates.clone());
