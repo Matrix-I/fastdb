@@ -695,3 +695,14 @@ live verification remains deferred to Linux by user request.
 ```bash
 FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --test postgres_test value_edits_roundtrip
 ```
+
+## PostgreSQL session monitor
+
+Run `FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --locked --test session_monitor_test`
+against an isolated PostgreSQL fixture. The test account needs permission to create a
+login role and grant `pg_read_all_stats`. The suite exercises a live three-session
+lock chain, stale identity and statement guards, read-only profiles, restricted
+visibility and native signal permissions. It checks that cancel interrupts the
+selected query and terminate disconnects the selected session, with a bystander
+remaining responsive. Desktop verification is tracked in the
+[P2-03 plan](plans/2026-11-14-p2-03-session-monitor.md).
