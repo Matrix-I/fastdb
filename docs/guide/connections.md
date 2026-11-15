@@ -45,6 +45,30 @@ Set **PostgreSQL application name** to identify FastDB sessions in
 can contain up to 63 printable ASCII bytes. It applies to new connections,
 including isolated SQL tab sessions. An empty field leaves the server default.
 
+## PostgreSQL Session Monitor
+
+Right-click a connected PostgreSQL profile and choose **Session Monitor…**. The
+monitor opens a dedicated connection with the profile's credentials and transport.
+It shows client sessions across the server, with their database, role, state,
+active query, elapsed time and wait event. Select a session to follow its
+blocking chain. The snapshot shows up to 256 sessions and prioritizes lock waiters.
+A blocker can be outside the displayed list or be a prepared transaction. The
+monitor labels chains that exceed its display limits.
+PostgreSQL can restrict activity details for sessions owned by other roles.
+The monitor displays up to 4,096 characters of the active query, subject to the
+server's activity tracking limit.
+
+Use **Refresh** to read current activity. **Cancel query…** requests cancellation
+of the selected statement. **Terminate session…** requests disconnection and
+rolls back uncommitted work if the session exits. Both actions require explicit
+confirmation. FastDB checks the saved backend identity and, for cancellation,
+the active statement start before signaling. PostgreSQL signals by PID, so a
+statement can change between the check and signal delivery. The monitor reports
+whether PostgreSQL accepted the signal and refreshes the list automatically.
+Read-only profiles can inspect sessions. Signaling requires a writable profile
+and PostgreSQL permission on the selected backend. Reopen the monitor if its
+connection is lost or the originating profile reconnects.
+
 ## Connection timeout
 
 Network profiles accept a timeout from 1 to 120 seconds. An empty field and
