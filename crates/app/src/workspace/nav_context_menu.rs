@@ -110,6 +110,7 @@ enum NavMenuAction {
     },
     Refresh,
     OpenSqlEditor,
+    SessionMonitor,
 
     // Schema Actions
     OpenData {
@@ -283,6 +284,17 @@ impl Workspace {
 
         match menu.target {
             NavContextTarget::Connection { .. } => {
+                if is_connected && self.connections.session(&conn_id).kind == DbDriverKind::Postgres
+                {
+                    panel = panel.child(item(
+                        "nav-menu-session-monitor",
+                        "icons/database.svg",
+                        "Session Monitor…",
+                        self.can_open_session_monitor(&conn_id),
+                        NavMenuAction::SessionMonitor,
+                        cx,
+                    ));
+                }
                 panel = panel
                     .child(item(
                         "nav-menu-sql-editor",
@@ -634,6 +646,7 @@ impl Workspace {
         match action {
             NavMenuAction::EditConnection => self.edit_saved_connection(Some(conn_id)),
             NavMenuAction::Connect => self.connect_saved_by_id(conn_id, cx),
+            NavMenuAction::SessionMonitor => self.open_session_monitor(conn_id, cx),
             NavMenuAction::Disconnect => self.disconnect_by_id(conn_id, cx),
             NavMenuAction::Delete => self.delete_saved_connection(conn_id, cx),
             NavMenuAction::DeleteDatabase => self.open_drop_database(conn_id, cx),
