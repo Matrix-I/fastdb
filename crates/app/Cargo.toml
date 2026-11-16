@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 gpui.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "process"] }
 flume.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
