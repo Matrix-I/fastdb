@@ -18,6 +18,19 @@ Connections has its own left panel with its heading, search and tree. Document t
 - Right-click the connection, Databases, a database, Schemas, a schema such as `public`, Tables, or a table and choose **Refresh** to reload the owning connection’s metadata. The database menu opens **SQL Editor**, and writable schemas offer the existing **Create Table…** and **Create View…** dialogs.
 - On writable PostgreSQL connections, **Delete…** on a visible schema or database opens a confirmation dialog and a SQL preview. Schema deletion starts in RESTRICT mode. Click the **CASCADE** checkbox or its row to include contained objects and any dependencies PostgreSQL resolves, including dependencies outside the schema. Empty schemas without a navigator row can be managed from SQL Editor. For database deletion, type the exact database name. FastDB opens a maintenance connection and then disconnects the target profile, which stays saved. Other active sessions may block the operation. If PostgreSQL refuses the deletion after FastDB disconnects, reconnect the retained profile to continue using the database.
 
+## Backup, restore and maintenance
+
+- Right-click a connected PostgreSQL, MySQL or file-based SQLite connection and choose **Backup Database…**. PostgreSQL writes a custom archive, MySQL writes a SQL dump, and SQLite writes a native database image. Use **Backup Table…** or **Backup View…** on a relation for a scoped backup. SQLite supports ordinary tables and views. A scoped backup may require dependencies to be restored separately.
+- FastDB searches for native clients automatically. Use **Client Directory…** to select a particular installation. Choose an output path that does not already exist. The dialog shows the operation status and recent native output. **Cancel Job** stops the client.
+- Choose **Restore Database…** on a writable profile. For PostgreSQL or MySQL enter the name of a separately created, empty database on that server. For SQLite choose a new file or browse to an existing empty SQLite file. Use a trusted backup and reserve the target during the operation. PostgreSQL stages a restore script privately, then locks, checks and restores the target in one transaction. It skips original owners and grants. For MySQL use a profile whose grants are confined to the target schema. MySQL locks and rechecks the target before running the dump, and DDL can remain applied after an error or cancellation.
+- **Database Maintenance…** offers Vacuum, Analyze and Reindex on PostgreSQL and SQLite. MySQL **Table Maintenance…** offers Analyze Table and Optimize Table.
+
+For a PostgreSQL archive scoped to a table or view in a custom schema, enter
+that exact schema in **Source schema for scoped archive**. FastDB creates it
+inside the restore transaction after checking the empty target. Types,
+extensions and objects referenced by the selected relation still need to be
+included in a full-database backup when they are required for replay.
+
 ## Table tabs
 - The tab strip scrolls horizontally with a mouse wheel or trackpad and brings newly opened or selected tabs into view.
 - Reopening a table in the same connection and schema selects its existing tab and preserves its results and staged edits.

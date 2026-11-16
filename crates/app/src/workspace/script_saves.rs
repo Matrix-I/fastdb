@@ -314,10 +314,11 @@ impl Workspace {
         }
     }
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
-        if self
-            .drop_object_modal
-            .as_ref()
-            .is_some_and(|modal| modal.busy)
+        if self.native_backup_running()
+            || self
+                .drop_object_modal
+                .as_ref()
+                .is_some_and(|modal| modal.busy)
             || self
                 .session_monitor
                 .as_ref()
@@ -326,6 +327,7 @@ impl Workspace {
             return;
         }
         self.drop_object_modal = None;
+        self.native_backup_modal = None;
         self.object_browser = None;
         self.session_monitor = None;
         self.object_search = None;

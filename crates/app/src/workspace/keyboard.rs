@@ -119,6 +119,10 @@ impl Workspace {
             self.drop_object_key(&event.keystroke, cx);
             return;
         }
+        if self.native_backup_modal.is_some() && !self.updates.read(cx).is_open() {
+            self.native_backup_key(&event.keystroke, cx);
+            return;
+        }
         if self.navigator_filter_key(&event.keystroke, cx) {
             return;
         }

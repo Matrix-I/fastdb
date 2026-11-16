@@ -4,6 +4,7 @@ use tracing::info;
 
 mod assets;
 mod benchmark;
+mod native_backup;
 mod sql_log;
 pub mod updater;
 mod workspace;
