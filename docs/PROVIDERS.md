@@ -8,6 +8,54 @@ coming**, including Test/Connect for saved profiles. MySQL and SQLite remain
 available. The driver setup and test protocols below remain useful for future
 provider validation; they do not override this desktop availability policy.
 
+## Native backup clients
+
+| Provider | Executables |
+|---|---|
+| PostgreSQL | `pg_dump`, `pg_restore`, `psql`, `vacuumdb`, `reindexdb` |
+| MySQL | Oracle MySQL `mysqldump` and `mysql` |
+| SQLite | `sqlite3` |
+
+FastDB searches absolute PATH entries and conventional installation directories.
+Choose **Client Directory…** for an installation outside those locations or to
+match the server version. Native tools use the profile's writable setting and
+connection transport. Profiles with PKCS#12 client identities and MySQL profiles
+combining SSH with TLS are currently unavailable for these tools.
+
+Scoped PostgreSQL backups require a `pg_dump` client with
+`--table-and-children` support so selecting a partitioned table includes rows
+from its child partitions. Choose a PostgreSQL 16 or newer client directory
+when an older `pg_dump` is first on PATH.
+
+Scoped SQLite backups use `sqlite3` 3.37 or newer for catalog inspection.
+FastDB takes a private native snapshot, removes out-of-scope objects and
+compacts the selected image before publishing it. The operation temporarily
+needs space for the source database snapshot and compaction. Use a full-image
+backup for virtual tables and their module-managed storage.
+
+For MySQL restore, connect a profile whose account has a direct
+`ALL PRIVILEGES` grant on the exact target schema. FastDB rejects global,
+role-based, grant-option and other-schema access because native SQL dumps can
+change the selected schema or use qualified names. With `partial_revokes`
+disabled, escape wildcard characters in schema grants, such as `\_` for a
+literal underscore. A profile can connect directly to the empty target.
+Restore only trusted SQL while reserving the target for the job. FastDB holds
+a server advisory lock and rechecks the catalog in the import session.
+
+During restore, FastDB maps the quoted `DEFINER` clauses emitted by
+`mysqldump` in executable comments and CREATE headers to `CURRENT_USER`. Restored views, triggers,
+routines and events therefore run with the restore account's privileges when
+they use definer security. Review that account's target-schema permissions.
+
+MySQL's server settings still apply when restoring stored programs. A server
+with binary logging enabled may require administrative approval of stored
+function or trigger creation even when the restore account has all schema
+privileges. FastDB reports that native permission failure.
+
+MySQL single-transaction dumps provide a consistent snapshot for transactional
+tables. Keep schema changes and writes to nontransactional tables paused while
+taking the dump.
+
 ## PostgreSQL metadata
 
 Properties loads PostgreSQL catalog details in the background on connection and

@@ -111,6 +111,7 @@ enum NavMenuAction {
     Refresh,
     OpenSqlEditor,
     SessionMonitor,
+    NativeBackup(super::native_backup_modal::Mode),
 
     // Schema Actions
     OpenData {
@@ -339,6 +340,38 @@ impl Workspace {
                         NavMenuAction::Delete,
                         cx,
                     ));
+                if self.native_backup_available(&conn_id, false) {
+                    use super::native_backup_modal::Mode;
+                    let writable = self.native_backup_available(&conn_id, true);
+                    panel = panel
+                        .child(separator())
+                        .child(item(
+                            "native-backup-db",
+                            "icons/table.svg",
+                            "Backup Database…",
+                            true,
+                            NavMenuAction::NativeBackup(Mode::Backup(Vec::new())),
+                            cx,
+                        ))
+                        .child(item(
+                            "native-restore-db",
+                            "icons/table.svg",
+                            "Restore Database…",
+                            writable,
+                            NavMenuAction::NativeBackup(Mode::Restore),
+                            cx,
+                        ));
+                    if self.connections.session(&conn_id).kind != DbDriverKind::MySql {
+                        panel = panel.child(item(
+                            "native-maintain-db",
+                            "icons/edit.svg",
+                            "Database Maintenance…",
+                            writable,
+                            NavMenuAction::NativeBackup(Mode::Maintain(None)),
+                            cx,
+                        ));
+                    }
+                }
             }
             NavContextTarget::Databases { .. } | NavContextTarget::Schemas { .. } => {
                 has_actions = false;
@@ -403,6 +436,31 @@ impl Workspace {
                 }
             }
             NavContextTarget::Table { schema, table, .. } => {
+                if self.native_backup_available(&conn_id, false) {
+                    use super::native_backup_modal::Mode;
+                    let kind = self.connections.session(&conn_id).kind;
+                    panel = panel.child(item(
+                        "native-backup-table",
+                        "icons/table.svg",
+                        "Backup Table…",
+                        true,
+                        NavMenuAction::NativeBackup(Mode::Backup(vec![(
+                            schema.clone(),
+                            table.clone(),
+                        )])),
+                        cx,
+                    ));
+                    if kind == DbDriverKind::MySql {
+                        panel = panel.child(item(
+                            "native-maintain-table",
+                            "icons/edit.svg",
+                            "Table Maintenance…",
+                            self.native_backup_available(&conn_id, true),
+                            NavMenuAction::NativeBackup(Mode::Maintain(Some(table.clone()))),
+                            cx,
+                        ));
+                    }
+                }
                 panel = panel
                     .child(item(
                         "nav-menu-table-open",
@@ -482,6 +540,18 @@ impl Workspace {
                     ));
             }
             NavContextTarget::View { schema, view, .. } => {
+                if self.native_backup_available(&conn_id, false) {
+                    panel = panel.child(item(
+                        "native-backup-view",
+                        "icons/table.svg",
+                        "Backup View…",
+                        true,
+                        NavMenuAction::NativeBackup(super::native_backup_modal::Mode::Backup(
+                            vec![(schema.clone(), view.clone())],
+                        )),
+                        cx,
+                    ));
+                }
                 panel = panel
                     .child(item(
                         "nav-menu-view-open",
@@ -659,6 +729,7 @@ impl Workspace {
             }
             // Opening the script switches to its connection
             NavMenuAction::OpenSqlEditor => self.open_sql_script(Some(conn_id), cx),
+            NavMenuAction::NativeBackup(mode) => self.open_native_backup(conn_id, mode, cx),
 
             NavMenuAction::OpenData { schema, table } => {
                 self.query_table(conn_id, &schema, &table, cx);
