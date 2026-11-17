@@ -28,8 +28,8 @@ Exit codes: 0 pass, 1 regression/budget failure, 2 invalid/incomplete run. A rep
 is still written for threshold failures. Logs are saved alongside the report.
 Use `--runs 3` for a shorter check (baseline must use the same run count).
 `--timeout 180` caps each subprocess; tighter phase deadlines also apply (10 s
-startup, 75 s query, 15 s scrolling). The app independently aborts scrolling after
-8 s without progress. No metric can pass by being absent.
+startup, 75 s query, 25 s scrolling). The app independently aborts scrolling after
+8 s without progress. No metric can pass by being absent. The scrolling deadline allows 360 callbacks at the existing 50 ms frame budget, which alone require 18 seconds.
 Do not run benchmarks in parallel. Build time is excluded. The alias builds the
 runner before launching the measured app. For a dedicated host, compile everything
 first and invoke `target/debug/xtask benchmark ...` directly after settling.
