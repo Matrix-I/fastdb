@@ -9,6 +9,7 @@ use ui_editor::SqlEditorView;
 use ui_grid::VirtualDataGrid;
 
 mod about_dialog;
+mod administration;
 mod catalog_panel;
 mod column_editor;
 mod column_menu;
@@ -215,6 +216,7 @@ pub struct Workspace {
     /// "Choose SQL script" dialog, if open
     object_browser: Option<object_browser::ObjectBrowser>,
     session_monitor: Option<session_monitor::SessionMonitorDialog>,
+    administration: Option<administration::AdministrationDialog>,
     object_search: Option<object_search::ObjectSearch>,
     definition_search: Option<definition_search::DefinitionSearch>,
     drop_object_modal: Option<drop_object_modal::DropObjectModal>,
@@ -309,6 +311,7 @@ impl Workspace {
             allow_quit: false,
             object_browser: None,
             session_monitor: None,
+            administration: None,
             object_search: None,
             definition_search: None,
             drop_object_modal: None,
@@ -437,6 +440,7 @@ impl Render for Workspace {
         if self.form.show_connection_modal
             || self.transaction_log.is_some()
             || self.session_monitor.is_some()
+            || self.administration.is_some()
         {
             window.focus(&self.focus_handle);
         }
@@ -657,6 +661,9 @@ impl Render for Workspace {
         }
         if self.session_monitor.is_some() {
             root = root.child(self.render_session_monitor(cx));
+        }
+        if self.administration.is_some() {
+            root = root.child(self.render_administration(window, cx));
         }
         if self.updates.read(cx).is_open() {
             root = root.child(self.updates.clone());

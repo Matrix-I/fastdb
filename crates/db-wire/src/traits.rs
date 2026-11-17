@@ -394,6 +394,28 @@ pub trait DatabaseDriver: Send + Sync {
         anyhow::bail!("Database switching is not supported by this provider")
     }
 
+    fn supports_administration(&self) -> bool {
+        false
+    }
+
+    async fn administration_catalog(
+        &self,
+        _family: crate::administration::AdminFamily,
+        _after: u32,
+    ) -> Result<crate::administration::AdminPage> {
+        anyhow::bail!("Administration is not supported by this provider")
+    }
+
+    /// Explicitly reviewed SQL. Must not be logged or persisted: role statements
+    /// may include credentials. A run-owned channel requests cancellation.
+    async fn execute_administration(
+        &self,
+        _sql: &str,
+        _cancel: flume::Receiver<()>,
+    ) -> Result<crate::administration::AdminOutcome> {
+        anyhow::bail!("Administration is not supported by this provider")
+    }
+
     /// None denotes unsupported discovery, distinct from a successfully empty page.
     async fn list_objects(
         &self,

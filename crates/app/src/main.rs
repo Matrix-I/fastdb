@@ -135,12 +135,26 @@ fn reset_zoom(_: &ResetZoom, cx: &mut App) {
     });
 }
 
+fn protect_postgres_sql_logs(
+    mut filter: tracing_subscriber::EnvFilter,
+) -> tracing_subscriber::EnvFilter {
+    // These transport modules log raw SQL or bound values, including role passwords.
+    for directive in [
+        "tokio_postgres::prepare=off",
+        "tokio_postgres::query=off",
+        "tokio_postgres::simple_query=off",
+    ] {
+        filter = filter.add_directive(directive.parse().expect("static log filter"));
+    }
+    filter
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
+        .with_env_filter(protect_postgres_sql_logs(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        ))
         .init();
 
     info!("Initializing FastDB - Next-Gen Pure Rust Database Client");
@@ -267,4 +281,86 @@ fn main() -> Result<()> {
 
     sql_log.shutdown();
     Ok(())
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    #[test]
+    fn postgres_sql_transport_debug_is_filtered_even_when_explicitly_requested() {
+        let filter = tracing_subscriber::EnvFilter::new(
+            "debug,tokio_postgres::prepare=trace,tokio_postgres::simple_query=trace,tokio_postgres::query=trace",
+        );
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(super::protect_postgres_sql_logs(filter))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(!tracing::enabled!(target: "tokio_postgres::prepare", tracing::Level::DEBUG));
+            assert!(
+                !tracing::enabled!(target: "tokio_postgres::simple_query", tracing::Level::DEBUG)
+            );
+            assert!(!tracing::enabled!(target: "tokio_postgres::query", tracing::Level::DEBUG));
+            assert!(tracing::enabled!(target: "fastdb", tracing::Level::DEBUG));
+        });
+    }
+
+    #[test]
+    fn postgres_administration_query_text_stays_out_of_debug_output() {
+        let Ok(port) = std::env::var("FASTDB_TEST_PG_PORT") else {
+            assert!(std::env::var_os("FASTDB_REQUIRE_DB_TESTS").is_none());
+            eprintln!("skipped: FASTDB_TEST_PG_PORT not set");
+            return;
+        };
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let env = |name| std::env::var(format!("FASTDB_TEST_PG_{name}")).ok();
+        let driver = db_wire::create_driver(db_wire::ConnectionConfig {
+            driver: db_wire::DbDriverKind::Postgres,
+            host: env("HOST").unwrap_or_else(|| "127.0.0.1".into()),
+            port: port.parse().unwrap(),
+            database: env("DATABASE").unwrap_or_else(|| "postgres".into()),
+            user: env("USER").unwrap_or_else(|| "postgres".into()),
+            password: env("PASSWORD"),
+            use_unix_socket: false,
+            ..Default::default()
+        })
+        .unwrap();
+        const SENTINEL: &str = "fastdb_non_secret_transport_test_sentinel";
+        for protected in [false, true] {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = buffer.clone();
+            let filter = tracing_subscriber::EnvFilter::new("debug,tokio_postgres=trace");
+            let filter = if protected {
+                super::protect_postgres_sql_logs(filter)
+            } else {
+                filter
+            };
+            let _logs = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(move || Capture(writer.clone()))
+                .finish()
+                .set_default();
+            let sql = format!("SELECT '{SENTINEL}'");
+            let (_send, cancel) = flume::bounded(1);
+            let result = db_wire::get_runtime()
+                .block_on(driver.execute_administration(&sql, cancel))
+                .unwrap();
+            assert_eq!(result.rows[0][0].as_deref(), Some(SENTINEL));
+            let output = buffer.lock().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&output).contains(SENTINEL),
+                !protected
+            );
+        }
+    }
 }

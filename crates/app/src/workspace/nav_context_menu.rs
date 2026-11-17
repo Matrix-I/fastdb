@@ -111,6 +111,7 @@ enum NavMenuAction {
     Refresh,
     OpenSqlEditor,
     SessionMonitor,
+    Administration,
     NativeBackup(super::native_backup_modal::Mode),
 
     // Schema Actions
@@ -285,6 +286,22 @@ impl Workspace {
 
         match menu.target {
             NavContextTarget::Connection { .. } => {
+                if self
+                    .connections
+                    .session(&conn_id)
+                    .driver
+                    .as_ref()
+                    .is_some_and(|d| d.supports_administration())
+                {
+                    panel = panel.child(item(
+                        "nav-menu-administration",
+                        "icons/database.svg",
+                        "Administration…",
+                        is_connected && !self.operations.is_running(),
+                        NavMenuAction::Administration,
+                        cx,
+                    ));
+                }
                 if is_connected && self.connections.session(&conn_id).kind == DbDriverKind::Postgres
                 {
                     panel = panel.child(item(
@@ -717,6 +734,7 @@ impl Workspace {
             NavMenuAction::EditConnection => self.edit_saved_connection(Some(conn_id)),
             NavMenuAction::Connect => self.connect_saved_by_id(conn_id, cx),
             NavMenuAction::SessionMonitor => self.open_session_monitor(conn_id, cx),
+            NavMenuAction::Administration => self.open_administration(conn_id, cx),
             NavMenuAction::Disconnect => self.disconnect_by_id(conn_id, cx),
             NavMenuAction::Delete => self.delete_saved_connection(conn_id, cx),
             NavMenuAction::DeleteDatabase => self.open_drop_database(conn_id, cx),
