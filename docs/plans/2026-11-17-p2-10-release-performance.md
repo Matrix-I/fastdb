@@ -11,7 +11,7 @@
 
 ## Global constraints
 
-- Preserve the existing release profile, benchmark protocol and thresholds. Use an isolated app profile and a disposable database. Do not record credentials or use Computer Use.
+- Preserve the existing release profile, benchmark protocol and performance thresholds. Use an isolated app profile and a disposable database. Do not record credentials or use Computer Use.
 - Keep measurements independent of builds and identify the metric boundary, revision, platform and provider. Record blocked checks and keep P2-10 open while required evidence is missing.
 
 ## Technical defaults
@@ -37,3 +37,5 @@
 Release app, runner and provider example builds passed. Workspace Clippy passed with unused manifest dependency warnings. The full suite passed 822 tests across 42 suites after granting spill-directory and loopback access. PostgreSQL measurements and plans are published in `benchmarks/measurements/`. The desktop gate failed during scrolling and its viewport changed between processes. Cold startup, same-host comparison and tree rendering remain open. The user subsequently authorized opening a PR. Keep this checkpoint as a draft PR because the release acceptance gate remains open.
 
 Plan review ran twice using the available inherited model because Opus is unavailable. It identified missing cold-launch procedure, baseline comparability and fixture details. The protocol now records those boundaries and a bounded Linux probe. Test-first code-change steps were inapplicable to this measurement-only example, which asserts fixture shape and actual read-back on its normal entry point. The plan was initially uncommitted. The user subsequently authorized the PR, including its required commits. Independent review approved the measurement tooling after correcting the cold-probe deadline and setup endpoint.
+
+A follow-up reproduces and fixes the scrolling capture deadline conflicting with the existing frame budget. X11 now produces complete protocol reports but fails scrolling budgets. Wayland can stall. User authorized cache flush; interactive host authentication is still required.
