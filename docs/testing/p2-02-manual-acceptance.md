@@ -1,7 +1,8 @@
 # P2-02 manual acceptance note
 
-Status is **deferred** at the user's request on 2026-11-16. Run these checks
-later and record the actual result before closing P2-02 in the roadmap.
+Desktop acceptance is **deferred** at the user's request on 2026-11-16.
+The roadmap checkbox tracks implementation and automated validation. Record
+the desktop results here when the manual checks are run.
 
 Record the tested commit, operating system, provider/client versions, tester
 and date. Use disposable source and empty target databases, or SQLite files.
