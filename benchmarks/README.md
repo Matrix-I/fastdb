@@ -28,8 +28,8 @@ Exit codes: 0 pass, 1 regression/budget failure, 2 invalid/incomplete run. A rep
 is still written for threshold failures. Logs are saved alongside the report.
 Use `--runs 3` for a shorter check (baseline must use the same run count).
 `--timeout 180` caps each subprocess; tighter phase deadlines also apply (10 s
-startup, 75 s query, 25 s scrolling). The app independently aborts scrolling after
-8 s without progress. No metric can pass by being absent. The scrolling deadline allows 360 callbacks at the existing 50 ms frame budget, which alone require 18 seconds.
+startup, 75 s query, 35 s scrolling). The app independently aborts scrolling after
+8 s without progress. No metric can pass by being absent. The scrolling deadline allows 360 callbacks at the approved Linux 75 ms frame budget, which alone require 27 seconds.
 Do not run benchmarks in parallel. Build time is excluded. The alias builds the
 runner before launching the measured app. For a dedicated host, compile everything
 first and invoke `target/debug/xtask benchmark ...` directly after settling.
@@ -154,3 +154,31 @@ Manual visual check: keep the benchmark window foreground, confirm the empty
 workspace appears, then the million-row grid, vertical movement and horizontal
 movement. Keep display/power settings unchanged between revisions. A minimized
 or occluded window invalidates the performance comparison even if it exits cleanly.
+
+## Linux release policy
+
+On 2026-11-17 the user approved a separate Linux policy for the Intel i5/UHD
+620 host. `thresholds-linux.json` sets scroll p95 to 75 ms and permits 40% of
+intervals above 50 ms. Startup, memory, query and binary limits and all relative
+regression allowances match `thresholds.json`. The original policy remains the
+macOS measurement policy. Select the Linux policy explicitly for both capture
+and report checking. A report hash binds it to the selected policy.
+
+```sh
+env -u WAYLAND_DISPLAY GPUI_X11_SCALE_FACTOR=1 target/release/xtask benchmark \
+  --runs 3 --timeout 120 --thresholds benchmarks/thresholds-linux.json \
+  --display-id linux-x11-edp1-3072x1728-59.94-scale1 \
+  --output benchmarks/results/linux-baseline.json
+env -u WAYLAND_DISPLAY GPUI_X11_SCALE_FACTOR=1 target/release/xtask benchmark \
+  --runs 3 --timeout 120 --thresholds benchmarks/thresholds-linux.json \
+  --display-id linux-x11-edp1-3072x1728-59.94-scale1 \
+  --output benchmarks/results/linux-candidate.json \
+  --baseline benchmarks/results/linux-baseline.json
+target/release/xtask benchmark-check --thresholds benchmarks/thresholds-linux.json \
+  --report benchmarks/results/linux-candidate.json \
+  --baseline benchmarks/results/linux-baseline.json
+```
+
+A repeat of the same executable establishes reproducibility on this host.
+Future product changes need their own candidate measured against this baseline.
+Historical failures under the original policy retain their original hashes.

@@ -54,9 +54,9 @@ fn phase_timeout(phase: &str) -> Duration {
     Duration::from_secs(match phase {
         "ready" => 5,
         "query_start" => 75,
-        // The policy admits 50 ms/frame. All 360 callbacks already need 18 s
+        // The Linux policy admits 75 ms/frame. All 360 callbacks need 27 s
         // at that budget, before event delivery and occasional slow frames.
-        "scroll_start" => 25,
+        "scroll_start" => 35,
         _ => 10,
     })
 }
@@ -362,10 +362,17 @@ mod tests {
 
     #[test]
     fn scrolling_deadline_allows_frames_at_the_absolute_budget() {
-        // 60 warmup callbacks plus 300 measured callbacks can all take 50 ms
-        // while still meeting the scrolling policy. Allow event delivery too.
-        let admitted_duration = Duration::from_millis((60 + 300) * 50);
-        assert!(phase_timeout("scroll_start") > admitted_duration);
+        for source in [
+            include_str!("../../benchmarks/thresholds.json"),
+            include_str!("../../benchmarks/thresholds-linux.json"),
+        ] {
+            let policy: crate::policy::Policy = serde_json::from_str(source).unwrap();
+            policy.validate().unwrap();
+            let admitted_duration = Duration::from_secs_f64(
+                (60 + 300) as f64 * policy.metrics["scroll_p95_ms"].max / 1000.0,
+            );
+            assert!(phase_timeout("scroll_start") > admitted_duration);
+        }
     }
 
     #[test]
