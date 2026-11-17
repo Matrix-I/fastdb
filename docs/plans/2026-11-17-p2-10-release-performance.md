@@ -18,7 +18,7 @@
 
 - Use the protocol-v1 runner for warm startup, RSS, the million-row workload and scroll intervals. Compare `--baseline` on the same host if a matching report exists. Otherwise use absolute budgets and record relative regression as unverified.
 - Run `cargo run --offline --locked --release -p db-wire --example postgres_performance` on loopback. The fixture has 20 schemas with 100 tables and five columns each. `ping`, `list_tables` and the five parallel metadata readers measure the driver boundary. A 20,000-row query returns variable widths and NULLs with 20,000-byte text/binary cells. After one warmup, retain five samples and validate shape and values. Run a separate capacity probe for 300,000-byte text/binary cells. Exact setup, execution and cleanup are documented in `benchmarks/postgres/README.md`. This does not measure tree rendering or the value viewer.
-- Measure cold startup as a separate first launch after reboot on a release host. Stage the app and profile and record the binary hash before reboot. Use a bounded launch-to-`ready` probe from the performance runbook. Protocol v1 discards its first run and can warm the executable during staging.
+- Measure cold startup separately after the user-approved Linux system cache eviction procedure. Stage the app and profile and record the binary hash before eviction. Use a bounded launch-to-`ready` probe from the performance runbook. Protocol v1 discards its first run and can warm the executable during staging.
 
 ## Risks & rollback
 
@@ -27,18 +27,18 @@
 
 ## Release evidence
 
-- [ ] Build with `cargo build --offline --locked --release -p fastdb-app -p xtask` and run `target/release/xtask benchmark` with the current display ID and report path. Validate the report with `target/release/xtask benchmark-check` and retain report/logs. Run `cargo test --offline --locked -p xtask` for the checker.
+- [x] Build with `cargo build --offline --locked --release -p fastdb-app -p xtask` and run `target/release/xtask benchmark` with the current display ID and report path. Validate the report with `target/release/xtask benchmark-check` and retain report/logs. Run `cargo test --offline --locked -p xtask` for the checker.
 - [x] Measure connection and first batch, catalog enumeration and mixed-width/LOB read-back using FastDB's PostgreSQL driver. Keep `benchmarks/results/v0.2.0-postgres.json` and capture query plans for the non-trivial workload queries in `benchmarks/results/v0.2.0-postgres-plans.txt`. Confirm the report contains five valid samples per case.
-- [ ] Capture one first-frame measurement after an OS reboot using the built candidate and a clean profile on a release host. Record the cache procedure and keep this result separate from protocol-v1's warm runs.
+- [x] Capture a separate first-frame measurement after user-confirmed Linux system cache eviction. The user approved cache flush instead of a reboot. The prepared release binary and clean profile produced 322.53 ms startup with exact viewport and release-mode verification.
 - [x] Review the complete diff, run formatting and diff checks, publish measurement commands/results and update the roadmap status to match the evidence. Code changes, if needed, require the workspace build, Clippy, tests and independent review before acceptance.
 
-## Checkpoint
+## Historical checkpoint before Linux policy approval and cache flush
 
 Release app, runner and provider example builds passed. Workspace Clippy passed with unused manifest dependency warnings. The full suite passed 822 tests across 42 suites after granting spill-directory and loopback access. PostgreSQL measurements and plans are published in `benchmarks/measurements/`. The desktop gate failed during scrolling and its viewport changed between processes. Cold startup, same-host comparison and tree rendering remain open. The user subsequently authorized opening a PR. Keep this checkpoint as a draft PR because the release acceptance gate remains open.
 
 Plan review ran twice using the available inherited model because Opus is unavailable. It identified missing cold-launch procedure, baseline comparability and fixture details. The protocol now records those boundaries and a bounded Linux probe. Test-first code-change steps were inapplicable to this measurement-only example, which asserts fixture shape and actual read-back on its normal entry point. The plan was initially uncommitted. The user subsequently authorized the PR, including its required commits. Independent review approved the measurement tooling after correcting the cold-probe deadline and setup endpoint.
 
-A follow-up reproduces and fixes the scrolling capture deadline conflicting with the existing frame budget. X11 now produces complete protocol reports but fails scrolling budgets. Wayland can stall. User authorized cache flush; interactive host authentication is still required.
+At the pre-flush checkpoint, a follow-up reproduces and fixes the scrolling capture deadline conflicting with the existing frame budget. X11 now produces complete protocol reports but fails scrolling budgets. Wayland can stall. User authorized cache flush; interactive host authentication is still required.
 
 ## Approved Linux policy
 
@@ -49,3 +49,5 @@ candidate, and verify policy-bound comparisons. The deadline regression now
 checks both policies. Its old 25-second capture limit failed the approved Linux
 360 ×75 ms case and is corrected to 35 seconds. This is separate from the
 unchanged eight-second no-progress watchdog.
+
+Final automated Linux X11 / PostgreSQL acceptance passed after the user confirmed the authorized cache flush. Baseline, candidate and cold-start raw evidence are retained in `benchmarks/measurements/`. Navigator tree and value-viewer GUI acceptance remain deferred under the user's original scope. Earlier failed trials and unsupported host claims remain explicitly documented.
