@@ -60,8 +60,12 @@ Packaging scripts live in [`ci/`](../../ci/):
 ```
 
 ```bash
-./ci/build-linux.sh   # Linux only: dist/linux/fastdb-linux-x86_64, a .deb and an AppImage
+./bundle_linux.sh    # Linux x86_64
 ```
+
+The Linux bundle writes `dist/linux/fastdb-linux-x86_64`, a `.deb` when
+`dpkg-dev` is installed, and an AppImage when `appimagetool` is on `PATH`.
+The local binary links against the build host's libraries.
 
 `ci/package-deb.sh BINARY VERSION OUT_DIR` packages an existing binary; its
 `Depends` field comes from `dpkg-shlibdeps`. `ci/test-package-deb.sh BINARY`
