@@ -1,0 +1,4 @@
+FASTDB_BENCH {"event":"ready","protocol":1,"debug_assertions":false,"scale_factor":1.25,"viewport":[1469.0,832.0]}
+FASTDB_BENCH {"event":"query_start"}
+FASTDB_BENCH {"event":"query_done","query_ms":8516.653886,"first_batch_ms":2.599526,"rows":1000000,"columns":20}
+FASTDB_BENCH {"event":"scroll_start"}

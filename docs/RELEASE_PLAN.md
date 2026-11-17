@@ -76,6 +76,7 @@ Keep laplace-terminal's simple manual flow, with two changes: one version source
 ### 3.2 Per-release checklist
 
 1. **Freeze**: `main` is green in CI (macOS build & test, Linux build, live-database tests).
+   Performance evidence for P2-10 follows the [release measurement plan](plans/2026-11-17-p2-10-release-performance.md) and [PostgreSQL protocol](../benchmarks/postgres/README.md). Record cold startup and same-host regressions separately from absolute budgets.
 2. **Bump** `version` in the workspace `Cargo.toml`; commit `chore(release): vX.Y.Z`.
 3. **Smoke test** on macOS from the built `.app` launched from Finder (not `cargo run`, so the working directory is `/`):
    - connect to PostgreSQL, MySQL and SQLite; restart and check the saved connections are still there;

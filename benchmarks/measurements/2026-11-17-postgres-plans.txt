@@ -1,0 +1,16 @@
+mixed.sql
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Function Scan on generate_series g  (cost=0.00..500.00 rows=20000 width=68) (actual time=3.994..845.686 rows=20000.00 loops=1)
+ Planning Time: 0.724 ms
+ Execution Time: 848.793 ms
+(3 rows)
+
+
+large-lob.sql
+                                       QUERY PLAN
+----------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.01 rows=1 width=64) (actual time=0.003..0.003 rows=1.00 loops=1)
+ Planning Time: 13.709 ms
+ Execution Time: 0.020 ms
+(3 rows)
