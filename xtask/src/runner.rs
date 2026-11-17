@@ -54,7 +54,9 @@ fn phase_timeout(phase: &str) -> Duration {
     Duration::from_secs(match phase {
         "ready" => 5,
         "query_start" => 75,
-        "scroll_start" => 15,
+        // The policy admits 50 ms/frame. All 360 callbacks already need 18 s
+        // at that budget, before event delivery and occasional slow frames.
+        "scroll_start" => 25,
         _ => 10,
     })
 }
@@ -356,6 +358,14 @@ mod tests {
             Ok(Some(100.0))
         })?;
         summarize(capture, 1024)
+    }
+
+    #[test]
+    fn scrolling_deadline_allows_frames_at_the_absolute_budget() {
+        // 60 warmup callbacks plus 300 measured callbacks can all take 50 ms
+        // while still meeting the scrolling policy. Allow event delivery too.
+        let admitted_duration = Duration::from_millis((60 + 300) * 50);
+        assert!(phase_timeout("scroll_start") > admitted_duration);
     }
 
     #[test]
