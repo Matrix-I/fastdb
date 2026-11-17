@@ -6,6 +6,7 @@ pub(super) enum OperationKind {
     Query,
     Script,
     Save,
+    Administration,
 }
 
 pub(super) struct Operation {
@@ -80,7 +81,9 @@ impl Operations {
     }
     pub fn request_cancel(&mut self) -> Option<(u64, Arc<dyn DatabaseDriver>)> {
         let op = self.active.as_mut()?;
-        if op.cancel_requested || op.kind == OperationKind::Save {
+        if op.cancel_requested
+            || matches!(op.kind, OperationKind::Save | OperationKind::Administration)
+        {
             return None;
         }
         op.cancel_requested = true;

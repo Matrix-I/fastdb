@@ -123,6 +123,16 @@ impl Workspace {
             self.native_backup_key(&event.keystroke, cx);
             return;
         }
+        if self.administration.is_some() {
+            if self.updates.read(cx).is_open() {
+                if event.keystroke.key == "escape" {
+                    self.updates.update(cx, |updates, cx| updates.dismiss(cx));
+                }
+            } else {
+                self.administration_key(&event.keystroke, cx);
+            }
+            return;
+        }
         if self.navigator_filter_key(&event.keystroke, cx) {
             return;
         }

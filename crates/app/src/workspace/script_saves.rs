@@ -263,6 +263,9 @@ impl Workspace {
             AfterSave::Explain(id, analyze) => self.explain_saved_statement(id, analyze, cx),
             AfterSave::Close(ids) => self.close_saved_tabs(&ids, cx),
             AfterSave::Quit | AfterSave::Restart => {
+                if !super::administration::allows_departure(self.administration.as_ref()) {
+                    return;
+                }
                 let restart = matches!(action, AfterSave::Restart);
                 let script = self
                     .operations
@@ -288,6 +291,9 @@ impl Workspace {
                         .await;
                     }
                     let _ = this.update(cx, |this, cx| {
+                        if !super::administration::allows_departure(this.administration.as_ref()) {
+                            return;
+                        }
                         if this.tabs.iter().any(|t| t.is_dirty()) {
                             this.save_then(
                                 this.tabs.iter().map(|t| t.id).collect(),
@@ -314,7 +320,8 @@ impl Workspace {
         }
     }
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
-        if self.native_backup_running()
+        if !super::administration::allows_departure(self.administration.as_ref())
+            || self.native_backup_running()
             || self
                 .drop_object_modal
                 .as_ref()
@@ -326,6 +333,7 @@ impl Workspace {
         {
             return;
         }
+        self.administration = None;
         self.drop_object_modal = None;
         self.native_backup_modal = None;
         self.object_browser = None;

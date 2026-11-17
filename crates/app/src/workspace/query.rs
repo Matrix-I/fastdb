@@ -20,10 +20,15 @@ impl Workspace {
         let Some(operation) = self.operations.active() else {
             return false;
         };
-        let message = format!(
-            "Another SQL operation is running in tab {}. Wait or Cancel before executing again. FastDB runs one operation at a time.",
-            operation.tab_id
-        );
+        let message = if operation.kind == OperationKind::Administration {
+            "Administration is running. Wait or use Cancel operation in the Administration dialog."
+                .into()
+        } else {
+            format!(
+                "Another SQL operation is running in tab {}. Wait or Cancel before executing again. FastDB runs one operation at a time.",
+                operation.tab_id
+            )
+        };
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             tab.script_status = Some(message);
         }

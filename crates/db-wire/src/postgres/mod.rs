@@ -1,3 +1,4 @@
+mod administration;
 pub mod binary_decoder;
 mod catalog;
 mod column;
@@ -411,6 +412,26 @@ impl DatabaseDriver for PostgresDriver {
             notices,
             self.is_read_only(),
         )))
+    }
+
+    fn supports_administration(&self) -> bool {
+        true
+    }
+
+    async fn administration_catalog(
+        &self,
+        family: crate::administration::AdminFamily,
+        after: u32,
+    ) -> Result<crate::administration::AdminPage> {
+        self.read_administration_catalog(family, after).await
+    }
+
+    async fn execute_administration(
+        &self,
+        sql: &str,
+        cancel: flume::Receiver<()>,
+    ) -> Result<crate::administration::AdminOutcome> {
+        self.run_administration(sql, cancel).await
     }
 
     async fn list_objects(

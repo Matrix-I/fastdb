@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 
+pub mod administration;
 pub mod catalog;
 pub mod column;
 pub mod execution;

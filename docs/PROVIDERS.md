@@ -744,6 +744,29 @@ live verification remains deferred to Linux by user request.
 FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --test postgres_test value_edits_roundtrip
 ```
 
+## PostgreSQL administration
+
+The navigator's **Administration…** action is available for PostgreSQL only.
+Native catalog readers cover routines, sequences, triggers, rules, policies,
+partitions, roles and relation ACLs. Reviewed single-statement SQL executes in
+a dedicated transaction with native permissions, statement/lock deadlines,
+cancellation and bounded result previews. Read-only profiles cannot execute.
+SQL and results are excluded from FastDB persistence and SQL observation.
+See the [workflow and limitations](guide/navigator-and-tables.md#postgresql-administration).
+
+Run `FASTDB_TEST_PG_PORT=5432 cargo test --locked -p db-wire --test administration_test`.
+Optional variables are `FASTDB_TEST_PG_HOST`, `FASTDB_TEST_PG_DATABASE`,
+`FASTDB_TEST_PG_USER`, and `FASTDB_TEST_PG_PASSWORD`. Use a disposable database
+and an administrative fixture role permitted to create schemas and test roles.
+The suite owns uniquely named objects and generated temporary role credentials.
+It covers native mutation/read-back, all eight catalog families, routine
+arguments including variadic OUT signatures, permission denial, active
+cancellation/rollback, limits, SQL NULL and read-only refusal. Without the port
+it explicitly skips; required-test mode fails instead.
+
+Automated results and SQL-plan evidence are recorded in the
+[P2-01 plan](plans/2026-11-16-p2-01-administration.md). Desktop acceptance is pending.
+
 ## PostgreSQL session monitor
 
 Run `FASTDB_TEST_PG_PORT=5432 cargo test -p db-wire --locked --test session_monitor_test`

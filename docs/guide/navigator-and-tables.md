@@ -18,6 +18,54 @@ Connections has its own left panel with its heading, search and tree. Document t
 - Right-click the connection, Databases, a database, Schemas, a schema such as `public`, Tables, or a table and choose **Refresh** to reload the owning connection’s metadata. The database menu opens **SQL Editor**, and writable schemas offer the existing **Create Table…** and **Create View…** dialogs.
 - On writable PostgreSQL connections, **Delete…** on a visible schema or database opens a confirmation dialog and a SQL preview. Schema deletion starts in RESTRICT mode. Click the **CASCADE** checkbox or its row to include contained objects and any dependencies PostgreSQL resolves, including dependencies outside the schema. Empty schemas without a navigator row can be managed from SQL Editor. For database deletion, type the exact database name. FastDB opens a maintenance connection and then disconnects the target profile, which stays saved. Other active sessions may block the operation. If PostgreSQL refuses the deletion after FastDB disconnects, reconnect the retained profile to continue using the database.
 
+## PostgreSQL administration
+
+Right-click a connected PostgreSQL profile and choose **Administration…**.
+The catalog pages routines, sequences, triggers, rules, policies, partitions,
+roles and relation privileges, 50 objects at a time. **Next page** advances by
+native identity; **Refresh** returns to the first page. Empty and failed reads
+have separate messages. Select an object to inspect native details and load
+its source or an operation template into the SQL editor.
+
+- **Routines:** edit native function/procedure source or choose **Run with
+  arguments**. Replace the generated typed `NULL` arguments with the SQL values
+  you intend to pass. PostgreSQL resolves the overload. Procedures that commit
+  or roll back internally cannot run in this dialog's transaction.
+- **Sequences:** inspect native settings and last value where permitted; use
+  **Restart sequence** with the intended value. Restart is transactional, but
+  direct calls to `nextval` and `setval` are not undone by rollback.
+- **Triggers, rules and policies:** edit native source or use creation,
+  enable/disable and drop templates. Policy expressions and target roles are
+  editable SQL. RLS enable/disable is a separate operation.
+- **Partitions:** inspect parent, partition key and bounds; create, attach or
+  detach with editable native bounds. Review the target relation carefully.
+- **Roles and privileges:** create users/roles, change login settings, grant or
+  revoke membership and object privileges. The dialog shows role attributes,
+  memberships, relation owners and explicit ACLs. A NULL ACL means PostgreSQL's
+  native defaults; this is not an effective-privilege audit.
+
+Edit one SQL statement, choose **Review SQL…**, then **Confirm and execute**.
+Source and statement text are limited to 256 KiB. Start the statement with
+`CREATE`, `ALTER`, `DROP`, `GRANT`, `REVOKE`, `COMMENT`, `SELECT`, or `CALL`.
+Remove any comment before the first keyword.
+The editor is locked during review and execution. **Go back** or Escape leaves
+review without executing. Every operation uses a dedicated transaction with
+statement and lock deadlines. Successful execution refreshes the current
+catalog family and navigator metadata. After an error, FastDB keeps the SQL
+and requires a catalog refresh before you can execute again. If PostgreSQL
+does not acknowledge a commit, check the server state before retrying.
+**Cancel operation** requests server cancellation and waits for the final
+result. Rollback cannot undo external effects of a routine.
+
+Read-only profiles can browse but cannot execute. PostgreSQL enforces the
+connected role's privileges; FastDB does not elevate them. Close and reopen the
+dialog after reconnecting or replacing a profile. SQL and result previews are
+not saved or added to FastDB's transaction log because role SQL may contain
+credentials. Results retain at most 100 rows, 32 columns and 512 characters per
+cell; truncation is reported. SQL NULL and empty text remain distinct.
+
+This workflow is PostgreSQL-only. Manual desktop acceptance remains pending.
+
 ## Backup, restore and maintenance
 
 - Right-click a connected PostgreSQL, MySQL or file-based SQLite connection and choose **Backup Database…**. PostgreSQL writes a custom archive, MySQL writes a SQL dump, and SQLite writes a native database image. Use **Backup Table…** or **Backup View…** on a relation for a scoped backup. SQLite supports ordinary tables and views. A scoped backup may require dependencies to be restored separately.
