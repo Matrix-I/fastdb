@@ -141,3 +141,33 @@ in the repository. System cold-cache measurement is authorized by the user,
 but sudo still requires interactive host authentication.
 
 The deadline fix passed its failing-then-passing regression and independent review. Final workspace verification passed 823 Rust tests, Clippy and the release build, plus three cold-probe subprocess tests.
+
+## Approved Linux policy and repeatability
+
+The user approved Linux scroll p95 ≤75 ms and at most 40% of intervals above
+50 ms on 2026-11-17. Other absolute budgets and all relative allowances remain
+unchanged. The original macOS policy is retained. New captures explicitly use
+`--thresholds benchmarks/thresholds-linux.json` and X11 scale 1 at a stable
+1280 ×800 viewport. Each capture discards one warmup and measures three processes.
+
+| Metric | Baseline median | Candidate median |
+|---|---:|---:|
+| Startup | 124.17 ms | 137.29 ms |
+| Idle RSS | 88.14 MiB | 89.52 MiB |
+| Peak RSS | 182.22 MiB | 184.18 MiB |
+| Million-row stream | 6,017.70 ms | 6,077.83 ms |
+| First batch | 1.30 ms | 1.39 ms |
+| Scroll p95 | 33.47 ms | 33.47 ms |
+| Intervals >50 ms | 0% | 0% |
+| Binary | 32.97 MiB | 32.97 MiB |
+
+Both captures pass absolute limits. The candidate passes same-host relative
+comparison and report-only validation. Using the original policy to check the
+new report correctly fails with a policy-hash mismatch. These two captures use
+the same executable and establish repeatability for the initial Linux baseline.
+They establish no speedup between product revisions. Keep the benchmark window
+in the foreground throughout capture. Earlier Wayland and X11 failures remain
+recorded above and are not promoted into this baseline.
+
+Raw reports are [Linux baseline](measurements/2026-11-17-linux-baseline.json)
+and [Linux candidate](measurements/2026-11-17-linux-candidate.json).
