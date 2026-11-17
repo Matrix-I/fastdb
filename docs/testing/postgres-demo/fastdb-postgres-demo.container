@@ -1,0 +1,27 @@
+[Unit]
+Description=FastDB local PostgreSQL demo database
+
+[Container]
+Image=docker.io/library/postgres@sha256:a197bcc7150b0a7e35796ef0c110693cba6edd41e92b564cc50b976f17532423
+ContainerName=fastdb-postgres-demo
+PublishPort=127.0.0.1:5432:5432
+Volume=fastdb-postgres-demo-data:/var/lib/postgresql
+Secret=fastdb-postgres-demo-password
+Environment=POSTGRES_PASSWORD_FILE=/run/secrets/fastdb-postgres-demo-password
+Environment=POSTGRES_DB=fastdb_demo
+Environment=POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+Environment=TZ=UTC
+Exec=postgres -c timezone=UTC
+HealthCmd=pg_isready -q -U postgres -d fastdb_demo
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=5
+HealthOnFailure=kill
+
+[Service]
+Restart=always
+RestartSec=3s
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
