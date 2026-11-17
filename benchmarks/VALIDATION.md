@@ -113,3 +113,31 @@ expected failure within its shortened deadline afterward.
 partial output, a valid ready event and debug-binary rejection. Opus is
 unavailable in this session, so independent review uses the inherited model.
 Release acceptance remains incomplete for the reasons above.
+
+## Deadline correction and Linux backend checks
+
+The runner's previous 15-second scrolling deadline could reject 360 callbacks
+that each meet the 50 ms budget, since those callbacks need 18 seconds. A new
+regression test failed against the original deadline and passed after changing
+collection to 25 seconds. Performance thresholds are unchanged. The Wayland
+rerun reached its third measured process, then the independent eight-second
+no-progress watchdog aborted it.
+
+X11 completed all three measured processes. At its default scale 2 the medians
+were 272.47 ms startup, 90.85 MiB idle RSS, 184.86 MiB peak RSS, 7,307.53 ms
+stream, 50.18 ms scroll p95 and 21.33% intervals above 50 ms. At explicitly fixed
+scale 1, startup was 228.23 ms, idle RSS 90.96 MiB, peak RSS 185.02 MiB, stream
+8,793.91 ms, scroll p95 50.17 ms and slow intervals 33%. Both runs failed the
+existing scrolling budgets. Full protocol reports are retained as
+[default-scale X11](measurements/2026-11-17-desktop-x11.json) and
+[scale-1 X11](measurements/2026-11-17-desktop-x11-scale1.json).
+
+The explicit scale-1 command prefixes the desktop runner with
+`env -u WAYLAND_DISPLAY GPUI_X11_SCALE_FACTOR=1` and uses display ID
+`linux-x11-edp1-3072x1728-59.94-scale1`. This host is on AC power in the
+performance power profile. Vulkan exposes an Intel UHD Graphics 620 with
+Mesa 26.0.8 and a software fallback. No dedicated benchmark runner is registered
+in the repository. System cold-cache measurement is authorized by the user,
+but sudo still requires interactive host authentication.
+
+The deadline fix passed its failing-then-passing regression and independent review. Final workspace verification passed 823 Rust tests, Clippy and the release build, plus three cold-probe subprocess tests.
