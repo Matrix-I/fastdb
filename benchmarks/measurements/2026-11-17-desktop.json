@@ -1,0 +1,23 @@
+{
+  "status": "failed",
+  "reason": "benchmark timed out in scroll_start on first measured run",
+  "warmup_completed": true,
+  "measured_runs_completed": 0,
+  "requested_runs": 3,
+  "display": "eDP-1 3072x1728 59.94Hz",
+  "scale_factor": 1.25,
+  "viewports": [
+    [
+      1280,
+      800
+    ],
+    [
+      1469,
+      832
+    ]
+  ],
+  "binary_sha256": "a1603980227029e80c905ffa7c4a4f08b4e2ed4a587a732da65e5a8e0dc72361",
+  "binary_bytes": 34567224,
+  "baseline": "unavailable on this host",
+  "cold_start": "pending first launch after reboot"
+}

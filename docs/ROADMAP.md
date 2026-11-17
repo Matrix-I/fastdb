@@ -105,7 +105,7 @@ acceptance.
 - [ ] **P2-07 — Transfer formats and analysis.** JSON and spreadsheet import/export, HTML/Markdown output, configurable formats, result aggregates/charts and ER image export. Validate type/NULL handling and output contents for each format. HTML, Markdown and JSON output is wired for loaded results, and focused ER diagrams export to SVG. Desktop acceptance is pending.
 - [ ] **P2-08 — Reusable tasks.** Saved import/export/script/maintenance configurations, task history and optional scheduling with credential references, cancellation and useful failure reports.
 - [ ] **P2-09 — Provider/platform validation.** Live Db2 validation, broader ODBC TLS/OS tests, native Windows support if adopted, repeatable Linux artifacts and macOS signing/notarization. Do not equate a provider preset or successful compile with a supported release workflow.
-- [ ] **P2-10 — Performance acceptance.** Cold-cache startup, live-provider latency, large metadata trees, mixed-width/LOB results and memory/scroll regressions. Publish reproducible measurements separately from aspirational targets.
+- [ ] **P2-10 — Performance acceptance (release evidence recorded; desktop gate failed).** PostgreSQL loopback measurements cover connection, all metadata readers for 2,000 tables and 10,000 columns, a 20,000-row mixed-width stream, and exact 300 KB text/binary read-back. The Linux desktop suite timed out during scrolling on its first measured run and reported inconsistent viewports. Cold-cache startup, large-tree rendering and same-host memory/scroll regression comparison remain unverified. See the [measured release checkpoint](../benchmarks/VALIDATION.md#p2-10-release-checkpoint--2026-11-17).
 
 ### P3 — Optional extensions, not prerequisites for core parity
 

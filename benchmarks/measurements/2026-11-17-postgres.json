@@ -1,0 +1,61 @@
+{
+  "oversized_lob": {
+    "status": "passed"
+  },
+  "samples": [
+    {
+      "catalog_ms": 1554.0398309999998,
+      "connect_ms": 2.885475,
+      "first_batch_ms": 2.9679189999999998,
+      "read_back_ms": 0.118052,
+      "stream_ms": 346.69887900000003
+    },
+    {
+      "catalog_ms": 1516.5062090000001,
+      "connect_ms": 2.855807,
+      "first_batch_ms": 2.762175,
+      "read_back_ms": 0.08686,
+      "stream_ms": 390.84648799999997
+    },
+    {
+      "catalog_ms": 1603.9860099999999,
+      "connect_ms": 2.330603,
+      "first_batch_ms": 2.5618849999999997,
+      "read_back_ms": 0.128758,
+      "stream_ms": 368.995577
+    },
+    {
+      "catalog_ms": 1528.0586720000001,
+      "connect_ms": 2.777058,
+      "first_batch_ms": 2.285432,
+      "read_back_ms": 0.115443,
+      "stream_ms": 331.849869
+    },
+    {
+      "catalog_ms": 1519.361719,
+      "connect_ms": 2.4205490000000003,
+      "first_batch_ms": 2.77859,
+      "read_back_ms": 0.102597,
+      "stream_ms": 350.714146
+    }
+  ],
+  "provenance": {
+    "date": "2026-11-17",
+    "revision": "6a02aacb06cabe0e20e080904ed2a03c4e810ae3",
+    "dirty": true,
+    "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "cpu": "Intel Core i5-8365U",
+    "provider": "PostgreSQL 18.7",
+    "transport": "loopback TCP, trust authentication, disposable instance",
+    "fixture": {
+      "schemas": 20,
+      "tables": 2000,
+      "columns": 10000,
+      "primary_keys": 2000
+    },
+    "warmups": 1,
+    "runs": 5,
+    "build": "release",
+    "binary_sha256": "e43b2a7b4c698523f8cc1a516702f2bc3d8e92e51f0f3ddf9a838123b34fbfb3"
+  }
+}

@@ -49,3 +49,67 @@ incomplete results, timeout cleanup and exit codes 0/1/2. Formatting and clippy 
 implementation.
 Live external-provider and keychain tests retain their usual environment-variable
 skip behavior.
+
+## P2-10 release checkpoint — 2026-11-17
+
+P2-10 remains open. PostgreSQL backend measurements passed. The Linux desktop
+suite failed before completing its first measured process. Cold startup and
+same-host regression comparison remain pending.
+
+The candidate is revision `6a02aac` with the uncommitted measurement example.
+The host is Ubuntu 26.04.1, x86_64, Intel Core i5-8365U, 14 GiB RAM. PostgreSQL
+18.7 runs in a disposable local container with loopback TCP and trust
+authentication. Connection timing includes ping and excludes authentication
+work that would be required with SCRAM, SSH or TLS. One warmup preceded five
+independent connections. Fixture and commands are in the
+[PostgreSQL protocol](postgres/README.md).
+
+| Production-driver measurement | Median | Maximum |
+|---|---:|---:|
+| Connection and ping | 2.78 ms | 2.89 ms |
+| All connection metadata readers, 2,000 tables / 10,000 columns | 1,528.06 ms | 1,603.99 ms |
+| First mixed-result batch notification | 2.76 ms | 2.97 ms |
+| Complete 20,000-row mixed-width stream | 350.71 ms | 390.85 ms |
+| Sampled early/final value read-back | 0.12 ms | 0.13 ms |
+
+Text and binary 300,000-byte values passed exact read-back in a separate capacity
+probe. Empty pages can hold an oversized row. This probe measures the driver and
+pager path. Viewer performance and large-tree rendering remain unverified.
+No optimization is claimed. The mixed query has a bounded function scan with
+20,000 actual rows. The large-LOB query uses a constant Result node. Full plans
+and five samples are retained in
+[PostgreSQL evidence](measurements/2026-11-17-postgres.json) and
+[query plans](measurements/2026-11-17-postgres-plans.txt).
+
+The desktop command was `target/release/xtask benchmark --runs 3 --timeout 120
+--display-id linux-edp1-3072x1728-59.94 --output
+benchmarks/results/v0.2.0-desktop.json`. It ran after builds and the PostgreSQL
+measurement ended. The warmup completed the million-row workload in 7,774.96 ms.
+The first measured process completed it in 8,516.65 ms, then exceeded the
+15-second scrolling deadline. Its viewport also changed from 1280 × 800 to
+1469 × 832 at scale 1.25. These partial measurements cannot establish a passing
+baseline. Thresholds and deadlines retain their existing values. See the
+[failed desktop checkpoint](measurements/2026-11-17-desktop.json) and raw
+[warmup](measurements/2026-11-17-desktop-run-0.log) and
+[first measured process](measurements/2026-11-17-desktop-run-1.log).
+
+Verification completed with the existing temporary Linux build headers.
+`cargo build --offline --locked --release -p fastdb-app -p xtask` and the
+PostgreSQL example release build passed. `cargo clippy --offline --locked
+--workspace --all-targets` passed with existing unused manifest dependency
+warnings. `cargo test --offline --locked --workspace` passed 822 tests across
+42 suites with spill-directory and loopback access. External tests without
+fixture variables skipped their live checks. The first sandboxed test run had
+17 failures from the read-only `/var/tmp/fastdb` directory. The unrestricted
+rerun passed. The checker separately passed its 17 tests.
+
+Independent review reproduced an unbounded partial-line read in the documented
+cold-start probe and a mismatch between the setup command's default socket and
+the example's loopback endpoint. The probe now uses nonblocking bounded reads
+and setup names the loopback host and fixture user. A partial-line fixture
+exceeded the external one-second deadline before the fix, then returned the
+expected failure within its shortened deadline afterward.
+`python3 benchmarks/postgres/test_runbook.py` passes three subprocess cases for
+partial output, a valid ready event and debug-binary rejection. Opus is
+unavailable in this session, so independent review uses the inherited model.
+Release acceptance remains incomplete for the reasons above.
