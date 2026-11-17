@@ -39,3 +39,13 @@ Release app, runner and provider example builds passed. Workspace Clippy passed 
 Plan review ran twice using the available inherited model because Opus is unavailable. It identified missing cold-launch procedure, baseline comparability and fixture details. The protocol now records those boundaries and a bounded Linux probe. Test-first code-change steps were inapplicable to this measurement-only example, which asserts fixture shape and actual read-back on its normal entry point. The plan was initially uncommitted. The user subsequently authorized the PR, including its required commits. Independent review approved the measurement tooling after correcting the cold-probe deadline and setup endpoint.
 
 A follow-up reproduces and fixes the scrolling capture deadline conflicting with the existing frame budget. X11 now produces complete protocol reports but fails scrolling budgets. Wayland can stall. User authorized cache flush; interactive host authentication is still required.
+
+## Approved Linux policy
+
+On 2026-11-17 the user approved Linux p95 ≤75 ms and slow frames ≤40%, with
+all other absolute and relative limits preserved. Add an explicit Linux policy
+file through the existing `--thresholds` option, capture a new baseline and
+candidate, and verify policy-bound comparisons. The deadline regression now
+checks both policies. Its old 25-second capture limit failed the approved Linux
+360 ×75 ms case and is corrected to 35 seconds. This is separate from the
+unchanged eight-second no-progress watchdog.
