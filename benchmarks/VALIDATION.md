@@ -1,5 +1,11 @@
 # Initial local validation — 2026-11-02
 
+Current P2-10 automated acceptance passed on the Linux X11 / PostgreSQL release
+host on 2026-11-17 under the user-approved Linux policy. Cold startup passed
+after the user confirmed system cache eviction. GUI acceptance remains deferred.
+See the final Linux acceptance result below.
+
+
 Validated the final guarded, uncommitted implementation with the release executable on an Apple
 M1 Pro, macOS 27.2, rustc 1.99.1. The built-in display reported 1800 x 1169 at
 120 Hz; GPUI's recorded viewport was 1280 x 801 logical pixels at scale 2. Frame
@@ -171,3 +177,23 @@ recorded above and are not promoted into this baseline.
 
 Raw reports are [Linux baseline](measurements/2026-11-17-linux-baseline.json)
 and [Linux candidate](measurements/2026-11-17-linux-candidate.json).
+
+## Final Linux acceptance — 2026-11-17
+
+The user confirmed running `sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'`.
+The prepared standalone probe immediately launched the existing release binary
+with an empty profile, X11 scale 1 and a 1280 ×800 viewport. Time from process
+launch to the first-frame ready event was **322.53 ms**, within the 2,000 ms
+startup budget. The exact executable hash matches the warm baseline and candidate.
+This is Linux startup after user-confirmed system cache eviction. It is a
+separate single observation and does not enter the warm protocol medians.
+The [cold-start evidence](measurements/2026-11-17-cold-start.json) records the
+method, ready event, measured time, binary and policy hashes.
+
+P2-10 automated acceptance is complete for this Linux X11 / PostgreSQL host:
+cold startup, live-driver connection and streaming, all metadata readers for
+2,000 tables, mixed-width and LOB read-back, RSS and scrolling, and same-host
+repeatability satisfy the approved scope. GUI acceptance for Navigator tree
+rendering and the value viewer remains deferred to the user. Earlier Wayland
+stalls and original-policy failures remain recorded. These measurements do not
+claim current macOS acceptance or a speedup between product revisions.

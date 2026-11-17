@@ -1,0 +1,21 @@
+{
+  "startup_ms": 322.5277969995659,
+  "ready": {
+    "event": "ready",
+    "protocol": 1,
+    "debug_assertions": false,
+    "scale_factor": 1.0,
+    "viewport": [
+      1280.0,
+      800.0
+    ]
+  },
+  "date": "2026-11-17",
+  "revision": "7a993bce29aa6aca4e5114b7c6356ad70b4e03f4",
+  "binary_sha256": "a1603980227029e80c905ffa7c4a4f08b4e2ed4a587a732da65e5a8e0dc72361",
+  "policy_sha256": "660d5def0c02fb0b3e6184cddc8d9f9f23376725c68e614a117a38bd5858cc9e",
+  "cache_procedure": "User confirmed running sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' before this probe.",
+  "backend": "X11",
+  "status": "passed",
+  "startup_budget_ms": 2000
+}
