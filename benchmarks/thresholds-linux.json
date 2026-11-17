@@ -1,0 +1,46 @@
+{
+  "protocol": 1,
+  "description": "Linux release budgets approved on 2026-11-17 for the Intel i5/UHD 620 benchmark host. Compare baselines only on the same host, display and backend.",
+  "metrics": {
+    "startup_ms": {
+      "max": 2000,
+      "relative": 0.2,
+      "noise": 25
+    },
+    "idle_rss_mib": {
+      "max": 256,
+      "relative": 0.15,
+      "noise": 8
+    },
+    "query_ms": {
+      "max": 60000,
+      "relative": 0.15,
+      "noise": 250
+    },
+    "first_batch_ms": {
+      "max": 1000,
+      "relative": 0.2,
+      "noise": 10
+    },
+    "peak_rss_mib": {
+      "max": 384,
+      "relative": 0.15,
+      "noise": 16
+    },
+    "scroll_p95_ms": {
+      "max": 75,
+      "relative": 0.2,
+      "noise": 2
+    },
+    "scroll_over_50ms_pct": {
+      "max": 40,
+      "relative": 0.2,
+      "noise": 1
+    },
+    "binary_mib": {
+      "max": 100,
+      "relative": 0.05,
+      "noise": 1
+    }
+  }
+}
