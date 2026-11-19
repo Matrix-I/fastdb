@@ -53,7 +53,7 @@ Project rules in `AGENTS.md` and `CLAUDE.md` apply, including these verbatim con
 
 **Test levels** — Unit tests for ownership, order and reset. Existing in-memory SQLite streaming and saved-plan filesystem tests exercise the real boundaries used by the migrated callers.
 
-- [ ] Add the following test in `script_result_tests` before changing production code. For this baseline run, write every `tab.current_result.FIELD` in the test as `tab.FIELD`. Run `cargo test -p fastdb-app retained_results_move_the_whole_payload_and_keep_the_latest_twenty` and expect one passing test. This establishes the lifecycle assertions against the current behavior.
+- [x] Add the following test in `script_result_tests` before changing production code. For this baseline run, write every `tab.current_result.FIELD` in the test as `tab.FIELD`. Run `cargo test -p fastdb-app retained_results_move_the_whole_payload_and_keep_the_latest_twenty` and expect one passing test. This establishes the lifecycle assertions against the current behavior.
 
 ```rust
 #[test]
@@ -103,8 +103,8 @@ fn retained_results_move_the_whole_payload_and_keep_the_latest_twenty() {
 }
 ```
 
-- [ ] Restore the `tab.current_result.FIELD` accesses in the test as shown. Run `cargo test -p fastdb-app retained_results_move_the_whole_payload_and_keep_the_latest_twenty` again. Expect the test build to fail with a missing `current_result` field. The baseline run has already checked the behavioral assertions.
-- [ ] Replace `ScriptResult` with the following shared payload. Remove its eleven matching fields from `TabState`, add `pub(crate) current_result: ResultState`, and change `results` to `Vec<ResultState>`.
+- [x] Restore the `tab.current_result.FIELD` accesses in the test as shown. Run `cargo test -p fastdb-app retained_results_move_the_whole_payload_and_keep_the_latest_twenty` again. Expect the test build to fail with a missing `current_result` field. The baseline run has already checked the behavioral assertions.
+- [x] Replace `ScriptResult` with the following shared payload. Remove its eleven matching fields from `TabState`, add `pub(crate) current_result: ResultState`, and change `results` to `Vec<ResultState>`.
 
 ```rust
 const SCRIPT_RESULT_LIMIT: usize = 20;
@@ -147,7 +147,7 @@ impl ResultState {
 }
 ```
 
-- [ ] In `TabState::blank` replace the eleven removed initializers with the first initializer below. In `table` replace its `grid,` initializer with the second, retaining `set_table_name`. In both `script` and `database_script` replace their `grid:` initializer with the third.
+- [x] In `TabState::blank` replace the eleven removed initializers with the first initializer below. In `table` replace its `grid,` initializer with the second, retaining `set_table_name`. In both `script` and `database_script` replace their `grid:` initializer with the third.
 
 ```rust
 // blank
@@ -158,7 +158,7 @@ current_result: ResultState::empty(grid, DEFAULT_FETCH_SIZE),
 current_result: ResultState::empty(VirtualDataGrid::new(None, theme), DEFAULT_FETCH_SIZE),
 ```
 
-- [ ] Replace the four transition methods with the following code within the existing `impl TabState`. In `invalidate_dropped_object_results`, migrate the active field accesses to `self.current_result` and keep the retained loop.
+- [x] Replace the four transition methods with the following code within the existing `impl TabState`. In `invalidate_dropped_object_results`, migrate the active field accesses to `self.current_result` and keep the retained loop.
 
 ```rust
 pub(super) fn result_count(&self) -> usize {
@@ -252,7 +252,7 @@ pub(super) fn new_script_result(&mut self, sql: String) {
 }
 ```
 
-- [ ] Inventory the concrete call sites with the following command. The output includes unrelated structs with the same field names. Apply the explicit receiver mapping only where Rust resolves the receiver to `TabState`. For example, `tab.grid` becomes `tab.current_result.grid`, `self.tabs[index].fetch` becomes `self.tabs[index].current_result.fetch`, and `self.plan_comparison` inside `impl TabState` becomes `self.current_result.plan_comparison`. Preserve `script_fetch_query` branching and paging inputs, table/session operations, external driver calls, SQL text, and event handlers.
+- [x] Inventory the concrete call sites with the following command. The output includes unrelated structs with the same field names. Apply the explicit receiver mapping only where Rust resolves the receiver to `TabState`. For example, `tab.grid` becomes `tab.current_result.grid`, `self.tabs[index].fetch` becomes `self.tabs[index].current_result.fetch`, and `self.plan_comparison` inside `impl TabState` becomes `self.current_result.plan_comparison`. Preserve `script_fetch_query` branching and paging inputs, table/session operations, external driver calls, SQL text, and event handlers.
 
 ```bash
 rg -n '\.(grid|fetch|script_sql|last_error|execution_time_ms|affected_rows|query_plan|plan_comparison|plan_scroll|show_plan|query_edit_driver)\b' crates/app/src
@@ -268,7 +268,7 @@ The caller checklist under `crates/app/src/` includes `benchmark.rs` and these f
 | Plans and editability | `query_plan.rs`, `query_plan/file_actions.rs`, `query_result_edit.rs`, `drop_object_modal.rs`, `data_edit.rs` |
 | Data consumers | `data_panel.rs`, `table_view.rs`, `record_view.rs`, `export.rs`, `result_search.rs`, `value_editor.rs`, `value_panel.rs`, `grid_clipboard.rs`, `grid_paste.rs`, `grid_references.rs`, `grid_selection.rs`, `column_menu.rs`, `filter_builder.rs`, `filter_suggest.rs`, `keyboard.rs`, `text_input.rs` |
 
-- [ ] Run the commands below and expect all selected tests to pass. The SQLite test uses the actual driver and checks streaming plus a mid-script error. The plan-file test uses a real snapshot file and checks preserved results and rejection of a stale completion.
+- [x] Run the commands below and expect all selected tests to pass. The SQLite test uses the actual driver and checks streaming plus a mid-script error. The plan-file test uses a real snapshot file and checks preserved results and rejection of a stale completion.
 
 ```bash
 cargo test -p fastdb-app retained_results_move_the_whole_payload_and_keep_the_latest_twenty
@@ -287,9 +287,20 @@ cargo test -p fastdb-app opening_and_comparing_files_preserves_prior_results_and
 
 **Test levels** — Workspace unit/integration suite and desktop end-to-end acceptance. This verification task adds no production code.
 
-- [ ] Run `cargo fmt --all`, inspect `git status --short`, `git diff --check`, and the full `git diff HEAD`. Read any untracked files. Confirm every changed call site is a result-state migration or a focused test and the patch contains no secrets or debug output.
-- [ ] Run `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, and `cargo test --workspace`. Record each outcome and any provider tests skipped due to missing configuration.
+- [x] Run `cargo fmt --all`, inspect `git status --short`, `git diff --check`, and the full `git diff HEAD`. Read any untracked files. Confirm every changed call site is a result-state migration or a focused test and the patch contains no secrets or debug output.
+- [x] Run `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, and `cargo test --workspace`. Record each outcome and any provider tests skipped due to missing configuration.
 - [ ] Run `cargo run -p fastdb-app`. For manual acceptance on an existing SQLite connection, open a script with the two existing read-only statements `SELECT 1` and `SELECT 2`, execute the script, switch results, close the selected result, then close the last result. Expect distinct grids, neighbor selection, and the editor filling the space after the final close. If available, open a saved plan and switch back to confirm its plan state and previous rows survive switching. Open a table Data tab to check initial load and fetch-next. Report which desktop and paths were actually exercised. Leave GUI interaction to the user, and report desktop launch failure separately if the environment cannot open the app.
-- [ ] Review result ordering, eviction, first and final results, dirty and editing guards, and error paths using Task 1's covered cases. Trace stable tab IDs, pager identity, and running-operation guards in async and UI callers. Confirm that moves retain the pager, add no row copies or render work, and preserve all security boundaries and persisted formats. Check names, stable Rust APIs, test assertions, and the single-owner design.
-- [ ] Apply `code-review-strict` to the final app diff. Address findings or report them with evidence. After any edits repeat the full gate. Clean up only temporary artifacts created by verification and preserve the runnable binary and reusable build dependencies.
-- [ ] Ready to commit the plan separately as `docs: add script result state implementation plan` when explicitly authorized.
+- [x] Review result ordering, eviction, first and final results, dirty and editing guards, and error paths using Task 1's covered cases. Trace stable tab IDs, pager identity, and running-operation guards in async and UI callers. Confirm that moves retain the pager, add no row copies or render work, and preserve all security boundaries and persisted formats. Check names, stable Rust APIs, test assertions, and the single-owner design.
+- [x] Apply `code-review-strict` to the final app diff. Address findings or report them with evidence. After any edits repeat the full gate. Clean up only temporary artifacts created by verification and preserve the runnable binary and reusable build dependencies.
+- [x] Save the plan in the documentation commit `6402fd1`.
+
+## Execution checkpoint
+
+- Branch `chore/script-result-state` started from `6402fd1`, which contains the plan and has the same application sources as `045d4a3`.
+- The workspace baseline passed 823 harness cases. The new characterization passed on the baseline, went red on the missing `current_result` field, and passed after the migration.
+- All four focused commands passed, including 29 tab-state tests and the real SQLite streaming and saved-plan filesystem checks. The final workspace run reported 824 passed, zero failed. Provider tests requiring unset live-test variables took their configured skip paths.
+- Workspace format, typecheck, Clippy with denied Rust warnings, and build checks passed. Cargo emitted unused-dependency warnings for four unchanged manifests.
+- Linux verification used temporary development libraries. Tests needed native access to `/var/tmp/fastdb` plus loopback for the existing SSH test.
+- Linux smoke launch with `cargo run -p fastdb-app` reached the app process and stayed running until the 12-second timeout with isolated config and spill storage. Desktop interaction on Linux and macOS remains pending.
+- The result transitions preserve the display index and cap. Existing tests cover dirty-edit blocks, final close, append failure, and stale plan completions. The pager remains the same allocation, no row copies were added, and SQL inputs, operation guards, IDs, and persisted formats are unchanged.
+- Independent review approved the lifecycle, grid, and workspace packages without findings in one round. The available Codex reviewers substituted for Opus, which the review tool cannot select.
