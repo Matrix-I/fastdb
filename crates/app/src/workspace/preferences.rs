@@ -278,8 +278,8 @@ impl Workspace {
                     let mut t = TabState::table(id, &schema, &table, self.theme.clone(), cache);
                     t.connection_id = Some(conn_id.clone());
                     t.filter_sql = filter_sql;
-                    t.fetch.size = fetch_size;
-                    t.fetch.size_text = fetch_size.to_string();
+                    t.current_result.fetch.size = fetch_size;
+                    t.current_result.fetch.size_text = fetch_size.to_string();
                     t.active_subtab = active_subtab;
                     t.active_property_section = active_property_section;
                     self.tabs.push(t);
@@ -364,7 +364,7 @@ impl Workspace {
                         filter_sql: tab.filter_sql.clone(),
                         active_subtab: tab.active_subtab,
                         active_property_section: tab.active_property_section,
-                        fetch_size: tab.fetch.size,
+                        fetch_size: tab.current_result.fetch.size,
                     })
                 } else if tab.is_script() {
                     let unsaved_text = if tab.is_dirty() {
@@ -413,7 +413,7 @@ impl Workspace {
         self.panes = None;
         for tab in &mut self.tabs {
             tab.editor.theme = self.theme.clone();
-            tab.grid.theme = self.theme.clone();
+            tab.current_result.grid.theme = self.theme.clone();
         }
         let config_dir = platform_hal::paths::config_dir();
         if let Err(error) = save_preferences(&config_dir, &self.preferences) {
@@ -641,7 +641,7 @@ mod tests {
 
         // 1. Table tab:
         let table_tab = TabState::table(1, "public", "users", Theme::dark(), cache.clone());
-        assert!(table_tab.grid.pager.is_none());
+        assert!(table_tab.current_result.grid.pager.is_none());
         assert_eq!(table_tab.transaction_state, "Idle");
 
         // 2. Script tab:

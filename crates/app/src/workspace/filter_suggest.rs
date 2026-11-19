@@ -86,7 +86,7 @@ impl Workspace {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return Vec::new();
         };
-        if let Some(pager) = tab.grid.pager.as_ref() {
+        if let Some(pager) = tab.current_result.grid.pager.as_ref() {
             return pager
                 .columns
                 .iter()

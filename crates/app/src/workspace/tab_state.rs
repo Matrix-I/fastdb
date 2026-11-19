@@ -37,24 +37,13 @@ pub struct TabState {
     pub show_sql_dialog: bool,
     pub editor: SqlEditorView,
     pub(super) result_split: super::script_split::ScriptSplit,
-    pub grid: VirtualDataGrid,
-    pub execution_time_ms: Option<u64>,
-    pub(super) affected_rows: Option<Option<u64>>,
+    pub(crate) current_result: ResultState,
     pub(super) execution_log: super::execution_log::ExecutionLog,
     pub(super) show_execution_log: bool,
     pub(super) timeout_index: usize,
-    pub fetch: FetchState,
-    /// Statement of a script tab's current result, read again by "fetch next"
-    pub script_sql: Option<String>,
-    pub query_plan: Option<db_wire::query_plan::QueryPlan>,
-    pub(super) plan_scroll: ScrollHandle,
-    pub(super) plan_comparison: Option<SharedString>,
     pub(super) plan_file_busy: bool,
     pub plan_requested: bool,
     pub(super) requested_plan_provider: Option<DbDriverKind>,
-    pub show_plan: bool,
-    /// Message of the last failed run, cleared when the next run starts
-    pub last_error: Option<String>,
     /// In a script tab, whether keys go to the editor rather than the result grid
     pub editor_focused: bool,
     /// File a script tab is saved to
@@ -66,10 +55,9 @@ pub struct TabState {
     /// Text last written to the script file, to tell whether the editor has unsaved changes
     pub saved_text: String,
     pub saved_revision: u64,
-    pub(super) results: Vec<ScriptResult>,
+    pub(super) results: Vec<ResultState>,
     pub(super) active_result: usize,
     pub(super) tab_session: Arc<db_wire::script::TabSession>,
-    pub(super) query_edit_driver: Option<std::sync::Weak<dyn DatabaseDriver>>,
     pub(super) context_session: Option<ConnectionSession>,
     pub(super) transaction_state: String,
     pub(super) manual_transactions: bool,
@@ -83,20 +71,43 @@ pub struct TabState {
     pub(super) saved_params: std::collections::HashMap<String, (sql_intel::ParamType, String)>,
 }
 
-/// Inactive results own their grid, pager and fetch state; switching swaps the complete
-/// view state instead of copying rows or borrowing another result's SQL.
-pub(super) struct ScriptResult {
-    grid: VirtualDataGrid,
-    fetch: FetchState,
-    sql: Option<String>,
-    error: Option<String>,
-    elapsed: Option<u64>,
-    affected_rows: Option<Option<u64>>,
-    query_plan: Option<db_wire::query_plan::QueryPlan>,
-    plan_comparison: Option<SharedString>,
-    plan_scroll: ScrollHandle,
-    show_plan: bool,
-    query_edit_driver: Option<std::sync::Weak<dyn DatabaseDriver>>,
+const SCRIPT_RESULT_LIMIT: usize = 20;
+
+pub(crate) struct ResultState {
+    pub(crate) grid: VirtualDataGrid,
+    pub(crate) fetch: FetchState,
+    /// Statement used by fetch next for a script result.
+    pub(crate) script_sql: Option<String>,
+    pub(crate) last_error: Option<String>,
+    pub(crate) execution_time_ms: Option<u64>,
+    pub(crate) affected_rows: Option<Option<u64>>,
+    pub(crate) query_plan: Option<db_wire::query_plan::QueryPlan>,
+    pub(crate) plan_comparison: Option<SharedString>,
+    pub(crate) plan_scroll: ScrollHandle,
+    pub(crate) show_plan: bool,
+    pub(crate) query_edit_driver: Option<std::sync::Weak<dyn DatabaseDriver>>,
+}
+
+impl ResultState {
+    fn empty(grid: VirtualDataGrid, fetch_size: usize) -> Self {
+        Self {
+            grid,
+            fetch: FetchState {
+                size: fetch_size,
+                size_text: fetch_size.to_string(),
+                ..FetchState::default()
+            },
+            script_sql: None,
+            last_error: None,
+            execution_time_ms: None,
+            affected_rows: None,
+            query_plan: None,
+            plan_comparison: None,
+            plan_scroll: ScrollHandle::new(),
+            show_plan: false,
+            query_edit_driver: None,
+        }
+    }
 }
 
 /// DBeaver-style incremental fetching: the first run reads `size` rows, and reaching the
@@ -181,10 +192,10 @@ impl FetchSummary {
 /// SQL reading one chunk of a script tab's statement from `offset`, and whether it is paged.
 /// Statements that are not plain SELECTs run as written, in one go.
 pub fn script_fetch_query(tab: &TabState, offset: u64) -> (String, bool) {
-    let Some(ref statement) = tab.script_sql else {
+    let Some(ref statement) = tab.current_result.script_sql else {
         return (String::new(), false);
     };
-    match paged_select(statement, tab.fetch.size, offset) {
+    match paged_select(statement, tab.current_result.fetch.size, offset) {
         Some(sql) => (sql, true),
         None => (statement.clone(), false),
     }
@@ -227,7 +238,7 @@ impl TabState {
             schema_name: Some(schema.to_string()),
             table_name: Some(table.to_string()),
             editor: SqlEditorView::new("", theme, Some(cache)),
-            grid,
+            current_result: ResultState::empty(grid, DEFAULT_FETCH_SIZE),
             ..Self::blank(id)
         }
     }
@@ -243,7 +254,10 @@ impl TabState {
         Self {
             title: script.name.clone(),
             editor: SqlEditorView::new(text, theme.clone(), Some(cache)),
-            grid: VirtualDataGrid::new(None, theme),
+            current_result: ResultState::empty(
+                VirtualDataGrid::new(None, theme),
+                DEFAULT_FETCH_SIZE,
+            ),
             editor_focused: true,
             script_path: Some(script.path.clone()),
             connection_id: Some(script.connection_id.clone()),
@@ -269,7 +283,10 @@ impl TabState {
         Self {
             title: format!("{database} · Temporary SQL"),
             editor: SqlEditorView::new("", theme.clone(), Some(session.schema_cache.clone())),
-            grid: VirtualDataGrid::new(None, theme),
+            current_result: ResultState::empty(
+                VirtualDataGrid::new(None, theme),
+                DEFAULT_FETCH_SIZE,
+            ),
             editor_focused: true,
             connection_id: Some(connection_id),
             context_session: Some(session),
@@ -321,22 +338,16 @@ impl TabState {
             show_sql_dialog: false,
             editor: SqlEditorView::new("", Theme::dark(), None),
             result_split: Default::default(),
-            grid: VirtualDataGrid::new(None, Theme::dark()),
-            execution_time_ms: None,
-            affected_rows: None,
+            current_result: ResultState::empty(
+                VirtualDataGrid::new(None, Theme::dark()),
+                DEFAULT_FETCH_SIZE,
+            ),
             execution_log: Default::default(),
             show_execution_log: false,
             timeout_index: 0,
-            fetch: FetchState::default(),
-            script_sql: None,
-            query_plan: None,
-            plan_scroll: ScrollHandle::new(),
-            plan_comparison: None,
             plan_file_busy: false,
             plan_requested: false,
             requested_plan_provider: None,
-            show_plan: false,
-            last_error: None,
             editor_focused: false,
             script_path: None,
             script_file_dialog_busy: false,
@@ -347,7 +358,6 @@ impl TabState {
             active_result: 0,
             pending_statements: Default::default(),
             tab_session: Arc::default(),
-            query_edit_driver: None,
             context_session: None,
             transaction_state: "Idle".into(),
             manual_transactions: false,
@@ -366,7 +376,7 @@ impl TabState {
     }
 
     pub(super) fn result_count(&self) -> usize {
-        self.results.len() + usize::from(self.script_sql.is_some())
+        self.results.len() + usize::from(self.current_result.script_sql.is_some())
     }
 
     pub(super) fn show_record(&mut self, view: super::record_view::RecordView) {
@@ -382,36 +392,23 @@ impl TabState {
         if index >= self.result_count() || index == self.active_result {
             return;
         }
-        if self.grid.changeset.is_dirty() || self.grid.editing_cell.is_some() {
-            self.last_error = Some("Save or Cancel result edits before switching results".into());
+        let grid = &self.current_result.grid;
+        if grid.changeset.is_dirty() || grid.editing_cell.is_some() {
+            self.current_result.last_error =
+                Some("Save or Cancel result edits before switching results".into());
             return;
         }
         self.close_record_view();
-        let slot = if index < self.active_result {
-            index
-        } else {
-            index - 1
-        };
-        let result = &mut self.results[slot];
-        std::mem::swap(&mut self.grid, &mut result.grid);
-        std::mem::swap(&mut self.fetch, &mut result.fetch);
-        std::mem::swap(&mut self.script_sql, &mut result.sql);
-        std::mem::swap(&mut self.last_error, &mut result.error);
-        std::mem::swap(&mut self.execution_time_ms, &mut result.elapsed);
-        std::mem::swap(&mut self.affected_rows, &mut result.affected_rows);
-        std::mem::swap(&mut self.query_plan, &mut result.query_plan);
-        std::mem::swap(&mut self.plan_comparison, &mut result.plan_comparison);
-        std::mem::swap(&mut self.plan_scroll, &mut result.plan_scroll);
-        std::mem::swap(&mut self.show_plan, &mut result.show_plan);
-        std::mem::swap(&mut self.query_edit_driver, &mut result.query_edit_driver);
-        // Keep inactive results in display order after removing the selected slot.
-        let result = self.results.remove(slot);
-        let old_slot = if index < self.active_result {
+        let from_left = index < self.active_result;
+        let slot = if from_left { index } else { index - 1 };
+        let old_slot = if from_left {
             self.active_result - 1
         } else {
             self.active_result
         };
-        self.results.insert(old_slot, result);
+        let next = self.results.remove(slot);
+        let previous = std::mem::replace(&mut self.current_result, next);
+        self.results.insert(old_slot, previous);
         self.active_result = index;
     }
 
@@ -431,8 +428,10 @@ impl TabState {
             }
             return;
         }
-        if self.grid.changeset.is_dirty() || self.grid.editing_cell.is_some() {
-            self.last_error = Some("Save or Cancel result edits before closing results".into());
+        let grid = &self.current_result.grid;
+        if grid.changeset.is_dirty() || grid.editing_cell.is_some() {
+            self.current_result.last_error =
+                Some("Save or Cancel result edits before closing results".into());
             return;
         }
         if self.result_count() > 1 {
@@ -446,27 +445,17 @@ impl TabState {
             return;
         }
         self.close_record_view();
-        self.grid = VirtualDataGrid::new(None, self.editor.theme.clone());
-        let fetch_size = self.fetch.size;
-        self.fetch = FetchState::default();
-        self.fetch.size = fetch_size;
-        self.fetch.size_text = fetch_size.to_string();
-        self.script_sql = None;
-        self.last_error = None;
-        self.execution_time_ms = None;
-        self.affected_rows = None;
-        self.query_plan = None;
-        self.plan_comparison = None;
-        self.plan_scroll = ScrollHandle::new();
-        self.show_plan = false;
-        self.query_edit_driver = None;
+        self.current_result = ResultState::empty(
+            VirtualDataGrid::new(None, self.editor.theme.clone()),
+            self.current_result.fetch.size,
+        );
         self.active_result = 0;
     }
 
     pub(super) fn invalidate_dropped_object_results(&mut self) {
         self.schema_stale = true;
-        self.fetch.has_more = false;
-        self.query_edit_driver = None;
+        self.current_result.fetch.has_more = false;
+        self.current_result.query_edit_driver = None;
         for result in &mut self.results {
             result.fetch.has_more = false;
             result.query_edit_driver = None;
@@ -475,36 +464,25 @@ impl TabState {
 
     pub(super) fn new_script_result(&mut self, sql: String) {
         self.close_record_view();
-        let fetch_size = self.fetch.size;
-        if self.script_sql.is_some() {
-            let result = ScriptResult {
-                grid: std::mem::replace(
-                    &mut self.grid,
-                    VirtualDataGrid::new(None, self.editor.theme.clone()),
-                ),
-                fetch: std::mem::take(&mut self.fetch),
-                sql: self.script_sql.take(),
-                error: self.last_error.take(),
-                elapsed: self.execution_time_ms.take(),
-                affected_rows: self.affected_rows.take(),
-                query_plan: self.query_plan.take(),
-                plan_comparison: self.plan_comparison.take(),
-                plan_scroll: std::mem::replace(&mut self.plan_scroll, ScrollHandle::new()),
-                show_plan: std::mem::take(&mut self.show_plan),
-                query_edit_driver: self.query_edit_driver.take(),
-            };
+        let fetch_size = self.current_result.fetch.size;
+        if self.current_result.script_sql.is_some() {
+            let next = ResultState::empty(
+                VirtualDataGrid::new(None, self.editor.theme.clone()),
+                fetch_size,
+            );
+            let previous = std::mem::replace(&mut self.current_result, next);
             self.results
-                .insert(self.active_result.min(self.results.len()), result);
+                .insert(self.active_result.min(self.results.len()), previous);
             // Bound retained grid metadata and spill files as well as row memory.
-            if self.results.len() >= 20 {
+            if self.results.len() >= SCRIPT_RESULT_LIMIT {
                 self.results.remove(0);
             }
+        } else {
+            self.current_result.fetch.size_text = fetch_size.to_string();
+            self.current_result.query_edit_driver = None;
         }
-        self.fetch.size = fetch_size;
-        self.fetch.size_text = fetch_size.to_string();
         self.active_result = self.results.len();
-        self.query_edit_driver = None;
-        self.script_sql = Some(sql);
+        self.current_result.script_sql = Some(sql);
     }
 
     pub(super) fn statement_timeout(&self) -> Option<Duration> {
@@ -517,7 +495,8 @@ impl TabState {
 
     /// Rows currently shown in the grid
     pub fn loaded_rows(&self) -> u64 {
-        self.grid
+        self.current_result
+            .grid
             .pager
             .as_ref()
             .map(|p| p.total_rows())
@@ -534,18 +513,18 @@ impl TabState {
 
     /// Marks the start of a run; `append` keeps the current rows and adds the new ones after them
     pub fn begin_fetch(&mut self, paged: bool, append: bool) {
-        self.plan_comparison = None;
-        self.affected_rows = None;
-        self.execution_time_ms = None;
-        self.query_plan = None;
+        self.current_result.plan_comparison = None;
+        self.current_result.affected_rows = None;
+        self.current_result.execution_time_ms = None;
+        self.current_result.query_plan = None;
         self.plan_requested = false;
         self.requested_plan_provider = None;
-        self.show_plan = false;
-        self.fetch.paged = paged;
-        self.fetch.append = append.then(AppendSource::default);
-        self.fetch.started_at = Some(Instant::now());
-        self.fetch.schema_ready_at = None;
-        self.last_error = None;
+        self.current_result.show_plan = false;
+        self.current_result.fetch.paged = paged;
+        self.current_result.fetch.append = append.then(AppendSource::default);
+        self.current_result.fetch.started_at = Some(Instant::now());
+        self.current_result.fetch.schema_ready_at = None;
+        self.current_result.last_error = None;
     }
 
     /// Applies a streaming query event to this tab's grid
@@ -553,7 +532,7 @@ impl TabState {
         self.execution_log.apply(&event);
         match event {
             StreamEvent::CommandComplete { affected_rows } => {
-                self.affected_rows = Some(affected_rows);
+                self.current_result.affected_rows = Some(affected_rows);
                 QueryStatus::Running {
                     rows: self.loaded_rows(),
                 }
@@ -563,16 +542,16 @@ impl TabState {
             },
             StreamEvent::SchemaReady(pager) => {
                 self.schema_stale = false;
-                self.fetch.schema_ready_at = Some(Instant::now());
-                if let Some(ref mut append) = self.fetch.append {
+                self.current_result.fetch.schema_ready_at = Some(Instant::now());
+                if let Some(ref mut append) = self.current_result.fetch.append {
                     append.pager = Some(pager);
                 } else {
                     self.close_record_view();
-                    self.grid.refill_pager(pager);
+                    self.current_result.grid.refill_pager(pager);
                     if let Some(ref t_name) = self.table_name {
-                        self.grid.set_table_name(t_name.clone());
+                        self.current_result.grid.set_table_name(t_name.clone());
                     }
-                    self.execution_time_ms = None;
+                    self.current_result.execution_time_ms = None;
                 }
                 QueryStatus::Running {
                     rows: self.loaded_rows(),
@@ -582,7 +561,7 @@ impl TabState {
                 if let Err(e) = self.copy_appended_rows() {
                     return self.fail_fetch(e);
                 }
-                self.grid.on_rows_appended();
+                self.current_result.grid.on_rows_appended();
                 QueryStatus::Running {
                     rows: self.loaded_rows(),
                 }
@@ -594,16 +573,22 @@ impl TabState {
                 if let Err(e) = self.copy_appended_rows() {
                     return self.fail_fetch(e);
                 }
-                self.grid.on_rows_appended();
-                self.fetch.append = None;
-                self.fetch.has_more = self.fetch.paged && total_rows >= self.fetch.size as u64;
-                self.execution_time_ms = Some(elapsed_ms);
+                self.current_result.grid.on_rows_appended();
+                self.current_result.fetch.append = None;
+                self.current_result.fetch.has_more = self.current_result.fetch.paged
+                    && total_rows >= self.current_result.fetch.size as u64;
+                self.current_result.execution_time_ms = Some(elapsed_ms);
 
                 let now = Instant::now();
-                let started = self.fetch.started_at.take().unwrap_or(now);
-                let schema_ready = self.fetch.schema_ready_at.take().unwrap_or(started);
+                let started = self.current_result.fetch.started_at.take().unwrap_or(now);
+                let schema_ready = self
+                    .current_result
+                    .fetch
+                    .schema_ready_at
+                    .take()
+                    .unwrap_or(started);
                 let rows = self.loaded_rows();
-                self.fetch.last = Some(FetchSummary {
+                self.current_result.fetch.last = Some(FetchSummary {
                     total_rows: rows,
                     elapsed: now - started,
                     fetch: now - schema_ready,
@@ -613,6 +598,7 @@ impl TabState {
                     self.plan_requested = false;
                     let provider = self.requested_plan_provider.take();
                     let parsed = self
+                        .current_result
                         .grid
                         .pager
                         .as_ref()
@@ -620,8 +606,8 @@ impl TabState {
                         .and_then(|pager| super::query_plan::parse_plan_for(provider, pager));
                     match parsed {
                         Ok(plan) => {
-                            self.query_plan = Some(plan);
-                            self.show_plan = true;
+                            self.current_result.query_plan = Some(plan);
+                            self.current_result.show_plan = true;
                         }
                         Err(error) => return self.fail_fetch(error.to_string()),
                     }
@@ -637,19 +623,22 @@ impl TabState {
         // Rows copied before the failure stay; the next scroll to the end retries from there
         self.pending_statements.clear();
         self.plan_requested = false;
-        self.fetch.append = None;
-        self.fetch.started_at = None;
-        self.fetch.schema_ready_at = None;
-        self.last_error = Some(error.clone());
+        self.current_result.fetch.append = None;
+        self.current_result.fetch.started_at = None;
+        self.current_result.fetch.schema_ready_at = None;
+        self.current_result.last_error = Some(error.clone());
         QueryStatus::Failed(error)
     }
 
     /// Copies rows that arrived in a "fetch next" pager onto the end of the grid's pager
     fn copy_appended_rows(&mut self) -> Result<(), String> {
-        let Some(ref mut append) = self.fetch.append else {
+        let Some(ref mut append) = self.current_result.fetch.append else {
             return Ok(());
         };
-        let (Some(source), Some(target)) = (append.pager.as_ref(), self.grid.pager.as_ref()) else {
+        let (Some(source), Some(target)) = (
+            append.pager.as_ref(),
+            self.current_result.grid.pager.as_ref(),
+        ) else {
             return Ok(());
         };
         if source.num_cols() != target.num_cols()
@@ -682,14 +671,14 @@ impl TabState {
         result: Result<u64, String>,
     ) -> bool {
         if let Err(error) = result {
-            self.last_error = Some(format!("Could not save row changes: {error}"));
+            self.current_result.last_error = Some(format!("Could not save row changes: {error}"));
             return false;
         }
-        if self.grid.changeset != *saved {
+        if self.current_result.grid.changeset != *saved {
             return false;
         }
-        self.last_error = None;
-        self.grid.clear_saved_edits();
+        self.current_result.last_error = None;
+        self.current_result.grid.clear_saved_edits();
         self.close_record_view();
         true
     }
@@ -752,21 +741,21 @@ mod relocated_tests {
             "relation \"users\" does not exist".to_string(),
         ));
         assert_eq!(
-            tab.last_error.as_deref(),
+            tab.current_result.last_error.as_deref(),
             Some("relation \"users\" does not exist")
         );
 
         tab.begin_fetch(true, false);
-        assert_eq!(tab.last_error, None);
+        assert_eq!(tab.current_result.last_error, None);
     }
 
     #[test]
     fn test_script_fetch_query_pages_selects_and_runs_other_statements_as_written() {
         use crate::workspace::script_fetch_query;
         let mut tab = sample_script_tab("");
-        tab.fetch.size = 100;
+        tab.current_result.fetch.size = 100;
 
-        tab.script_sql = Some("SELECT * FROM users;".to_string());
+        tab.current_result.script_sql = Some("SELECT * FROM users;".to_string());
         assert_eq!(
             script_fetch_query(&tab, 0),
             (
@@ -779,13 +768,13 @@ mod relocated_tests {
             "SELECT * FROM (SELECT * FROM users\n) fastdb_page LIMIT 100 OFFSET 100"
         );
 
-        tab.script_sql = Some("DELETE FROM users WHERE id = 1;".to_string());
+        tab.current_result.script_sql = Some("DELETE FROM users WHERE id = 1;".to_string());
         assert_eq!(
             script_fetch_query(&tab, 0),
             ("DELETE FROM users WHERE id = 1;".to_string(), false)
         );
 
-        tab.script_sql = None;
+        tab.current_result.script_sql = None;
         assert_eq!(script_fetch_query(&tab, 0), (String::new(), false));
     }
 
@@ -825,7 +814,7 @@ mod relocated_tests {
             )])
             .unwrap(),
         )));
-        assert_eq!(tab.grid.row_count(), 0);
+        assert_eq!(tab.current_result.grid.row_count(), 0);
         assert!(tab.shows_script_results());
         tab.new_script_result("DELETE FROM users WHERE FALSE".into());
         tab.apply_stream_event(db_wire::StreamEvent::CommandComplete {
@@ -835,13 +824,13 @@ mod relocated_tests {
         tab.apply_stream_event(db_wire::StreamEvent::Error("statement failed".into()));
         assert!(tab.shows_script_results());
         tab.new_script_result("EXPLAIN SELECT 1".into());
-        tab.query_plan = Some(
+        tab.current_result.query_plan = Some(
             db_wire::query_plan::QueryPlan::parse(
                 br#"[{"Plan":{"Node Type":"Result","Plan Rows":1}}]"#,
             )
             .unwrap(),
         );
-        tab.show_plan = true;
+        tab.current_result.show_plan = true;
         assert!(tab.shows_script_results());
         tab.result_split.editor_fraction = 0.65;
         tab.select_result(0);
@@ -877,8 +866,11 @@ mod relocated_tests {
             tab.apply_stream_event(StreamEvent::SchemaReady(Arc::clone(&pager))),
             QueryStatus::Running { rows: 0 }
         );
-        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &pager));
-        assert_eq!(tab.grid.table_name, "users");
+        assert!(Arc::ptr_eq(
+            tab.current_result.grid.pager.as_ref().unwrap(),
+            &pager
+        ));
+        assert_eq!(tab.current_result.grid.table_name, "users");
 
         pager
             .append_row(vec![
@@ -891,7 +883,7 @@ mod relocated_tests {
             tab.apply_stream_event(StreamEvent::PageAppended { total_rows: 2 }),
             QueryStatus::Running { rows: 2 }
         );
-        assert_eq!(tab.grid.width_sampled_rows, 2);
+        assert_eq!(tab.current_result.grid.width_sampled_rows, 2);
 
         assert_eq!(
             tab.apply_stream_event(StreamEvent::Completed {
@@ -903,7 +895,7 @@ mod relocated_tests {
                 elapsed_ms: 15
             }
         );
-        assert_eq!(tab.execution_time_ms, Some(15));
+        assert_eq!(tab.current_result.execution_time_ms, Some(15));
     }
 
     #[test]
@@ -915,13 +907,16 @@ mod relocated_tests {
         let mut tab = sample_table_tab();
         let previous =
             Arc::new(QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int4)]).unwrap());
-        tab.grid.set_pager(Arc::clone(&previous));
+        tab.current_result.grid.set_pager(Arc::clone(&previous));
 
         assert_eq!(
             tab.apply_stream_event(StreamEvent::Error("relation does not exist".to_string())),
             QueryStatus::Failed("relation does not exist".to_string())
         );
-        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &previous));
+        assert!(Arc::ptr_eq(
+            tab.current_result.grid.pager.as_ref().unwrap(),
+            &previous
+        ));
     }
 
     #[test]
@@ -932,7 +927,7 @@ mod relocated_tests {
 
         let columns = || vec![ColumnMeta::new("id", DataType::Int4)];
         let mut tab = sample_table_tab();
-        tab.fetch.size = 2;
+        tab.current_result.fetch.size = 2;
 
         // First chunk comes back full, so more rows may follow
         let first = Arc::new(QueryResultPager::new(columns()).unwrap());
@@ -944,9 +939,10 @@ mod relocated_tests {
             total_rows: 2,
             elapsed_ms: 3,
         });
-        assert!(tab.fetch.has_more);
+        assert!(tab.current_result.fetch.has_more);
         assert!(
-            tab.fetch
+            tab.current_result
+                .fetch
                 .last
                 .as_ref()
                 .unwrap()
@@ -977,15 +973,19 @@ mod relocated_tests {
             }
         );
 
-        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &first));
+        assert!(Arc::ptr_eq(
+            tab.current_result.grid.pager.as_ref().unwrap(),
+            &first
+        ));
         assert_eq!(first.get_cell(2, 0), Some(b"3".to_vec()));
         assert!(
-            !tab.fetch.has_more,
+            !tab.current_result.fetch.has_more,
             "a short chunk means the table is exhausted"
         );
-        assert!(!tab.fetch.is_appending());
+        assert!(!tab.current_result.fetch.is_appending());
         assert!(
-            tab.fetch
+            tab.current_result
+                .fetch
                 .last
                 .as_ref()
                 .unwrap()
@@ -997,13 +997,19 @@ mod relocated_tests {
     #[test]
     fn test_fetch_size_text_falls_back_to_current_size() {
         let mut tab = sample_table_tab();
-        tab.fetch.size_text = "500".to_string();
-        tab.fetch.commit_size_text();
-        assert_eq!(tab.fetch.size, 500);
+        tab.current_result.fetch.size_text = "500".to_string();
+        tab.current_result.fetch.commit_size_text();
+        assert_eq!(tab.current_result.fetch.size, 500);
 
-        tab.fetch.size_text = "0".to_string();
-        tab.fetch.commit_size_text();
-        assert_eq!((tab.fetch.size, tab.fetch.size_text.as_str()), (500, "500"));
+        tab.current_result.fetch.size_text = "0".to_string();
+        tab.current_result.fetch.commit_size_text();
+        assert_eq!(
+            (
+                tab.current_result.fetch.size,
+                tab.current_result.fetch.size_text.as_str()
+            ),
+            (500, "500")
+        );
     }
 
     #[test]
@@ -1027,7 +1033,7 @@ mod append_tests {
         let mut tab = TabState::table(1, "public", "t", ui_core::theme::Theme::dark(), cache);
         let old =
             Arc::new(QueryResultPager::new(vec![ColumnMeta::new("old", DataType::Text)]).unwrap());
-        tab.grid.set_pager(old.clone());
+        tab.current_result.grid.set_pager(old.clone());
         tab.begin_fetch(true, true);
         let new =
             Arc::new(QueryResultPager::new(vec![ColumnMeta::new("new", DataType::Text)]).unwrap());
@@ -1091,22 +1097,30 @@ mod row_save_tests {
             super::Theme::dark(),
             std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap()),
         );
-        tab.grid
+        tab.current_result
+            .grid
             .changeset
             .set_cell(0, 0, None, Some("before".into()));
-        let saved = tab.grid.changeset.clone();
+        let saved = tab.current_result.grid.changeset.clone();
         assert!(!tab.finish_row_save(&saved, Err("conflict".into())));
-        assert!(tab.grid.changeset.is_dirty());
-        assert!(tab.last_error.as_deref().unwrap().contains("conflict"));
-        tab.grid
+        assert!(tab.current_result.grid.changeset.is_dirty());
+        assert!(
+            tab.current_result
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("conflict")
+        );
+        tab.current_result
+            .grid
             .changeset
             .set_cell(0, 0, None, Some("newer".into()));
         assert!(!tab.finish_row_save(&saved, Ok(1)));
-        assert!(tab.grid.changeset.is_dirty());
-        let latest = tab.grid.changeset.clone();
+        assert!(tab.current_result.grid.changeset.is_dirty());
+        let latest = tab.current_result.grid.changeset.clone();
         assert!(tab.finish_row_save(&latest, Ok(1)));
-        assert!(!tab.grid.changeset.is_dirty());
-        assert!(tab.last_error.is_none());
+        assert!(!tab.current_result.grid.changeset.is_dirty());
+        assert!(tab.current_result.last_error.is_none());
     }
 }
 
@@ -1130,6 +1144,61 @@ mod script_result_tests {
         )
     }
     #[test]
+    fn retained_results_move_the_whole_payload_and_keep_the_latest_twenty() {
+        let mut tab = TabState::blank(1);
+        for index in 0..20 {
+            tab.new_script_result(format!("statement {index}"));
+        }
+
+        tab.select_result(1);
+        let pager = Arc::new(
+            QueryResultPager::new(vec![ColumnMeta::new("value", DataType::Text)]).unwrap(),
+        );
+        tab.current_result.grid.refill_pager(pager.clone());
+        tab.current_result.fetch.size = 31;
+        tab.current_result.fetch.size_text = "31".into();
+
+        tab.new_script_result("statement 20".into());
+        assert_eq!(tab.result_count(), 20);
+        assert_eq!(tab.active_result, 19);
+        assert_eq!(
+            tab.current_result.script_sql.as_deref(),
+            Some("statement 20")
+        );
+        assert_eq!(tab.current_result.fetch.size, 31);
+        assert!(tab.current_result.grid.pager.is_none());
+
+        tab.select_result(0);
+        assert_eq!(
+            tab.current_result.script_sql.as_deref(),
+            Some("statement 1")
+        );
+        assert_eq!(tab.current_result.fetch.size, 31);
+        assert!(Arc::ptr_eq(
+            tab.current_result.grid.pager.as_ref().unwrap(),
+            &pager,
+        ));
+        tab.close_result(0);
+        assert_eq!(
+            tab.current_result.script_sql.as_deref(),
+            Some("statement 2")
+        );
+
+        for index in (1..tab.result_count()).rev() {
+            tab.close_result(index);
+        }
+        tab.current_result.fetch.size = 43;
+        tab.current_result.fetch.size_text = "uncommitted text".into();
+        tab.close_result(0);
+        assert_eq!(tab.result_count(), 0);
+        assert_eq!(tab.active_result, 0);
+        assert_eq!(tab.current_result.fetch.size, 43);
+        assert_eq!(tab.current_result.fetch.size_text, "43");
+        assert!(tab.current_result.grid.pager.is_none());
+        assert!(tab.current_result.script_sql.is_none());
+    }
+
+    #[test]
     fn closing_results_preserves_selection_and_clears_the_last_result() {
         let mut tab = tab();
         for n in 0..4 {
@@ -1139,20 +1208,20 @@ mod script_result_tests {
         assert_eq!(tab.result_count(), 4);
         tab.close_result(1);
         assert_eq!(tab.active_result, 2);
-        assert_eq!(tab.script_sql.as_deref(), Some("select 3"));
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("select 3"));
         tab.select_result(0);
         tab.close_result(2);
         assert_eq!(tab.active_result, 0);
-        assert_eq!(tab.script_sql.as_deref(), Some("select 0"));
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("select 0"));
         tab.close_result(0);
-        assert_eq!(tab.script_sql.as_deref(), Some("select 2"));
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("select 2"));
         tab.close_result(0);
         assert_eq!(tab.result_count(), 0);
         assert_eq!(tab.active_result, 0);
-        assert!(tab.grid.pager.is_none());
+        assert!(tab.current_result.grid.pager.is_none());
         tab.new_script_result("select 4".into());
         assert_eq!(tab.result_count(), 1);
-        assert_eq!(tab.script_sql.as_deref(), Some("select 4"));
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("select 4"));
     }
 
     #[test]
@@ -1163,8 +1232,8 @@ mod script_result_tests {
         tab.close_result(1);
         assert_eq!(tab.result_count(), 1);
         assert_eq!(tab.active_result, 0);
-        assert_eq!(tab.script_sql.as_deref(), Some("select 1"));
-        tab.grid.editing_cell = Some(ui_grid::CellEdit {
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("select 1"));
+        tab.current_result.grid.editing_cell = Some(ui_grid::CellEdit {
             row: 0,
             col: 0,
             text: "typing".into(),
@@ -1173,9 +1242,13 @@ mod script_result_tests {
         });
         tab.close_result(0);
         assert_eq!(tab.result_count(), 1);
-        assert_eq!(tab.grid.editing_cell.as_ref().unwrap().text, "typing");
+        assert_eq!(
+            tab.current_result.grid.editing_cell.as_ref().unwrap().text,
+            "typing"
+        );
         assert!(
-            tab.last_error
+            tab.current_result
+                .last_error
                 .as_deref()
                 .unwrap()
                 .contains("Save or Cancel")
@@ -1186,13 +1259,15 @@ mod script_result_tests {
     fn closing_active_result_preserves_unsaved_edits() {
         let mut tab = tab();
         tab.new_script_result("select 1".into());
-        tab.grid
+        tab.current_result
+            .grid
             .stage(|changes| changes.set_cell(0, 0, None, Some("pending".into())));
         tab.close_result(0);
         assert_eq!(tab.result_count(), 1);
-        assert!(tab.grid.changeset.is_dirty());
+        assert!(tab.current_result.grid.changeset.is_dirty());
         assert!(
-            tab.last_error
+            tab.current_result
+                .last_error
                 .as_deref()
                 .unwrap()
                 .contains("Save or Cancel")
@@ -1206,18 +1281,18 @@ mod script_result_tests {
             Arc::new(db_wire::SqliteDriver::new_memory());
         for sql in ["SELECT 1", "SELECT 2"] {
             tab.new_script_result(sql.into());
-            tab.fetch.has_more = true;
-            tab.query_edit_driver = Some(Arc::downgrade(&driver));
+            tab.current_result.fetch.has_more = true;
+            tab.current_result.query_edit_driver = Some(Arc::downgrade(&driver));
         }
 
         tab.invalidate_dropped_object_results();
         assert!(tab.schema_stale);
-        assert!(!tab.fetch.has_more);
-        assert!(tab.query_edit_driver.is_none());
+        assert!(!tab.current_result.fetch.has_more);
+        assert!(tab.current_result.query_edit_driver.is_none());
         tab.select_result(0);
-        assert_eq!(tab.script_sql.as_deref(), Some("SELECT 1"));
-        assert!(!tab.fetch.has_more);
-        assert!(tab.query_edit_driver.is_none());
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("SELECT 1"));
+        assert!(!tab.current_result.fetch.has_more);
+        assert!(tab.current_result.query_edit_driver.is_none());
     }
 
     #[test]
@@ -1226,21 +1301,23 @@ mod script_result_tests {
         tab.new_script_result("SELECT 1".into());
         tab.new_script_result("SELECT 2".into());
         let selected = tab.active_result;
-        tab.grid
+        tab.current_result
+            .grid
             .stage(|changes| changes.set_cell(0, 0, None, Some("pending".into())));
         tab.select_result(0);
         assert_eq!(tab.active_result, selected);
-        assert_eq!(tab.script_sql.as_deref(), Some("SELECT 2"));
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("SELECT 2"));
         assert!(
-            tab.last_error
+            tab.current_result
+                .last_error
                 .as_deref()
                 .unwrap()
                 .contains("Save or Cancel")
         );
-        let revision = tab.grid.changeset_revision();
-        let saved = tab.grid.changeset.clone();
+        let revision = tab.current_result.grid.changeset_revision();
+        let saved = tab.current_result.grid.changeset.clone();
         assert!(tab.finish_row_save(&saved, Ok(1)));
-        assert_ne!(tab.grid.changeset_revision(), revision);
+        assert_ne!(tab.current_result.grid.changeset_revision(), revision);
         tab.select_result(0);
         assert_eq!(tab.active_result, 0);
     }
@@ -1268,13 +1345,19 @@ mod script_result_tests {
             }
         }
         assert_eq!(tab.result_count(), 4);
-        assert!(tab.last_error.is_some());
-        assert!(!tab.fetch.has_more);
+        assert!(tab.current_result.last_error.is_some());
+        assert!(!tab.current_result.fetch.has_more);
         tab.select_result(2);
         assert_eq!(tab.loaded_rows(), 1);
-        assert!(tab.last_error.is_none());
+        assert!(tab.current_result.last_error.is_none());
         assert_eq!(
-            tab.grid.pager.as_ref().unwrap().get_cell(0, 0).as_deref(),
+            tab.current_result
+                .grid
+                .pager
+                .as_ref()
+                .unwrap()
+                .get_cell(0, 0)
+                .as_deref(),
             Some(b"a;b".as_slice())
         );
         assert_eq!(tab.connection_id.as_deref(), Some("a"));
@@ -1284,9 +1367,9 @@ mod script_result_tests {
         assert!(entries[2].contains("1 row(s) returned"));
         assert!(entries[3].contains("no such column: missing"));
         tab.select_result(1);
-        assert_eq!(tab.affected_rows, Some(Some(1)));
+        assert_eq!(tab.current_result.affected_rows, Some(Some(1)));
         tab.select_result(2);
-        assert_eq!(tab.affected_rows, None);
+        assert_eq!(tab.current_result.affected_rows, None);
     }
 
     #[test]
@@ -1318,7 +1401,7 @@ mod script_result_tests {
                 .contains("v = 0")
         );
         tab.select_result(0);
-        assert_eq!(tab.affected_rows, Some(Some(5)));
+        assert_eq!(tab.current_result.affected_rows, Some(Some(5)));
     }
 
     #[test]
@@ -1326,24 +1409,27 @@ mod script_result_tests {
         let mut tab = tab();
         for n in 0..4 {
             tab.new_script_result(format!("select {n}"));
-            tab.fetch.size = n + 10;
-            tab.last_error = Some(n.to_string());
+            tab.current_result.fetch.size = n + 10;
+            tab.current_result.last_error = Some(n.to_string());
             let pager = Arc::new(
                 QueryResultPager::new(vec![ColumnMeta::new(format!("col{n}"), DataType::Text)])
                     .unwrap(),
             );
-            tab.grid.refill_pager(pager);
+            tab.current_result.grid.refill_pager(pager);
         }
         for index in [0, 3, 1, 2, 0, 2, 3] {
             tab.select_result(index);
             assert_eq!(
-                tab.script_sql.as_deref(),
+                tab.current_result.script_sql.as_deref(),
                 Some(format!("select {index}").as_str())
             );
-            assert_eq!(tab.fetch.size, index + 10);
-            assert_eq!(tab.last_error.as_deref(), Some(index.to_string().as_str()));
+            assert_eq!(tab.current_result.fetch.size, index + 10);
             assert_eq!(
-                tab.grid.pager.as_ref().unwrap().columns[0].name,
+                tab.current_result.last_error.as_deref(),
+                Some(index.to_string().as_str())
+            );
+            assert_eq!(
+                tab.current_result.grid.pager.as_ref().unwrap().columns[0].name,
                 format!("col{index}")
             );
         }
@@ -1371,33 +1457,39 @@ mod query_plan_tests {
         let mut tab = tab();
         tab.new_script_result("first plan".into());
         let first = gpui::point(gpui::px(-10.0), gpui::px(-200.0));
-        tab.plan_scroll.set_offset(first);
-        tab.plan_comparison = Some("first comparison".into());
+        tab.current_result.plan_scroll.set_offset(first);
+        tab.current_result.plan_comparison = Some("first comparison".into());
         tab.new_script_result("second plan".into());
         assert_eq!(
-            tab.plan_scroll.offset(),
+            tab.current_result.plan_scroll.offset(),
             gpui::point(gpui::px(0.0), gpui::px(0.0))
         );
         let second = gpui::point(gpui::px(-20.0), gpui::px(-300.0));
-        tab.plan_scroll.set_offset(second);
-        tab.plan_comparison = Some("second comparison".into());
+        tab.current_result.plan_scroll.set_offset(second);
+        tab.current_result.plan_comparison = Some("second comparison".into());
         tab.select_result(0);
-        assert_eq!(tab.plan_scroll.offset(), first);
+        assert_eq!(tab.current_result.plan_scroll.offset(), first);
         assert_eq!(
-            tab.plan_comparison.as_ref().map(|text| text.to_string()),
+            tab.current_result
+                .plan_comparison
+                .as_ref()
+                .map(|text| text.to_string()),
             Some("first comparison".to_string())
         );
         tab.select_result(1);
-        assert_eq!(tab.plan_scroll.offset(), second);
+        assert_eq!(tab.current_result.plan_scroll.offset(), second);
         assert_eq!(
-            tab.plan_comparison.as_ref().map(|text| text.to_string()),
+            tab.current_result
+                .plan_comparison
+                .as_ref()
+                .map(|text| text.to_string()),
             Some("second comparison".to_string())
         );
         tab.close_result(1);
         tab.close_result(0);
-        assert!(tab.plan_comparison.is_none());
+        assert!(tab.current_result.plan_comparison.is_none());
         assert_eq!(
-            tab.plan_scroll.offset(),
+            tab.current_result.plan_scroll.offset(),
             gpui::point(gpui::px(0.0), gpui::px(0.0))
         );
     }
@@ -1423,18 +1515,18 @@ mod query_plan_tests {
             complete_plan(&mut tab, br#"[{"Plan":{"Node Type":"Result"}}]"#),
             QueryStatus::Done { .. }
         ));
-        assert!(tab.show_plan);
+        assert!(tab.current_result.show_plan);
         tab.begin_session_statement("SELECT 2".into(), false);
         assert!(!tab.plan_requested);
-        assert!(tab.query_plan.is_none());
+        assert!(tab.current_result.query_plan.is_none());
         tab.select_result(0);
-        assert!(tab.query_plan.is_some());
+        assert!(tab.current_result.query_plan.is_some());
         tab.select_result(1);
         assert!(!tab.plan_requested);
         tab.begin_session_statement("EXPLAIN SELECT missing".into(), true);
         tab.apply_stream_event(StreamEvent::Error("relation missing".into()));
         assert!(!tab.plan_requested);
-        assert!(!tab.show_plan);
+        assert!(!tab.current_result.show_plan);
     }
 
     #[test]
@@ -1447,15 +1539,18 @@ mod query_plan_tests {
             br#"[{"Plan":{"Node Type":"Result","Plan Rows":1}}]"#,
         );
         assert!(matches!(status, QueryStatus::Done { .. }));
-        assert!(tab.query_plan.is_some());
-        assert!(tab.show_plan);
+        assert!(tab.current_result.query_plan.is_some());
+        assert!(tab.current_result.show_plan);
         assert!(!tab.plan_requested);
-        assert!(!tab.fetch.has_more);
+        assert!(!tab.current_result.fetch.has_more);
         // The raw plan remains available without re-execution.
-        assert_eq!(tab.grid.pager.as_ref().unwrap().total_rows(), 1);
+        assert_eq!(
+            tab.current_result.grid.pager.as_ref().unwrap().total_rows(),
+            1
+        );
         tab.begin_fetch(true, false);
-        assert!(tab.query_plan.is_none());
-        assert!(!tab.show_plan);
+        assert!(tab.current_result.query_plan.is_none());
+        assert!(!tab.current_result.show_plan);
         assert!(!tab.plan_requested);
     }
 
@@ -1468,14 +1563,14 @@ mod query_plan_tests {
         complete_plan(&mut tab, br#"[{"Plan":{"Node Type":"Result"}}]"#);
         tab.new_script_result("SELECT 2".into());
         tab.begin_fetch(false, false);
-        assert!(tab.query_plan.is_none());
-        assert!(!tab.show_plan);
+        assert!(tab.current_result.query_plan.is_none());
+        assert!(!tab.current_result.show_plan);
         tab.select_result(0);
-        assert!(tab.query_plan.is_some());
-        assert!(tab.show_plan);
+        assert!(tab.current_result.query_plan.is_some());
+        assert!(tab.current_result.show_plan);
         tab.select_result(1);
-        assert!(tab.query_plan.is_none());
-        assert!(!tab.show_plan);
+        assert!(tab.current_result.query_plan.is_none());
+        assert!(!tab.current_result.show_plan);
     }
 
     #[test]
@@ -1487,13 +1582,13 @@ mod query_plan_tests {
             complete_plan(&mut tab, b"{}"),
             QueryStatus::Failed(_)
         ));
-        assert!(tab.query_plan.is_none());
+        assert!(tab.current_result.query_plan.is_none());
         assert!(!tab.plan_requested);
-        assert!(tab.last_error.is_some());
+        assert!(tab.current_result.last_error.is_some());
         tab.begin_fetch(false, false);
         tab.plan_requested = true;
         tab.apply_stream_event(StreamEvent::Error("cancelled".into()));
         assert!(!tab.plan_requested);
-        assert!(!tab.show_plan);
+        assert!(!tab.current_result.show_plan);
     }
 }

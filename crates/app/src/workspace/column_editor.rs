@@ -161,7 +161,7 @@ impl Workspace {
             return;
         };
         let Some(driver) = self.tab_session(index).driver.clone() else {
-            self.tabs[index].last_error =
+            self.tabs[index].current_result.last_error =
                 Some("Connection is disconnected; reconnect and Refresh".into());
             cx.notify();
             return;
@@ -182,7 +182,7 @@ impl Workspace {
         let schema = tab.schema_name.clone().unwrap_or_default();
         let table = tab.table_name.clone().unwrap_or_default();
         let name = c.requested_name.clone();
-        tab.last_error = None;
+        tab.current_result.last_error = None;
         cx.spawn(async move |this, cx| {
             let result = db_wire::run_on_shared_runtime(async move {
                 let definition = match original {
@@ -235,7 +235,7 @@ impl Workspace {
                 }
                 c.busy = false;
                 if !same_connection {
-                    tab.last_error =
+                    tab.current_result.last_error =
                         Some("Connection changed while loading. Reconnect and Refresh".into());
                     cx.notify();
                     return;
@@ -256,7 +256,7 @@ impl Workspace {
                         tab.editor =
                             SqlEditorView::new(&c.value(c.active), this.theme.clone(), None);
                     }
-                    Err(e) => tab.last_error = Some(format!("{e:#}")),
+                    Err(e) => tab.current_result.last_error = Some(format!("{e:#}")),
                 }
                 cx.notify();
             });
@@ -271,7 +271,7 @@ impl Workspace {
         {
             c.active = field;
             tab.editor = SqlEditorView::new(&c.value(field), self.theme.clone(), None);
-            tab.last_error = None;
+            tab.current_result.last_error = None;
         }
         cx.notify();
     }
@@ -284,10 +284,10 @@ impl Workspace {
             match column_change_sql(o, d) {
                 Ok(sql) if !sql.is_empty() => {
                     c.preview = Some(sql);
-                    tab.last_error = None;
+                    tab.current_result.last_error = None;
                 }
-                Ok(_) => tab.last_error = Some("No column changes".into()),
-                Err(e) => tab.last_error = Some(e.to_string()),
+                Ok(_) => tab.current_result.last_error = Some("No column changes".into()),
+                Err(e) => tab.current_result.last_error = Some(e.to_string()),
             }
         }
         if self
@@ -314,7 +314,7 @@ impl Workspace {
             c.draft = c.original.as_ref().map(ColumnDraft::from);
             c.preview = None;
             tab.editor = SqlEditorView::new(&c.value(c.active), self.theme.clone(), None);
-            tab.last_error = None;
+            tab.current_result.last_error = None;
         }
         cx.notify();
     }
@@ -323,12 +323,14 @@ impl Workspace {
             return;
         };
         let Some(driver) = self.tab_session(index).driver.clone() else {
-            self.tabs[index].last_error = Some("Reconnect before applying DDL".into());
+            self.tabs[index].current_result.last_error =
+                Some("Reconnect before applying DDL".into());
             cx.notify();
             return;
         };
         if driver.is_read_only() {
-            self.tabs[index].last_error = Some("This connection is read-only".into());
+            self.tabs[index].current_result.last_error =
+                Some("This connection is read-only".into());
             cx.notify();
             return;
         }
@@ -346,7 +348,7 @@ impl Workspace {
         {
             c.refresh_required = true;
             c.preview = None;
-            tab.last_error =
+            tab.current_result.last_error =
                 Some("Connection changed since this snapshot. Refresh before applying DDL".into());
             self.column_pending = None;
             cx.notify();
@@ -360,7 +362,8 @@ impl Workspace {
             self.operations
                 .begin(id, owner.clone(), driver.clone(), OperationKind::Save)
         else {
-            tab.last_error = Some("Wait for the active operation before applying DDL".into());
+            tab.current_result.last_error =
+                Some("Wait for the active operation before applying DDL".into());
             cx.notify();
             return;
         };
@@ -381,20 +384,20 @@ impl Workspace {
                         c.draft=Some(ColumnDraft::from(&definition));c.original=Some(definition);
                         c.preview=None;
                         tab.editor=SqlEditorView::new(&c.value(c.active),this.theme.clone(),None);
-                        tab.last_error=None;success=true;
+                        tab.current_result.last_error=None;success=true;
                     }
-                    Ok(ColumnApplyOutcome::Rejected(error))=>{tab.last_error=Some(error);c.preview=None;},
+                    Ok(ColumnApplyOutcome::Rejected(error))=>{tab.current_result.last_error=Some(error);c.preview=None;},
                     Ok(ColumnApplyOutcome::ReadbackRequired(error))=>{
-                        tab.last_error=Some(error);c.refresh_required=true;c.preview=None;
+                        tab.current_result.last_error=Some(error);c.refresh_required=true;c.preview=None;
                     }
-                    Err(e)=>{tab.last_error=Some(format!("Schema operation interrupted; Refresh before retry: {e:#}"));c.refresh_required=true;c.preview=None;},
+                    Err(e)=>{tab.current_result.last_error=Some(format!("Schema operation interrupted; Refresh before retry: {e:#}"));c.refresh_required=true;c.preview=None;},
                 }
                 if !success { this.column_pending=None; }
                 if success{
                     for tab in &mut this.tabs{
                         if tab.connection_id.as_deref()==Some(&owner) && tab.column_editor.is_none()
                             && tab.table_name.as_deref()==Some(&target.1) && tab.schema_name.as_deref()==Some(&target.0){
-                            tab.last_error=Some("Table schema changed; reload results before editing or saving rows".into());
+                            tab.current_result.last_error=Some("Table schema changed; reload results before editing or saving rows".into());
                             tab.schema_stale=true;
                         }
                     }
@@ -457,7 +460,8 @@ impl Workspace {
             let tab = &mut self.tabs[index];
             let c = tab.column_editor.as_ref().unwrap();
             if c.busy {
-                tab.last_error = Some("Wait for the column operation to finish".into());
+                tab.current_result.last_error =
+                    Some("Wait for the column operation to finish".into());
             } else if self.column_pending.is_none() {
                 self.column_pending = Some(PendingColumn {
                     ids: ids.to_vec(),
@@ -601,7 +605,7 @@ impl Workspace {
         if c.busy {
             body = body.child("Loading/applying column definition…");
         }
-        if let Some(error) = &tab.last_error {
+        if let Some(error) = &tab.current_result.last_error {
             body = body.child(div().text_color(rgb(0xf85149)).child(error.clone()));
         }
         if let Some(o) = &c.original {

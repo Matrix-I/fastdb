@@ -405,7 +405,7 @@ impl Workspace {
                             || this.input.is_fetch_size_focused
                             || this.tabs.get(this.active_tab).is_some_and(|tab| {
                                 (tab.is_script() && tab.editor_focused)
-                                    || tab.grid.editing_cell.is_some()
+                                    || tab.current_result.grid.editing_cell.is_some()
                             });
                         if !has_cursor || this.updates.read(cx).is_open() {
                             return;
@@ -493,7 +493,7 @@ impl Render for Workspace {
                         let delta = current_x - start_x;
                         let new_w = (start_w + delta).max(ui_grid::MIN_COL_WIDTH);
                         if let Some(tab) = this.tabs.get_mut(tab_idx) {
-                            tab.grid.set_column_width(col_idx, new_w);
+                            tab.current_result.grid.set_column_width(col_idx, new_w);
                             cx.notify();
                         }
                     }

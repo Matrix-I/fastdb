@@ -133,7 +133,7 @@ impl Workspace {
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    self.tabs[index].last_error = Some(error);
+                    self.tabs[index].current_result.last_error = Some(error);
                     cx.notify();
                 }
             }
@@ -141,14 +141,15 @@ impl Workspace {
         }
         if let Some(tab) = self.tabs.get_mut(index) {
             if !tab.is_script()
-                && (tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some())
+                && (tab.current_result.grid.changeset.is_dirty()
+                    || tab.current_result.grid.editing_cell.is_some())
             {
-                tab.last_error =
+                tab.current_result.last_error =
                     Some("Save or Cancel row edits before replacing the table result".into());
                 cx.notify();
                 return;
             }
-            tab.fetch.commit_size_text();
+            tab.current_result.fetch.commit_size_text();
             if tab.is_script() {
                 let statement = tab.editor.active_statement();
                 tab.pending_statements.clear();
@@ -201,7 +202,7 @@ impl Workspace {
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    self.tabs[index].last_error = Some(error);
+                    self.tabs[index].current_result.last_error = Some(error);
                     cx.notify();
                 }
             }
@@ -215,7 +216,7 @@ impl Workspace {
                 self.start_next_statement(index, cx);
             }
             Err(error) => {
-                tab.last_error = Some(error);
+                tab.current_result.last_error = Some(error);
                 cx.notify();
             }
         }
@@ -239,8 +240,8 @@ impl Workspace {
         if self.operations.is_running()
             || self.tab_session(self.active_tab).driver.is_none()
             || tab.schema_stale
-            || !tab.fetch.has_more
-            || tab.grid.pager.is_none()
+            || !tab.current_result.fetch.has_more
+            || tab.current_result.grid.pager.is_none()
         {
             return;
         }
@@ -289,15 +290,15 @@ impl Workspace {
         {
             self.query_history.record(
                 connection.clone(),
-                tab.script_sql.clone().unwrap_or(sql.clone()),
+                tab.current_result.script_sql.clone().unwrap_or(sql.clone()),
             );
         }
         if !tab.is_script() && tab.column_editor.is_none() && !append {
             tab.filter_timeline
                 .record(super::filter_timeline::FilterSnapshot {
                     sql: tab.filter_sql.clone(),
-                    order: tab.grid.ordering.clone(),
-                    fetch_size: tab.fetch.size,
+                    order: tab.current_result.grid.ordering.clone(),
+                    fetch_size: tab.current_result.fetch.size,
                     criteria: tab.filter_spec.clone(),
                 });
         }

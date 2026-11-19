@@ -116,7 +116,7 @@ impl Workspace {
                     Ok(None) => {}
                     Err(error) => {
                         if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
-                            tab.last_error = Some(error);
+                            tab.current_result.last_error = Some(error);
                         }
                     }
                 }
@@ -174,7 +174,7 @@ impl Workspace {
                     tab.script_file_dialog_busy = false;
                     match result {
                         Ok(message) => tab.script_status = message,
-                        Err(error) => tab.last_error = Some(error),
+                        Err(error) => tab.current_result.last_error = Some(error),
                     }
                     let revision = tab.editor.buffer.revision();
                     this.schedule_autosave(id, revision, cx);

@@ -162,9 +162,14 @@ fn write_export(
 fn can_export_tab(tab: &TabState, query_running: bool) -> bool {
     !query_running
         && !tab.export.busy
-        && !tab.grid.changeset.is_dirty()
-        && tab.grid.editing_cell.is_none()
-        && tab.grid.pager.as_ref().is_some_and(|p| p.num_cols() > 0)
+        && !tab.current_result.grid.changeset.is_dirty()
+        && tab.current_result.grid.editing_cell.is_none()
+        && tab
+            .current_result
+            .grid
+            .pager
+            .as_ref()
+            .is_some_and(|p| p.num_cols() > 0)
 }
 
 impl Workspace {
@@ -186,7 +191,7 @@ impl Workspace {
         let dialect = SqlDialect(self.tab_provider(index));
         let tab = &mut self.tabs[index];
         let id = tab.id;
-        let pager = tab.grid.pager.clone().unwrap();
+        let pager = tab.current_result.grid.pager.clone().unwrap();
         let rows = pager.total_rows();
         let target = sql_target(
             dialect,
@@ -279,7 +284,7 @@ impl Workspace {
         };
         let source_sql = if tab.schema_name.is_some() && tab.table_name.is_some() {
             table_source_sql(&target, None, &tab.filter_sql)
-        } else if let Some(sql) = read_query(tab.script_sql.as_deref()) {
+        } else if let Some(sql) = read_query(tab.current_result.script_sql.as_deref()) {
             // The active result's statement, not the whole editor buffer.
             sql
         } else {
@@ -404,7 +409,7 @@ impl Workspace {
             }
             return;
         }
-        let Some(sql) = read_query(tab.script_sql.as_deref()) else {
+        let Some(sql) = read_query(tab.current_result.script_sql.as_deref()) else {
             self.tabs[index].export.message =
                 Some("Transfer requires a SELECT query to avoid repeating mutations".into());
             cx.notify();
@@ -414,6 +419,7 @@ impl Workspace {
             return;
         };
         let columns = tab
+            .current_result
             .grid
             .pager
             .as_ref()
@@ -521,8 +527,8 @@ impl Workspace {
             toolbar = toolbar.child(import_btn);
         }
         toolbar.child(div().child(
-            if self.tabs[index].grid.changeset.is_dirty()
-                || self.tabs[index].grid.editing_cell.is_some()
+            if self.tabs[index].current_result.grid.changeset.is_dirty()
+                || self.tabs[index].current_result.grid.editing_cell.is_some()
             {
                 "(save/cancel edits first)"
             } else {
@@ -550,9 +556,10 @@ mod tests {
             std::sync::Arc::new(sql_intel::SchemaCache::new().unwrap()),
         );
         assert!(!can_export_tab(&tab, false));
-        tab.grid.pager = Some(std::sync::Arc::new(QueryResultPager::new(vec![]).unwrap()));
+        tab.current_result.grid.pager =
+            Some(std::sync::Arc::new(QueryResultPager::new(vec![]).unwrap()));
         assert!(!can_export_tab(&tab, false));
-        tab.grid.pager = Some(std::sync::Arc::new(
+        tab.current_result.grid.pager = Some(std::sync::Arc::new(
             QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int4)]).unwrap(),
         ));
         assert!(can_export_tab(&tab, false)); // Empty results with columns can be exported.
@@ -560,9 +567,12 @@ mod tests {
         tab.export.busy = true;
         assert!(!can_export_tab(&tab, false));
         tab.export.busy = false;
-        tab.grid.changeset.insert_row_at(0, vec![Some("1".into())]);
+        tab.current_result
+            .grid
+            .changeset
+            .insert_row_at(0, vec![Some("1".into())]);
         assert!(!can_export_tab(&tab, false));
-        tab.grid.changeset.clear();
+        tab.current_result.grid.changeset.clear();
         assert!(can_export_tab(&tab, false));
     }
 

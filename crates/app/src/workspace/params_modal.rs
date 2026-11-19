@@ -168,7 +168,7 @@ impl Workspace {
         if let Some(err) = &modal.error_message {
             let msg = err.clone();
             if let Some(tab_idx) = self.tabs.iter().position(|t| t.id == modal.tab_id) {
-                self.tabs[tab_idx].last_error = Some(msg);
+                self.tabs[tab_idx].current_result.last_error = Some(msg);
             }
             cx.notify();
             return;
@@ -207,7 +207,9 @@ impl Workspace {
                     };
                     self.start_pinned_plan(tab_idx, driver, explain_stmt, explain_analyze, cx);
                 }
-                Err(error) => self.tabs[tab_idx].last_error = Some(error.to_string()),
+                Err(error) => {
+                    self.tabs[tab_idx].current_result.last_error = Some(error.to_string())
+                }
             }
         } else if self.tabs[tab_idx].is_script()
             && let Some(driver) = self.tab_session(tab_idx).driver.clone()
@@ -225,7 +227,7 @@ impl Workspace {
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    self.tabs[tab_idx].last_error = Some(error);
+                    self.tabs[tab_idx].current_result.last_error = Some(error);
                     cx.notify();
                 }
             }

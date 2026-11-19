@@ -144,9 +144,10 @@ impl ValueEditor {
         eligible
             && tab.id == self.tab
             && !tab.schema_stale
-            && tab.grid.editing_cell.is_none()
-            && tab.grid.changeset_revision() == self.revision
+            && tab.current_result.grid.editing_cell.is_none()
+            && tab.current_result.grid.changeset_revision() == self.revision
             && tab
+                .current_result
                 .grid
                 .pager
                 .as_ref()
@@ -156,7 +157,7 @@ impl ValueEditor {
                     .upgrade()
                     .is_some_and(|source| Arc::ptr_eq(driver, &source))
             })
-            && !matches!(tab.grid.changeset.resolve_row(self.row), RowRef::Fetched(row) if tab.grid.changeset.is_deleted(row))
+            && !matches!(tab.current_result.grid.changeset.resolve_row(self.row), RowRef::Fetched(row) if tab.current_result.grid.changeset.is_deleted(row))
     }
 }
 
@@ -188,13 +189,15 @@ impl Workspace {
             return;
         };
         let (Some(focus), Some(pager), Some(driver)) = (
-            tab.grid.selection.focus,
-            tab.grid.pager.clone(),
+            tab.current_result.grid.selection.focus,
+            tab.current_result.grid.pager.clone(),
             self.tab_session(index).driver.clone(),
         ) else {
             return;
         };
-        if tab.grid.editing_cell.is_some() || focus.row >= tab.grid.row_count() {
+        if tab.current_result.grid.editing_cell.is_some()
+            || focus.row >= tab.current_result.grid.row_count()
+        {
             return;
         }
         let Some(column) = pager.columns.get(focus.col) else {
@@ -208,14 +211,21 @@ impl Workspace {
                     .as_ref()
                     .and_then(|origin| origin.columns.get(focus.col))
                     .is_some_and(|column| column.writable && !column.key));
-        let row = tab.grid.changeset.resolve_row(focus.row);
-        if matches!(row, RowRef::Fetched(row) if tab.grid.changeset.is_deleted(row)) {
+        let row = tab.current_result.grid.changeset.resolve_row(focus.row);
+        if matches!(row, RowRef::Fetched(row) if tab.current_result.grid.changeset.is_deleted(row))
+        {
             return;
         }
         let (staged, default) = match row {
-            RowRef::Fetched(row) => (tab.grid.changeset.edited_value(row, focus.col), false),
+            RowRef::Fetched(row) => (
+                tab.current_result
+                    .grid
+                    .changeset
+                    .edited_value(row, focus.col),
+                false,
+            ),
             RowRef::New(index) => {
-                let inserted = &tab.grid.changeset.inserted_rows[index];
+                let inserted = &tab.current_result.grid.changeset.inserted_rows[index];
                 (
                     Some(inserted.values[focus.col].as_deref()),
                     inserted.values[focus.col].is_none()
@@ -231,7 +241,8 @@ impl Workspace {
                     MAX_VALUE_BYTES
                 }
         }) {
-            self.tabs[index].last_error = Some("Staged value exceeds the editor size limit".into());
+            self.tabs[index].current_result.last_error =
+                Some("Staged value exceeds the editor size limit".into());
             cx.notify();
             return;
         }
@@ -251,7 +262,7 @@ impl Workspace {
             driver: Arc::downgrade(&driver),
             row: focus.row,
             column: focus.col,
-            revision: tab.grid.changeset_revision(),
+            revision: tab.current_result.grid.changeset_revision(),
             request: request.clone(),
             editor: SqlEditorView::new("", self.theme.clone(), None),
             format: if data_type == DataType::Bytea {
@@ -420,7 +431,7 @@ impl Workspace {
             return;
         }
         let editor = self.value_editor.take().unwrap();
-        stage_value(editor, value, &mut self.tabs[index].grid);
+        stage_value(editor, value, &mut self.tabs[index].current_result.grid);
         cx.notify();
     }
 
@@ -609,7 +620,7 @@ impl Workspace {
             self.tabs
                 .iter()
                 .find(|tab| tab.id == editor.tab)
-                .map(|tab| tab.grid.changeset.resolve_row(editor.row)),
+                .map(|tab| tab.current_result.grid.changeset.resolve_row(editor.row)),
             Some(RowRef::New(_))
         );
         let mut tools = div()
@@ -854,7 +865,7 @@ mod tests {
             ui_core::theme::Theme::dark(),
             Arc::new(sql_intel::SchemaCache::new().unwrap()),
         );
-        tab.grid.pager = Some(request.pager.clone());
+        tab.current_result.grid.pager = Some(request.pager.clone());
         assert!(edit.source_is_current(&tab, Some(&driver), true));
         assert!(!edit.source_is_current(&tab, Some(&driver), false));
         assert!(!edit.source_is_current(&tab, None, true));
@@ -866,13 +877,15 @@ mod tests {
         tab.schema_stale = true;
         assert!(!edit.source_is_current(&tab, Some(&driver), true));
         tab.schema_stale = false;
-        tab.grid.pager = Some(read(Some(b"old"), DataType::Text, DbDriverKind::Sqlite).pager);
+        tab.current_result.grid.pager =
+            Some(read(Some(b"old"), DataType::Text, DbDriverKind::Sqlite).pager);
         assert!(!edit.source_is_current(&tab, Some(&driver), true));
-        tab.grid.pager = Some(request.pager);
-        tab.grid
+        tab.current_result.grid.pager = Some(request.pager);
+        tab.current_result
+            .grid
             .stage(|changes| changes.set_cell(0, 0, Some(b"old".to_vec()), Some("new".into())));
         assert!(!edit.source_is_current(&tab, Some(&driver), true));
-        assert!(tab.grid.step_staged_edits(false));
+        assert!(tab.current_result.grid.step_staged_edits(false));
         assert!(!edit.source_is_current(&tab, Some(&driver), true));
         let pager = db_wire::QueryResultPager::new(vec![
             db_wire::ColumnMeta::new("required", DataType::Text).with_nullable(false),

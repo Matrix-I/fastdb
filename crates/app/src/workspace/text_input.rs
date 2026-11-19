@@ -32,7 +32,7 @@ impl Workspace {
             return false;
         };
         if (!tab.is_script() || !tab.editor_focused)
-            && let Some(edit) = tab.grid.editing_cell.as_mut()
+            && let Some(edit) = tab.current_result.grid.editing_cell.as_mut()
         {
             return clear_selection(&mut edit.caret, &mut edit.anchor, edit.text.chars().count());
         }
@@ -40,7 +40,7 @@ impl Workspace {
             return clear_selection(
                 &mut self.input.fetch_size_cursor,
                 &mut self.input.fetch_size_anchor,
-                tab.fetch.size_text.chars().count(),
+                tab.current_result.fetch.size_text.chars().count(),
             );
         }
         if self.input.is_filter_focused {
@@ -183,7 +183,7 @@ impl Workspace {
             self.input.is_fetch_size_focused = false;
             self.input.fetch_size_anchor = None;
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                tab.fetch.commit_size_text();
+                tab.current_result.fetch.commit_size_text();
             }
         }
     }

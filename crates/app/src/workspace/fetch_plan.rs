@@ -21,7 +21,10 @@ impl Workspace {
             _ => {
                 return if self.tab_provider(tab_idx).uses_odbc() {
                     // Execute vendor SQL as written: CTEs, TOP and PL/SQL are not LIMIT dialects.
-                    (tab.script_sql.clone().unwrap_or_default(), false)
+                    (
+                        tab.current_result.script_sql.clone().unwrap_or_default(),
+                        false,
+                    )
                 } else {
                     script_fetch_query(tab, offset)
                 };
@@ -51,7 +54,7 @@ impl Workspace {
         let order_suffix = if has_order || has_limit {
             String::new()
         } else {
-            let mut keys = tab.grid.ordering.clone();
+            let mut keys = tab.current_result.grid.ordering.clone();
             if !keys.is_empty()
                 && let Some(columns) = self
                     .tab_session(tab_idx)
@@ -72,7 +75,7 @@ impl Workspace {
 
         let limit_suffix = table_page_suffix(
             self.tab_provider(tab_idx),
-            tab.fetch.size,
+            tab.current_result.fetch.size,
             offset,
             !order_suffix.is_empty() || has_order,
         );

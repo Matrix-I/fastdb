@@ -31,10 +31,11 @@ fn opens_record_view(tab: &TabState, event: &KeyDownEvent) -> bool {
         && tab.active_subtab == TableSubTab::Data
         && tab.view_mode == DataViewMode::Grid
         && tab
+            .current_result
             .grid
             .selection
             .focus
-            .is_some_and(|cell| cell.row < tab.grid.row_count())
+            .is_some_and(|cell| cell.row < tab.current_result.grid.row_count())
 }
 
 impl Workspace {
@@ -484,7 +485,7 @@ impl Workspace {
             }
         } else if self.tabs.get(self.active_tab).is_some_and(|t| {
             t.active_subtab == TableSubTab::Data
-                && t.grid.editing_cell.is_some()
+                && t.current_result.grid.editing_cell.is_some()
                 && (!t.is_script() || !t.editor_focused)
         }) {
             self.handle_cell_edit_key(event, cx);
@@ -520,7 +521,7 @@ impl Workspace {
             let tab = &mut self.tabs[self.active_tab];
             if self.input.is_fetch_size_focused {
                 if event.keystroke.key == "escape" {
-                    tab.fetch.size_text = tab.fetch.size.to_string();
+                    tab.current_result.fetch.size_text = tab.current_result.fetch.size.to_string();
                     self.input.is_fetch_size_focused = false;
                     self.input.fetch_size_anchor = None;
                     cx.notify();
@@ -529,11 +530,11 @@ impl Workspace {
                     self.run_active_query(cx);
                 } else {
                     let input = LineInput {
-                        text: &mut tab.fetch.size_text,
+                        text: &mut tab.current_result.fetch.size_text,
                         caret: &mut self.input.fetch_size_cursor,
                         anchor: &mut self.input.fetch_size_anchor,
                         digits_only: true,
-                        history: &mut tab.fetch.size_history,
+                        history: &mut tab.current_result.fetch.size_history,
                     };
                     if handle_line_key(input, &event.keystroke, cx) {
                         self.input.cursor_visible = true;
@@ -610,7 +611,7 @@ impl Workspace {
             } else if (event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
                 && event.keystroke.key.eq_ignore_ascii_case("c")
             {
-                if let Some(text) = tab.grid.selection_text() {
+                if let Some(text) = tab.current_result.grid.selection_text() {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     cx.notify();
                 }
@@ -676,18 +677,23 @@ impl Workspace {
             "escape" => self.cancel_cell_edit(),
             "tab" => {
                 let next = self.tabs.get(self.active_tab).and_then(|t| {
-                    let edit = t.grid.editing_cell.as_ref()?;
+                    let edit = t.current_result.grid.editing_cell.as_ref()?;
                     let forward = !keystroke.modifiers.shift;
                     let col = if t.record_view.as_ref().is_some_and(|view| view.compact) {
                         if forward {
                             edit.col.checked_add(1).filter(|col| {
-                                *col < t.grid.pager.as_ref().map_or(0, |pager| pager.columns.len())
+                                *col < t
+                                    .current_result
+                                    .grid
+                                    .pager
+                                    .as_ref()
+                                    .map_or(0, |pager| pager.columns.len())
                             })
                         } else {
                             edit.col.checked_sub(1)
                         }
                     } else {
-                        t.grid.adjacent_column(edit.col, forward)
+                        t.current_result.grid.adjacent_column(edit.col, forward)
                     }?;
                     Some((edit.row, col))
                 });
@@ -701,7 +707,7 @@ impl Workspace {
                 let Some(edit) = self
                     .tabs
                     .get_mut(self.active_tab)
-                    .and_then(|t| t.grid.editing_cell.as_mut())
+                    .and_then(|t| t.current_result.grid.editing_cell.as_mut())
                 else {
                     return;
                 };
@@ -799,12 +805,12 @@ mod tests {
             Arc::new(QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int8)]).unwrap());
         pager.append_row([Some(b"1".as_slice())]).unwrap();
         pager.append_row([Some(b"2".as_slice())]).unwrap();
-        tab.grid = VirtualDataGrid::new(Some(pager), theme);
+        tab.current_result.grid = VirtualDataGrid::new(Some(pager), theme);
 
         assert!(!opens_record_view(&tab, &event));
-        tab.grid.selection = GridSelection::single(2, 0);
+        tab.current_result.grid.selection = GridSelection::single(2, 0);
         assert!(!opens_record_view(&tab, &event));
-        tab.grid.selection = GridSelection::single(1, 0);
+        tab.current_result.grid.selection = GridSelection::single(1, 0);
         assert!(opens_record_view(&tab, &event));
         event.is_held = true;
         assert!(!opens_record_view(&tab, &event));

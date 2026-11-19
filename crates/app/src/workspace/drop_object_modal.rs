@@ -147,8 +147,8 @@ impl Workspace {
         }
         if self.tabs.iter().any(|tab| {
             tab.connection_id.as_deref() == Some(&modal.owner)
-                && (tab.grid.changeset.is_dirty()
-                    || tab.grid.editing_cell.is_some()
+                && (tab.current_result.grid.changeset.is_dirty()
+                    || tab.current_result.grid.editing_cell.is_some()
                     || tab
                         .column_editor
                         .as_ref()

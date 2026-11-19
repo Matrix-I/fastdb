@@ -71,12 +71,13 @@ impl Workspace {
         if let Some(search) = &self.result_search
             && let Some(tab) = self.tabs.iter().find(|tab| tab.id == search.tab)
             && tab
+                .current_result
                 .grid
                 .pager
                 .as_ref()
                 .is_some_and(|pager| Arc::ptr_eq(pager, &search.pager))
         {
-            tab.grid.auto_fetch_paused.set(true);
+            tab.current_result.grid.auto_fetch_paused.set(true);
         }
         self.result_search = None;
     }
@@ -88,16 +89,16 @@ impl Workspace {
         let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
         };
-        if tab.grid.editing_cell.is_some() {
-            tab.last_error =
+        if tab.current_result.grid.editing_cell.is_some() {
+            tab.current_result.last_error =
                 Some("Finish or cancel the cell editor before searching results".into());
             cx.notify();
             return;
         }
-        let Some(pager) = tab.grid.pager.clone() else {
+        let Some(pager) = tab.current_result.grid.pager.clone() else {
             return;
         };
-        tab.grid.auto_fetch_paused.set(true);
+        tab.current_result.grid.auto_fetch_paused.set(true);
         tab.view_mode = DataViewMode::Grid;
         tab.close_record_view();
         self.close_result_search();
@@ -194,11 +195,12 @@ impl Workspace {
             return;
         };
         if !tab
+            .current_result
             .grid
             .pager
             .as_ref()
             .is_some_and(|pager| Arc::ptr_eq(pager, &search.pager))
-            || tab.grid.editing_cell.is_some()
+            || tab.current_result.grid.editing_cell.is_some()
         {
             search.message =
                 "The original result changed or is being edited; close and reopen Find.".into();
@@ -221,10 +223,10 @@ impl Workspace {
         }
         let worker_guard = WorkerGuard(self.result_search_worker.clone());
         let pager = search.pager.clone();
-        let changes = Arc::new(tab.grid.changeset.clone());
-        let rows = tab.grid.row_count();
-        let from = tab.grid.selection.focus;
-        let columns = tab.grid.display_columns().to_vec();
+        let changes = Arc::new(tab.current_result.grid.changeset.clone());
+        let rows = tab.current_result.grid.row_count();
+        let from = tab.current_result.grid.selection.focus;
+        let columns = tab.current_result.grid.display_columns().to_vec();
         let worker_columns = columns.clone();
         let needle = search.query.clone();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -275,13 +277,15 @@ impl Workspace {
             search.message = "The original result was closed.".into();
             return;
         };
-        if !same_result(&tab.grid, pager, rows, changes) || tab.grid.display_columns() != columns {
+        if !same_result(&tab.current_result.grid, pager, rows, changes)
+            || tab.current_result.grid.display_columns() != columns
+        {
             search.message = "Result or staged edits changed during search; search again.".into();
             return;
         }
         search.message = match outcome {
             FindOutcome::Found(cell) => {
-                reveal_match(&mut tab.grid, cell);
+                reveal_match(&mut tab.current_result.grid, cell);
                 self.value_panel.format_override = None;
                 self.value_panel.show_format_menu = false;
                 format!(

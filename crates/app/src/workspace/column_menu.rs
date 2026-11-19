@@ -32,7 +32,7 @@ impl Workspace {
         let Some(tab) = self.tabs.get(tab_idx) else {
             return;
         };
-        let Some(pager) = tab.grid.pager.clone() else {
+        let Some(pager) = tab.current_result.grid.pager.clone() else {
             return;
         };
         let Some(column) = pager.columns.get(col_idx).map(|column| column.name.clone()) else {
@@ -51,6 +51,7 @@ impl Workspace {
         let tab = self.tabs.get(self.active_tab)?;
         (tab.id == menu.tab_id
             && tab
+                .current_result
                 .grid
                 .pager
                 .as_ref()
@@ -69,12 +70,17 @@ impl Workspace {
         };
         let tab = &mut self.tabs[index];
         match action {
-            ColumnMenuAction::Move { forward } => tab.grid.move_column(menu.source_column, forward),
-            ColumnMenuAction::Hide => tab.grid.hide_column(menu.source_column),
-            ColumnMenuAction::ResetLayout => tab.grid.reset_column_layout(),
+            ColumnMenuAction::Move { forward } => tab
+                .current_result
+                .grid
+                .move_column(menu.source_column, forward),
+            ColumnMenuAction::Hide => tab.current_result.grid.hide_column(menu.source_column),
+            ColumnMenuAction::ResetLayout => tab.current_result.grid.reset_column_layout(),
             action => {
-                if tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some() {
-                    tab.last_error =
+                if tab.current_result.grid.changeset.is_dirty()
+                    || tab.current_result.grid.editing_cell.is_some()
+                {
+                    tab.current_result.last_error =
                         Some("Save or Cancel row edits before changing sort or filters".into());
                     return;
                 }
@@ -87,13 +93,18 @@ impl Workspace {
                         if !tab.filter_sql.trim().is_empty()
                             && clauses.is_none_or(|c| c.order_by || c.limit || c.offset || c.fetch)
                         {
-                            tab.last_error = Some("Remove explicit ordering or paging from the filter before using header sorting".into());
+                            tab.current_result.last_error = Some("Remove explicit ordering or paging from the filter before using header sorting".into());
                             return;
                         }
-                        set_order_key(&mut tab.grid.ordering, &menu.column, descending, append);
+                        set_order_key(
+                            &mut tab.current_result.grid.ordering,
+                            &menu.column,
+                            descending,
+                            append,
+                        );
                     }
                     ColumnMenuAction::RemoveFiltersAndOrderings => {
-                        tab.grid.ordering.clear();
+                        tab.current_result.grid.ordering.clear();
                         tab.filter_sql.clear();
                         tab.filter_spec = None;
                     }
@@ -114,13 +125,15 @@ impl Workspace {
             .column_menu_index(&menu)
             .and_then(|index| self.tabs.get(index));
         let can_sort = tab.is_some_and(|tab| tab.table_name.is_some());
-        let can_layout = tab.is_some_and(|tab| tab.grid.editing_cell.is_none());
-        let has_filter_or_order = tab
-            .is_some_and(|tab| !tab.grid.ordering.is_empty() || !tab.filter_sql.trim().is_empty());
+        let can_layout = tab.is_some_and(|tab| tab.current_result.grid.editing_cell.is_none());
+        let has_filter_or_order = tab.is_some_and(|tab| {
+            !tab.current_result.grid.ordering.is_empty() || !tab.filter_sql.trim().is_empty()
+        });
         let can_move = |forward| {
             can_layout
                 && tab.is_some_and(|tab| {
-                    tab.grid
+                    tab.current_result
+                        .grid
                         .adjacent_column(menu.source_column, forward)
                         .is_some()
                 })
@@ -177,7 +190,8 @@ impl Workspace {
         let separator = || div().h(px(1.0)).my_1().mx_1().bg(theme.border);
         let is_current = |descending| {
             tab.is_some_and(|tab| {
-                tab.grid
+                tab.current_result
+                    .grid
                     .ordering
                     .iter()
                     .any(|key| key.column == menu.column && key.descending == descending)
@@ -284,7 +298,8 @@ impl Workspace {
                 "−",
                 "Hide column".into(),
                 false,
-                can_layout && tab.is_some_and(|tab| tab.grid.display_columns().len() > 1),
+                can_layout
+                    && tab.is_some_and(|tab| tab.current_result.grid.display_columns().len() > 1),
                 ColumnMenuAction::Hide,
                 cx,
             ))

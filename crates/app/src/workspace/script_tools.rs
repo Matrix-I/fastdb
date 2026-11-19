@@ -222,7 +222,7 @@ impl Workspace {
                 let (id, revision) = (tab.id, tab.editor.buffer.revision());
                 self.schedule_autosave(id, revision, cx);
             }
-            Err(error) => tab.last_error = Some(error),
+            Err(error) => tab.current_result.last_error = Some(error),
             _ => {}
         }
         cx.notify();
@@ -249,7 +249,7 @@ impl Workspace {
                 if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
                     match result {
                         Ok(entries) => tab.query_history = Arc::new(entries),
-                        Err(error) => tab.last_error = Some(error),
+                        Err(error) => tab.current_result.last_error = Some(error),
                     }
                     cx.notify();
                 }
@@ -376,7 +376,7 @@ impl Workspace {
                                 tab.script_path = Some(target);
                             }
                         }
-                        Err(error) => tab.last_error = Some(error),
+                        Err(error) => tab.current_result.last_error = Some(error),
                     }
                     cx.notify();
                 }

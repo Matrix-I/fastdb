@@ -104,7 +104,7 @@ impl Workspace {
             choices_sql(provider, kind).err()
         };
         if let Some(error) = error {
-            self.tabs[index].last_error = Some(error);
+            self.tabs[index].current_result.last_error = Some(error);
             cx.notify();
             return;
         }
@@ -122,7 +122,7 @@ impl Workspace {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                             tab.script_file_dialog_busy = false;
-                            tab.last_error = Some(error);
+                            tab.current_result.last_error = Some(error);
                         }
                         cx.notify();
                     });
@@ -153,11 +153,11 @@ impl Workspace {
                 match kind {
                     ContextKind::Schema => {
                         if !schema_change_allowed(&this.tabs[index].transaction_state) {
-                            this.tabs[index].last_error = Some("Commit or Rollback before changing schema".into());
+                            this.tabs[index].current_result.last_error = Some("Commit or Rollback before changing schema".into());
                         } else {
                             match schema_statements(provider, &name) {
                                 Ok(sql) => this.start_pinned_schema_change(index, driver, sql.into(), name, cx),
-                                Err(error) => this.tabs[index].last_error = Some(error),
+                                Err(error) => this.tabs[index].current_result.last_error = Some(error),
                             }
                         }
                     }
@@ -177,7 +177,7 @@ impl Workspace {
         let driver = match source.with_database(&database) {
             Ok(driver) => driver,
             Err(error) => {
-                self.tabs[index].last_error = Some(error.to_string());
+                self.tabs[index].current_result.last_error = Some(error.to_string());
                 return;
             }
         };

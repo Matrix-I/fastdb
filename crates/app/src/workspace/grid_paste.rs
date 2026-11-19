@@ -206,12 +206,12 @@ impl Workspace {
         let tab = &mut self.tabs[self.active_tab];
         if tab.view_mode != DataViewMode::Grid
             || tab.record_view.is_some()
-            || tab.grid.editing_cell.is_some()
+            || tab.current_result.grid.editing_cell.is_some()
             || tab.schema_stale
         {
             return;
         }
-        let Some(start) = tab.grid.selection.focus else {
+        let Some(start) = tab.current_result.grid.selection.focus else {
             return;
         };
         let Some(text) = cx
@@ -221,14 +221,14 @@ impl Workspace {
             return;
         };
         if text.len() > MAX_PASTE_BYTES {
-            tab.last_error = Some("Paste must fit within 256 KiB".into());
+            tab.current_result.last_error = Some("Paste must fit within 256 KiB".into());
             cx.notify();
             return;
         }
-        let source = match PasteSource::capture(&tab.grid, start) {
+        let source = match PasteSource::capture(&tab.current_result.grid, start) {
             Ok(source) => source,
             Err(error) => {
-                tab.last_error = Some(error);
+                tab.current_result.last_error = Some(error);
                 cx.notify();
                 return;
             }
@@ -239,8 +239,8 @@ impl Workspace {
         tab.paste_pending = true;
         let tab_id = tab.id;
         let pager = source.pager.clone();
-        let revision = tab.grid.changeset_revision();
-        let layout = tab.grid.display_columns().to_vec();
+        let revision = tab.current_result.grid.changeset_revision();
+        let layout = tab.current_result.grid.display_columns().to_vec();
         let worker = cx
             .background_executor()
             .spawn(async move { prepare_paste(&source, &text) });
@@ -267,24 +267,26 @@ impl Workspace {
                     || tab.view_mode != DataViewMode::Grid
                     || tab.record_view.is_some()
                     || tab.schema_stale
-                    || tab.grid.editing_cell.is_some()
-                    || tab.grid.changeset_revision() != revision
-                    || tab.grid.selection.focus != Some(start)
-                    || tab.grid.display_columns() != layout
+                    || tab.current_result.grid.editing_cell.is_some()
+                    || tab.current_result.grid.changeset_revision() != revision
+                    || tab.current_result.grid.selection.focus != Some(start)
+                    || tab.current_result.grid.display_columns() != layout
                     || !tab
+                        .current_result
                         .grid
                         .pager
                         .as_ref()
                         .is_some_and(|active| Arc::ptr_eq(active, &pager))
                 {
-                    tab.last_error = Some("Paste cancelled because the grid changed".into());
+                    tab.current_result.last_error =
+                        Some("Paste cancelled because the grid changed".into());
                 } else {
                     match result {
                         Ok(cells) => {
-                            apply_paste(&mut tab.grid, cells);
-                            tab.last_error = None;
+                            apply_paste(&mut tab.current_result.grid, cells);
+                            tab.current_result.last_error = None;
                         }
-                        Err(error) => tab.last_error = Some(error),
+                        Err(error) => tab.current_result.last_error = Some(error),
                     }
                 }
                 cx.notify();

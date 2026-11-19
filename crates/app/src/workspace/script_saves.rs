@@ -182,11 +182,12 @@ impl Workspace {
             && let Some(index) = self.tabs.iter().position(|tab| {
                 ids.contains(&tab.id)
                     && tab.is_script()
-                    && (tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some())
+                    && (tab.current_result.grid.changeset.is_dirty()
+                        || tab.current_result.grid.editing_cell.is_some())
             })
         {
             self.active_tab = index;
-            self.tabs[index].last_error =
+            self.tabs[index].current_result.last_error =
                 Some("Save or Cancel query result edits before continuing".into());
             cx.notify();
             return;
@@ -228,7 +229,7 @@ impl Workspace {
                                 tab.mark_saved(revision, text);
                             }
                             Err(error) => {
-                                tab.last_error = Some(error);
+                                tab.current_result.last_error = Some(error);
                             }
                         }
                     }

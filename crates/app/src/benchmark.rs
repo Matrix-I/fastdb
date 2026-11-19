@@ -136,7 +136,7 @@ fn begin(workspace: Entity<Workspace>, window: &mut Window, cx: &mut App) {
                                 ws.theme.clone(),
                                 Arc::new(cache),
                             );
-                            tab.grid.set_pager(pager);
+                            tab.current_result.grid.set_pager(pager);
                             ws.tabs = vec![tab];
                             ws.active_tab = 0;
                             cx.notify();
@@ -191,6 +191,7 @@ fn scroll(
     }
     if frame == FRAMES {
         if !workspace.read(cx).tabs[0]
+            .current_result
             .grid
             .vertical_scroll_handle
             .is_scrollable()
@@ -204,7 +205,7 @@ fn scroll(
         return;
     }
     workspace.update(cx, |ws, cx| {
-        let grid = &ws.tabs[0].grid;
+        let grid = &ws.tabs[0].current_result.grid;
         // Sequential motion then deterministic distant seeks force spill reads.
         let row = if frame < 210 {
             frame * 8

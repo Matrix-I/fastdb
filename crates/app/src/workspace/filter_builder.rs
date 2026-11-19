@@ -95,12 +95,15 @@ impl Workspace {
             return;
         };
         if self.tab_session(index).driver.is_none() {
-            self.tabs[index].last_error = Some("Connect before opening filter criteria".into());
+            self.tabs[index].current_result.last_error =
+                Some("Connect before opening filter criteria".into());
             cx.notify();
             return;
         }
-        if tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some() {
-            self.tabs[index].last_error =
+        if tab.current_result.grid.changeset.is_dirty()
+            || tab.current_result.grid.editing_cell.is_some()
+        {
+            self.tabs[index].current_result.last_error =
                 Some("Save or Cancel row edits before building criteria".into());
             cx.notify();
             return;
@@ -293,8 +296,8 @@ impl Workspace {
             || session.driver.is_none()
         {
             Some("Connection metadata changed; close and reopen criteria".into())
-        } else if self.tabs[index].grid.changeset.is_dirty()
-            || self.tabs[index].grid.editing_cell.is_some()
+        } else if self.tabs[index].current_result.grid.changeset.is_dirty()
+            || self.tabs[index].current_result.grid.editing_cell.is_some()
         {
             Some("Save or Cancel row edits before changing filters".into())
         } else {
@@ -317,7 +320,7 @@ impl Workspace {
         let tab = &mut self.tabs[index];
         tab.filter_sql = sql;
         tab.filter_spec = Some(b.spec);
-        tab.grid.ordering.clear();
+        tab.current_result.grid.ordering.clear();
         self.active_tab = index;
         self.input.is_filter_focused = false;
         self.run_active_query(cx);
@@ -334,8 +337,10 @@ impl Workspace {
         let Some(tab) = self.tabs.get_mut(index) else {
             return;
         };
-        if tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some() {
-            tab.last_error =
+        if tab.current_result.grid.changeset.is_dirty()
+            || tab.current_result.grid.editing_cell.is_some()
+        {
+            tab.current_result.last_error =
                 Some("Save or Cancel row edits before navigating filter history".into());
             cx.notify();
             return;
@@ -343,9 +348,9 @@ impl Workspace {
         if let Some(snapshot) = tab.filter_timeline.navigate(forward) {
             tab.filter_sql = snapshot.sql;
             tab.filter_spec = snapshot.criteria;
-            tab.grid.ordering = snapshot.order;
-            tab.fetch.size = snapshot.fetch_size;
-            tab.fetch.size_text = snapshot.fetch_size.to_string();
+            tab.current_result.grid.ordering = snapshot.order;
+            tab.current_result.fetch.size = snapshot.fetch_size;
+            tab.current_result.fetch.size_text = snapshot.fetch_size.to_string();
             self.run_active_query(cx);
             cx.notify();
         }
