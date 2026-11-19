@@ -59,8 +59,8 @@ impl Workspace {
                     let filter_sql = self.tabs[active_tab_idx].filter_sql.clone();
                     let is_filter_focused = self.input.is_filter_focused;
                     let is_running_query = self.operations.is_running();
-                    let history_editable= !is_running_query && !self.tabs[active_tab_idx].grid.changeset.is_dirty()
-                        && self.tabs[active_tab_idx].grid.editing_cell.is_none() && self.tab_session(active_tab_idx).driver.is_some();
+                    let history_editable= !is_running_query && !self.tabs[active_tab_idx].current_result.grid.changeset.is_dirty()
+                        && self.tabs[active_tab_idx].current_result.grid.editing_cell.is_none() && self.tab_session(active_tab_idx).driver.is_some();
                     let can_back=history_editable&&self.tabs[active_tab_idx].filter_timeline.can_back();
                     let can_forward=history_editable&&self.tabs[active_tab_idx].filter_timeline.can_forward();
                     let expanded=self.layout.focus_data;
@@ -140,7 +140,7 @@ impl Workspace {
                                             let mut needs_load = false;
                                             if let Some(t) = this.tabs.get_mut(this.active_tab) {
                                                 t.active_subtab = TableSubTab::Data;
-                                                needs_load = t.grid.pager.is_none() || event.click_count() >= 2;
+                                                needs_load = t.current_result.grid.pager.is_none() || event.click_count() >= 2;
                                             }
                                             if needs_load {
                                                 this.run_active_query(cx);
@@ -464,7 +464,7 @@ impl Workspace {
                 }
 
                 if active_subtab == TableSubTab::Data
-                    && let Some(message) = self.tabs[active_tab_idx].last_error.clone() {
+                    && let Some(message) = self.tabs[active_tab_idx].current_result.last_error.clone() {
                         center_col = center_col.child(self.render_error_banner(&message));
                     }
 
@@ -501,11 +501,11 @@ impl Workspace {
         let theme = self.theme.clone();
         let theme = &theme;
         let tab = &self.tabs[tab_idx];
-        let has_more_rows = tab.fetch.has_more;
-        let is_appending = tab.fetch.is_appending();
-        let fetch_summary = tab.fetch.last.as_ref().map(|s| s.message());
+        let has_more_rows = tab.current_result.fetch.has_more;
+        let is_appending = tab.current_result.fetch.is_appending();
+        let fetch_summary = tab.current_result.fetch.last.as_ref().map(|s| s.message());
         let total_rows = tab.loaded_rows();
-        let fetch_size_text = tab.fetch.size_text.clone();
+        let fetch_size_text = tab.current_result.fetch.size_text.clone();
         let is_fetch_size_focused = self.input.is_fetch_size_focused;
         let is_running_query = self.operations.is_running();
         let can_fetch_next = has_more_rows && !is_running_query;
@@ -612,7 +612,7 @@ impl Workspace {
             .child(div().w(px(1.0)).h(px(14.0)).bg(theme.border))
             .child({
                 let tab_id = tab.id;
-                let has_pager = tab.grid.pager.is_some();
+                let has_pager = tab.current_result.grid.pager.is_some();
                 div()
                     .id("btn-find-in-result")
                     .flex()

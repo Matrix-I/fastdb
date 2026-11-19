@@ -167,19 +167,19 @@ impl Workspace {
                             let is_running_query = self.operations.is_running();
                             let search_open = self.result_search.is_some();
                             let tab = &mut self.tabs[active_tab_idx];
-                            tab.grid.update_viewport_width(available_viewport_w);
-                            tab.grid.update_viewport_height(available_viewport_h);
-                            tab.grid.measure_widths(window);
+                            tab.current_result.grid.update_viewport_width(available_viewport_w);
+                            tab.current_result.grid.update_viewport_height(available_viewport_h);
+                            tab.current_result.grid.measure_widths(window);
 
                             // Scrolling onto the last row reads the next chunk, as DBeaver does
-                            if auto_fetch_allowed(tab.fetch.has_more, is_running_query, is_scrolled_to_bottom(&tab.grid), tab.grid.auto_fetch_paused.get(), search_open) {
+                            if auto_fetch_allowed(tab.current_result.fetch.has_more, is_running_query, is_scrolled_to_bottom(&tab.current_result.grid), tab.current_result.grid.auto_fetch_paused.get(), search_open) {
                                 let fetch_tab = tab.id;
-                                let fetch_pager = tab.grid.pager.clone();
+                                let fetch_pager = tab.current_result.grid.pager.clone();
                                 cx.defer_in(window, move |this, _, cx| {
                                     let allowed = this.tabs.get(this.active_tab).is_some_and(|current| {
                                         current.id == fetch_tab
-                                            && current.grid.pager.as_ref().zip(fetch_pager.as_ref()).is_some_and(|(current, original)| Arc::ptr_eq(current, original))
-                                            && auto_fetch_allowed(current.fetch.has_more, this.operations.is_running(), is_scrolled_to_bottom(&current.grid), current.grid.auto_fetch_paused.get(), this.result_search.is_some())
+                                            && current.current_result.grid.pager.as_ref().zip(fetch_pager.as_ref()).is_some_and(|(current, original)| Arc::ptr_eq(current, original))
+                                            && auto_fetch_allowed(current.current_result.fetch.has_more, this.operations.is_running(), is_scrolled_to_bottom(&current.current_result.grid), current.current_result.grid.auto_fetch_paused.get(), this.result_search.is_some())
                                     });
                                     if allowed { this.fetch_next_rows(cx); }
                                 });
@@ -220,7 +220,7 @@ impl Workspace {
                             });
                             // Both table and SQL results offer column layout actions.
                             let on_header_menu: Option<ui_grid::HeaderMenuHandler> =
-                                self.tabs[active_tab_idx].grid.pager.is_some().then(|| {
+                                self.tabs[active_tab_idx].current_result.grid.pager.is_some().then(|| {
                                     let menu_view = view.clone();
                                     std::rc::Rc::new(move |col: usize, event: &MouseDownEvent, _window: &mut Window, app: &mut App| {
                                         let _ = menu_view.update(app, |this, cx| {
@@ -232,7 +232,7 @@ impl Workspace {
                             let cell_editor = self.cell_editor_renderer(cx);
                             let tab = &mut self.tabs[active_tab_idx];
 
-                            let grid = tab.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), Some(on_cell_mouse_move), on_header_menu, cell_editor, move |col_idx, cur_width| {
+                            let grid = tab.current_result.grid.render_grid_interactive(active_resizing_col, Some(on_cell_mouse_down), Some(on_cell_mouse_move), on_header_menu, cell_editor, move |col_idx, cur_width| {
                                 let is_active = active_resizing_col == Some(col_idx);
                                 let bg_color = if is_active {
                                     Rgba { a: 0.85, ..theme_border_focused }
@@ -272,7 +272,7 @@ impl Workspace {
                                                 if event.button == MouseButton::Left {
                                                     if event.click_count >= 2 {
                                                         if let Some(tab) = this.tabs.get_mut(active_tab_idx) {
-                                                            tab.grid.auto_fit_single_column(col_idx);
+                                                            tab.current_result.grid.auto_fit_single_column(col_idx);
                                                             this.layout.resizing_column = None;
                                                             cx.notify();
                                                         }
@@ -308,18 +308,18 @@ impl Workspace {
                         }
                         DataViewMode::Text => {
                             let tab = &self.tabs[active_tab_idx];
-                            let text_lines = if let Some(ref pager) = tab.grid.pager {
+                            let text_lines = if let Some(ref pager) = tab.current_result.grid.pager {
                                 format_text_presentation(
                                     pager,
-                                    &tab.grid.changeset,
-                                    tab.grid.display_columns(),
-                                    tab.grid.row_count() as usize,
+                                    &tab.current_result.grid.changeset,
+                                    tab.current_result.grid.display_columns(),
+                                    tab.current_result.grid.row_count() as usize,
                                 )
                             } else {
                                 Vec::new()
                             };
 
-                            let total_rows = tab.grid.row_count();
+                            let total_rows = tab.current_result.grid.row_count();
                             let max_line_len = text_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
                             let table_width_px = (max_line_len as f32 * 7.5 + 40.0).max(100.0);
                             let text_copy = text_lines.join("\n");

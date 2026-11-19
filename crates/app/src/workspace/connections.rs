@@ -355,7 +355,7 @@ impl Workspace {
                             && tab.connection_id == this.connections.active_connection_id
                             && tab.table_name.is_some()
                             && tab.active_subtab == TableSubTab::Data
-                            && tab.grid.pager.is_none()
+                            && tab.current_result.grid.pager.is_none()
                         {
                             this.run_active_query(cx);
                         }
@@ -443,7 +443,7 @@ impl Workspace {
                 if let Some(c) = &mut tab.column_editor {
                     c.source_driver = None;
                 }
-                tab.query_edit_driver = None;
+                tab.current_result.query_edit_driver = None;
                 tab.transaction_state = "Session closed".into();
                 tab.script_status = Some("Session closed by disconnect".into());
             }
@@ -533,7 +533,7 @@ impl Workspace {
                     Err(error)=>{
                         for tab in &mut this.tabs {
                             if tab.connection_id.as_deref()==Some(&owner) {
-                                tab.last_error=Some(format!("Metadata refresh failed: {error}. Refresh again to update cached properties"));
+                                tab.current_result.last_error=Some(format!("Metadata refresh failed: {error}. Refresh again to update cached properties"));
                             }
                         }
                     }

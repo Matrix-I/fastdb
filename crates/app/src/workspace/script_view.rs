@@ -142,16 +142,21 @@ impl Workspace {
             .show_execution_log
             .then(|| tab.execution_log.messages().rev().collect::<Vec<_>>());
         let execution_status = tab.script_status.clone();
-        let last_error = tab.last_error.clone();
-        let no_result_set = tab.grid.pager.as_ref().is_some_and(|p| p.num_cols() == 0);
-        let elapsed = tab.execution_time_ms;
-        let command_count = tab.affected_rows;
+        let last_error = tab.current_result.last_error.clone();
+        let no_result_set = tab
+            .current_result
+            .grid
+            .pager
+            .as_ref()
+            .is_some_and(|p| p.num_cols() == 0);
+        let elapsed = tab.current_result.execution_time_ms;
+        let command_count = tab.current_result.affected_rows;
         let result_failed = last_error.is_some();
         let result_count = tab.result_count();
         let selected_result = tab.active_result;
         let history = tab.show_history.then(|| tab.query_history.clone());
-        let has_plan = tab.query_plan.is_some();
-        let show_plan = tab.show_plan && has_plan;
+        let has_plan = tab.current_result.query_plan.is_some();
+        let show_plan = tab.current_result.show_plan && has_plan;
         let tab_id = tab.id;
 
         let shell = div().flex().flex_col().size_full().overflow_hidden();
@@ -360,7 +365,7 @@ impl Workspace {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
-                            tab.show_plan = !tab.show_plan;
+                            tab.current_result.show_plan = !tab.current_result.show_plan;
                         }
                         cx.notify();
                     })),

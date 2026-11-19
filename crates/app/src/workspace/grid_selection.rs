@@ -10,12 +10,12 @@ pub(super) struct GridDragSelection {
 
 impl GridDragSelection {
     pub(super) fn begin(tab: &TabState) -> Option<Self> {
-        if tab.grid.editing_cell.is_some() {
+        if tab.current_result.grid.editing_cell.is_some() {
             return None;
         }
-        let pager = tab.grid.pager.clone()?;
-        let anchor = tab.grid.selection.anchor?;
-        if anchor.row >= tab.grid.row_count() || anchor.col >= pager.columns.len() {
+        let pager = tab.current_result.grid.pager.clone()?;
+        let anchor = tab.current_result.grid.selection.anchor?;
+        if anchor.row >= tab.current_result.grid.row_count() || anchor.col >= pager.columns.len() {
             return None;
         }
         Some(Self {
@@ -29,8 +29,9 @@ impl GridDragSelection {
     // inside the same cell or outside the current result's bounds.
     fn extend(&self, tab: &mut TabState, focus: GridCoord) -> Option<bool> {
         if tab.id != self.tab_id
-            || tab.grid.editing_cell.is_some()
+            || tab.current_result.grid.editing_cell.is_some()
             || !tab
+                .current_result
                 .grid
                 .pager
                 .as_ref()
@@ -38,13 +39,17 @@ impl GridDragSelection {
         {
             return None;
         }
-        if focus.row >= tab.grid.row_count() || focus.col >= self.pager.columns.len() {
+        if focus.row >= tab.current_result.grid.row_count() || focus.col >= self.pager.columns.len()
+        {
             return Some(false);
         }
-        let changed = tab.grid.selection.anchor != Some(self.anchor)
-            || tab.grid.selection.focus != Some(focus);
+        let changed = tab.current_result.grid.selection.anchor != Some(self.anchor)
+            || tab.current_result.grid.selection.focus != Some(focus);
         if changed {
-            tab.grid.selection.set_range(self.anchor, focus);
+            tab.current_result
+                .grid
+                .selection
+                .set_range(self.anchor, focus);
         }
         Some(changed)
     }
@@ -63,7 +68,7 @@ impl Workspace {
             self.input.grid_drag = None;
             return;
         };
-        let previous_col = tab.grid.selection.focus.map(|f| f.col);
+        let previous_col = tab.current_result.grid.selection.focus.map(|f| f.col);
         match drag.extend(tab, GridCoord { row, col }) {
             None => self.input.grid_drag = None,
             Some(false) => {}
@@ -109,27 +114,33 @@ mod tests {
                 .append_row([Some(row.to_string()), Some("label".into())])
                 .unwrap();
         }
-        tab.grid.set_pager(pager);
+        tab.current_result.grid.set_pager(pager);
         tab
     }
 
     #[test]
     fn drag_extends_both_directions_and_keeps_the_original_anchor() {
         let mut tab = tab(1);
-        tab.grid.selection = GridSelection::single(2, 1);
+        tab.current_result.grid.selection = GridSelection::single(2, 1);
         let drag = GridDragSelection::begin(&tab).unwrap();
         assert_eq!(
             drag.extend(&mut tab, GridCoord { row: 0, col: 0 }),
             Some(true)
         );
-        assert_eq!(tab.grid.selection.bounding_box(), Some((0, 2, 0, 1)));
+        assert_eq!(
+            tab.current_result.grid.selection.bounding_box(),
+            Some((0, 2, 0, 1))
+        );
         assert_eq!(
             drag.extend(&mut tab, GridCoord { row: 3, col: 1 }),
             Some(true)
         );
-        assert_eq!(tab.grid.selection.bounding_box(), Some((2, 3, 1, 1)));
         assert_eq!(
-            tab.grid.selection.anchor,
+            tab.current_result.grid.selection.bounding_box(),
+            Some((2, 3, 1, 1))
+        );
+        assert_eq!(
+            tab.current_result.grid.selection.anchor,
             Some(GridCoord { row: 2, col: 1 })
         );
         assert_eq!(
@@ -137,51 +148,64 @@ mod tests {
             Some(false)
         );
         // The selected rectangle is directly usable by existing clipboard formats.
-        assert_eq!(tab.grid.selection_text().as_deref(), Some("label\nlabel"));
+        assert_eq!(
+            tab.current_result.grid.selection_text().as_deref(),
+            Some("label\nlabel")
+        );
     }
 
     #[test]
     fn shift_drag_preserves_the_existing_selection_anchor() {
         let mut tab = tab(1);
-        tab.grid
+        tab.current_result
+            .grid
             .selection
             .set_range(GridCoord { row: 0, col: 0 }, GridCoord { row: 2, col: 1 });
         let drag = GridDragSelection::begin(&tab).unwrap();
         drag.extend(&mut tab, GridCoord { row: 3, col: 1 });
-        assert_eq!(tab.grid.selection.bounding_box(), Some((0, 3, 0, 1)));
+        assert_eq!(
+            tab.current_result.grid.selection.bounding_box(),
+            Some((0, 3, 0, 1))
+        );
     }
 
     #[test]
     fn drags_cannot_cross_tabs_or_replacement_results() {
         let mut original = tab(1);
-        original.grid.selection = GridSelection::single(0, 0);
+        original.current_result.grid.selection = GridSelection::single(0, 0);
         let drag = GridDragSelection::begin(&original).unwrap();
         let mut other = tab(2);
-        other.grid.pager = original.grid.pager.clone();
+        other.current_result.grid.pager = original.current_result.grid.pager.clone();
         assert_eq!(drag.extend(&mut other, GridCoord { row: 1, col: 1 }), None);
-        assert!(other.grid.selection.anchor.is_none());
-        original.grid.set_pager(tab(1).grid.pager.unwrap());
+        assert!(other.current_result.grid.selection.anchor.is_none());
+        original
+            .current_result
+            .grid
+            .set_pager(tab(1).current_result.grid.pager.unwrap());
         assert_eq!(
             drag.extend(&mut original, GridCoord { row: 1, col: 1 }),
             None
         );
-        assert!(original.grid.selection.anchor.is_none());
+        assert!(original.current_result.grid.selection.anchor.is_none());
     }
 
     #[test]
     fn hover_out_of_bounds_and_cell_editing_do_not_change_selection() {
         let mut tab = tab(1);
         assert!(GridDragSelection::begin(&tab).is_none());
-        tab.grid.selection = GridSelection::single(99, 99);
+        tab.current_result.grid.selection = GridSelection::single(99, 99);
         assert!(GridDragSelection::begin(&tab).is_none());
-        tab.grid.selection = GridSelection::single(0, 0);
+        tab.current_result.grid.selection = GridSelection::single(0, 0);
         let drag = GridDragSelection::begin(&tab).unwrap();
         assert_eq!(
             drag.extend(&mut tab, GridCoord { row: 99, col: 99 }),
             Some(false)
         );
-        assert_eq!(tab.grid.selection, GridSelection::single(0, 0));
-        tab.grid.editing_cell = Some(CellEdit {
+        assert_eq!(
+            tab.current_result.grid.selection,
+            GridSelection::single(0, 0)
+        );
+        tab.current_result.grid.editing_cell = Some(CellEdit {
             row: 0,
             col: 0,
             text: "edit".into(),
@@ -190,6 +214,9 @@ mod tests {
         });
         assert!(GridDragSelection::begin(&tab).is_none());
         assert_eq!(drag.extend(&mut tab, GridCoord { row: 1, col: 1 }), None);
-        assert_eq!(tab.grid.selection, GridSelection::single(0, 0));
+        assert_eq!(
+            tab.current_result.grid.selection,
+            GridSelection::single(0, 0)
+        );
     }
 }

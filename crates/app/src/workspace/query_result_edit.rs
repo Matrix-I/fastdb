@@ -8,6 +8,7 @@ impl Workspace {
         tab.is_script()
             && !tab.schema_stale
             && tab
+                .current_result
                 .grid
                 .pager
                 .as_ref()
@@ -17,7 +18,8 @@ impl Workspace {
                 .driver
                 .as_ref()
                 .is_some_and(|driver| {
-                    tab.query_edit_driver
+                    tab.current_result
+                        .query_edit_driver
                         .as_ref()
                         .and_then(std::sync::Weak::upgrade)
                         .is_some_and(|source| Arc::ptr_eq(driver, &source))
@@ -35,10 +37,10 @@ impl Workspace {
         else {
             return;
         };
-        if self.tabs[index].grid.changeset.is_dirty()
-            || self.tabs[index].grid.editing_cell.is_some()
+        if self.tabs[index].current_result.grid.changeset.is_dirty()
+            || self.tabs[index].current_result.grid.editing_cell.is_some()
         {
-            self.tabs[index].last_error =
+            self.tabs[index].current_result.last_error =
                 Some("Save or Cancel result edits before loading another result".into());
             cx.notify();
             return;
@@ -47,7 +49,8 @@ impl Workspace {
             return;
         };
         if driver.is_read_only() {
-            self.tabs[index].last_error = Some("This connection is read-only".into());
+            self.tabs[index].current_result.last_error =
+                Some("This connection is read-only".into());
             cx.notify();
             return;
         }
@@ -80,12 +83,12 @@ impl Workspace {
                         tab.begin_fetch(false, false);
                         tab.apply_stream_event(StreamEvent::SchemaReady(pager));
                         tab.apply_stream_event(StreamEvent::Completed { total_rows: rows, elapsed_ms: 0 });
-                        tab.query_edit_driver = Some(Arc::downgrade(&driver));
+                        tab.current_result.query_edit_driver = Some(Arc::downgrade(&driver));
                         tab.script_status = Some("Editable result · scalar non-key fields · Save commits through an isolated connection".into());
                         tab.editor_focused = false;
                     }
                     Err(error) => {
-                        tab.last_error = Some(format!("{error:#}"));
+                        tab.current_result.last_error = Some(format!("{error:#}"));
                         tab.script_status = Some("Editable result could not be loaded".into());
                     }
                 }
@@ -101,23 +104,23 @@ impl Workspace {
         }
         if !self.editable_query_result(index) {
             if let Some(tab) = self.tabs.get_mut(index) {
-                tab.last_error = Some("Query result source is unavailable. Cancel staged edits and reload the editable result.".into());
+                tab.current_result.last_error = Some("Query result source is unavailable. Cancel staged edits and reload the editable result.".into());
                 cx.notify();
             }
             return;
         }
         let tab = &self.tabs[index];
-        let changes = &tab.grid.changeset;
+        let changes = &tab.current_result.grid.changeset;
         if changes.changes.is_empty() {
             return;
         }
         if !changes.inserted_rows.is_empty() || !changes.deleted_rows.is_empty() {
-            self.tabs[index].last_error =
+            self.tabs[index].current_result.last_error =
                 Some("Editable query results support cell updates only".into());
             cx.notify();
             return;
         }
-        let pager = tab.grid.pager.clone().unwrap();
+        let pager = tab.current_result.grid.pager.clone().unwrap();
         let edits = changes
             .changes
             .iter()
@@ -128,7 +131,7 @@ impl Workspace {
             })
             .collect();
         let saved = changes.clone();
-        let query = tab.script_sql.clone().unwrap_or_default();
+        let query = tab.current_result.script_sql.clone().unwrap_or_default();
         let driver = self.tab_session(index).driver.clone().unwrap();
         let tab_id = tab.id;
         let Some(connection_id) = tab.connection_id.clone() else {
@@ -155,24 +158,24 @@ impl Workspace {
                 match result {
                     Ok(refreshed) => {
                         tab.finish_row_save(&saved, Ok(saved.changes.len() as u64));
-                        tab.query_edit_driver = None;
+                        tab.current_result.query_edit_driver = None;
                         match refreshed {
                             Ok(pager) => {
                                 let rows = pager.total_rows();
                                 tab.begin_fetch(false, false);
                                 tab.apply_stream_event(StreamEvent::SchemaReady(pager));
                                 tab.apply_stream_event(StreamEvent::Completed { total_rows: rows, elapsed_ms: 0 });
-                                tab.query_edit_driver = Some(Arc::downgrade(&driver));
+                                tab.current_result.query_edit_driver = Some(Arc::downgrade(&driver));
                                 tab.script_status = Some("Result edits committed and stored values reloaded".into());
                             }
                             Err(error) => {
-                                tab.last_error = Some(format!("Edits committed, but reloading failed: {error}. Reload editable result before editing again."));
+                                tab.current_result.last_error = Some(format!("Edits committed, but reloading failed: {error}. Reload editable result before editing again."));
                             }
                         }
                     }
                     Err(error) => {
-                        tab.query_edit_driver = None;
-                        tab.last_error = Some(format!("{error:#}. Cancel staged edits and reload before retrying."));
+                        tab.current_result.query_edit_driver = None;
+                        tab.current_result.last_error = Some(format!("{error:#}. Cancel staged edits and reload before retrying."));
                     }
                 }
                 this.notify_result(cx);

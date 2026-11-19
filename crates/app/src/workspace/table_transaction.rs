@@ -22,7 +22,7 @@ impl Workspace {
             return;
         };
         if tab.schema_stale && boundary != Boundary::Rollback {
-            self.tabs[index].last_error =
+            self.tabs[index].current_result.last_error =
                 Some("Schema changed; cancel staged edits and reload before saving".into());
             cx.notify();
             return;
@@ -33,7 +33,7 @@ impl Workspace {
             match self.table_edit_statements(index) {
                 Ok(statements) => statements,
                 Err(error) => {
-                    self.tabs[index].last_error = Some(error);
+                    self.tabs[index].current_result.last_error = Some(error);
                     cx.notify();
                     return;
                 }
@@ -53,20 +53,20 @@ impl Workspace {
         }
         if boundary == Boundary::Rollback
             && matches!(state.as_str(), "Idle" | "Session closed")
-            && !tab.grid.changeset.is_dirty()
+            && !tab.current_result.grid.changeset.is_dirty()
         {
             return;
         }
         let owner = Arc::downgrade(&tab.tab_session);
         let provider = self.tab_provider(index);
-        let saved = tab.grid.changeset.clone();
+        let saved = tab.current_result.grid.changeset.clone();
         let Some(run) =
             self.operations
                 .begin(id, connection_id, driver.clone(), OperationKind::Save)
         else {
             return;
         };
-        self.tabs[index].last_error = None;
+        self.tabs[index].current_result.last_error = None;
         self.tabs[index].script_status = Some("Applying table transaction…".into());
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -90,12 +90,12 @@ impl Workspace {
                 let tab = &mut this.tabs[index];
                 tab.transaction_state = outcome.state;
                 if let Some(error) = outcome.error {
-                    tab.last_error = Some(error);
+                    tab.current_result.last_error = Some(error);
                     cx.notify();
                     return;
                 }
                 let cleared = if boundary == Boundary::Rollback {
-                    tab.grid.clear_saved_edits();
+                    tab.current_result.grid.clear_saved_edits();
                     tab.close_record_view();
                     true
                 } else {
@@ -165,9 +165,9 @@ impl Workspace {
                             tab.transaction_state =
                                 if active { "In transaction" } else { "Idle" }.into();
                         }
-                        tab.last_error = None;
+                        tab.current_result.last_error = None;
                     }
-                    Err(error) => tab.last_error = Some(format!("{error:#}")),
+                    Err(error) => tab.current_result.last_error = Some(format!("{error:#}")),
                 }
                 cx.notify();
             });
@@ -192,8 +192,8 @@ impl Workspace {
             tab.filter_timeline
                 .record(super::filter_timeline::FilterSnapshot {
                     sql: tab.filter_sql.clone(),
-                    order: tab.grid.ordering.clone(),
-                    fetch_size: tab.fetch.size,
+                    order: tab.current_result.grid.ordering.clone(),
+                    fetch_size: tab.current_result.fetch.size,
                     criteria: tab.filter_spec.clone(),
                 });
         }
@@ -338,7 +338,8 @@ impl Workspace {
                         if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) {
                             tab.tab_session.close();
                             tab.transaction_state = "Session closed".into();
-                            tab.last_error = Some("Table worker stopped; session closed".into());
+                            tab.current_result.last_error =
+                                Some("Table worker stopped; session closed".into());
                         }
                         this.notify_result(cx);
                     }

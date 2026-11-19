@@ -35,6 +35,7 @@ impl GridContextMenu {
     fn matches_result(&self, tab: &TabState) -> bool {
         tab.id == self.tab_id
             && tab
+                .current_result
                 .grid
                 .pager
                 .as_ref()
@@ -178,23 +179,24 @@ impl Workspace {
         let Some(tab) = self.tabs.get_mut(index) else {
             return;
         };
-        let pager = tab.grid.pager.clone();
+        let pager = tab.current_result.grid.pager.clone();
         if let Some(ui_grid::GridCoord { row, col }) = cell {
             let Some(pager) = pager.as_ref() else {
                 return;
             };
-            if row >= tab.grid.row_count() || col >= pager.columns.len() {
+            if row >= tab.current_result.grid.row_count() || col >= pager.columns.len() {
                 return;
             }
-            let selected =
-                tab.grid
-                    .selection_display_range()
-                    .is_some_and(|(first, last, columns)| {
-                        (first..=last).contains(&row)
-                            && tab.grid.display_columns()[columns].contains(&col)
-                    });
+            let selected = tab
+                .current_result
+                .grid
+                .selection_display_range()
+                .is_some_and(|(first, last, columns)| {
+                    (first..=last).contains(&row)
+                        && tab.current_result.grid.display_columns()[columns].contains(&col)
+                });
             if !selected {
-                tab.grid.selection = GridSelection::single(row, col);
+                tab.current_result.grid.selection = GridSelection::single(row, col);
             }
         }
         tab.editor_focused = false;
@@ -208,7 +210,7 @@ impl Workspace {
             pager,
             position,
             cell,
-            revision: tab.grid.changeset_revision(),
+            revision: tab.current_result.grid.changeset_revision(),
         });
         cx.notify();
     }
@@ -222,10 +224,10 @@ impl Workspace {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        if tab.grid.editing_cell.is_some() {
+        if tab.current_result.grid.editing_cell.is_some() {
             return;
         }
-        let Some(snapshot) = SelectionSnapshot::capture(&tab.grid) else {
+        let Some(snapshot) = SelectionSnapshot::capture(&tab.current_result.grid) else {
             return;
         };
         let dialect = SqlDialect(self.tab_provider(index));
@@ -257,6 +259,7 @@ impl Workspace {
                 let message = if this.clipboard_request_id != request {
                     "Copy superseded by a newer request".into()
                 } else if !tab
+                    .current_result
                     .grid
                     .pager
                     .as_ref()
@@ -286,7 +289,7 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let index = self.tabs.iter().position(|t| t.id == menu.tab_id);
         let enabled = index.is_some_and(|i| {
-            let grid = &self.tabs[i].grid;
+            let grid = &self.tabs[i].current_result.grid;
             grid.editing_cell.is_none()
                 && grid.selection_display_range().is_some()
                 && menu.matches_result(&self.tabs[i])
@@ -347,6 +350,7 @@ impl Workspace {
         {
             let new_row = matches!(
                 self.tabs[self.active_tab]
+                    .current_result
                     .grid
                     .changeset
                     .resolve_row(cell.row),
@@ -362,7 +366,7 @@ impl Workspace {
                         this.menus.grid_context_menu = None;
                         if this.tabs.get(this.active_tab).is_some_and(|tab| {
                             menu.matches_result(tab)
-                                && tab.grid.changeset_revision() == menu.revision
+                                && tab.current_result.grid.changeset_revision() == menu.revision
                         }) {
                             this.set_grid_empty_value(cell, default, cx);
                         }
@@ -397,7 +401,8 @@ impl Workspace {
                                 this.menus.grid_context_menu = None;
                                 if this.tabs.get(this.active_tab).is_some_and(|tab| {
                                     picker_menu.matches_result(tab)
-                                        && tab.grid.changeset_revision() == picker_menu.revision
+                                        && tab.current_result.grid.changeset_revision()
+                                            == picker_menu.revision
                                 }) {
                                     this.choose_grid_reference(cell, picker_reference.clone(), cx);
                                 }
@@ -419,7 +424,7 @@ impl Workspace {
                             this.menus.grid_context_menu = None;
                             if this.tabs.get(this.active_tab).is_some_and(|tab| {
                                 menu.matches_result(tab)
-                                    && tab.grid.changeset_revision() == menu.revision
+                                    && tab.current_result.grid.changeset_revision() == menu.revision
                             }) {
                                 this.open_grid_reference(cell, reference.clone(), cx);
                             }

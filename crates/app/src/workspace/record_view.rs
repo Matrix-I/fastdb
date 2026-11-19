@@ -203,24 +203,31 @@ impl TabState {
             return;
         };
         if view.compact
-            && let Some(focus) = self.grid.selection.focus
-            && focus.row < self.grid.row_count()
-            && !self.grid.display_columns().contains(&focus.col)
-            && let Some(&column) = self.grid.display_columns().first()
+            && let Some(focus) = self.current_result.grid.selection.focus
+            && focus.row < self.current_result.grid.row_count()
+            && !self
+                .current_result
+                .grid
+                .display_columns()
+                .contains(&focus.col)
+            && let Some(&column) = self.current_result.grid.display_columns().first()
         {
-            self.grid.selection = ui_grid::GridSelection::single(focus.row, column);
+            self.current_result.grid.selection = ui_grid::GridSelection::single(focus.row, column);
         }
-        if view.is_current(&self.grid)
+        if view.is_current(&self.current_result.grid)
             && self
+                .current_result
                 .grid
                 .selection
                 .focus
                 .is_none_or(|focus| focus.row != view.row)
             && let Ok(index) = usize::try_from(view.row)
         {
-            self.grid.auto_fetch_paused.set(true);
-            self.grid.selection = ui_grid::GridSelection::single(view.row, view.first_col);
-            self.grid
+            self.current_result.grid.auto_fetch_paused.set(true);
+            self.current_result.grid.selection =
+                ui_grid::GridSelection::single(view.row, view.first_col);
+            self.current_result
+                .grid
                 .vertical_scroll_handle
                 .scroll_to_item(index, ScrollStrategy::Center);
         }
@@ -230,7 +237,7 @@ impl TabState {
         let view = self
             .record_view
             .as_ref()
-            .filter(|view| view.is_current(&self.grid))?;
+            .filter(|view| view.is_current(&self.current_result.grid))?;
         let record = view.result.as_ref()?.as_ref().ok()?;
         let title = format!("Row #{}", view.row + 1);
         Some(
@@ -319,7 +326,12 @@ impl Workspace {
         let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id) else {
             return;
         };
-        let row = tab.grid.selection.focus.map_or(0, |cell| cell.row);
+        let row = tab
+            .current_result
+            .grid
+            .selection
+            .focus
+            .map_or(0, |cell| cell.row);
         self.load_record_view(tab_id, row, page_start, cx);
     }
 
@@ -337,8 +349,8 @@ impl Workspace {
         else {
             return;
         };
-        if tab.grid.editing_cell.is_some() {
-            tab.last_error =
+        if tab.current_result.grid.editing_cell.is_some() {
+            tab.current_result.last_error =
                 Some("Finish or cancel the cell editor before opening Record view".into());
             cx.notify();
             return;
@@ -350,16 +362,16 @@ impl Workspace {
         {
             return;
         }
-        let Some(pager) = tab.grid.pager.clone() else {
+        let Some(pager) = tab.current_result.grid.pager.clone() else {
             return;
         };
         let first_col = page_start.unwrap_or(0);
-        if tab.grid.row_count() == 0 || first_col >= pager.columns.len() {
+        if tab.current_result.grid.row_count() == 0 || first_col >= pager.columns.len() {
             return;
         }
-        let row = row.min(tab.grid.row_count() - 1);
+        let row = row.min(tab.current_result.grid.row_count() - 1);
         let projection = project_row(
-            &tab.grid.changeset,
+            &tab.current_result.grid.changeset,
             row,
             record_columns(page_start, pager.columns.len()),
         );
@@ -370,7 +382,7 @@ impl Workspace {
             row,
             first_col,
             request: request.clone(),
-            changeset_revision: tab.grid.changeset_revision(),
+            changeset_revision: tab.current_result.grid.changeset_revision(),
             result: None,
         });
         self.input.is_filter_focused = false;
@@ -419,8 +431,8 @@ impl Workspace {
         let row = view.row;
         let first = view.first_col;
         let columns = view.pager.columns.len();
-        let rows = tab.grid.row_count();
-        let current = view.is_current(&tab.grid);
+        let rows = tab.current_result.grid.row_count();
+        let current = view.is_current(&tab.current_result.grid);
         let ready = current && view.result.is_some();
         panel = panel.when(!view.compact, |panel| {
             panel.child(
@@ -575,9 +587,8 @@ impl Workspace {
         let row = view.row;
         let tab_id = tab.id;
         let editor = self.cell_editor_renderer(cx);
-        let row_ref = tab.grid.changeset.resolve_row(row);
-        let deleted =
-            matches!(row_ref, RowRef::Fetched(index) if tab.grid.changeset.is_deleted(index));
+        let row_ref = tab.current_result.grid.changeset.resolve_row(row);
+        let deleted = matches!(row_ref, RowRef::Fetched(index) if tab.current_result.grid.changeset.is_deleted(index));
         let cell = || {
             div()
                 .flex()
@@ -610,14 +621,14 @@ impl Workspace {
                 .child(cell().child(format!("Row #{}", row + 1))))
             .children(record.values.iter().enumerate().map(|(col, field)| {
                 let column = &view.pager.columns[col];
-                let selected = tab.grid.selection.focus.is_some_and(|focus| focus.row == row && focus.col == col);
-                let modified = matches!(row_ref, RowRef::Fetched(index) if tab.grid.changeset.is_modified(index, col));
+                let selected = tab.current_result.grid.selection.focus.is_some_and(|focus| focus.row == row && focus.col == col);
+                let modified = matches!(row_ref, RowRef::Fetched(index) if tab.current_result.grid.changeset.is_modified(index, col));
                 let (label, muted) = field.grid_label();
                 let value = cell().flex_1().min_w_0()
                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                         let current = this.tabs.get(this.active_tab).is_some_and(|tab| {
                             tab.id == tab_id && tab.record_view.as_ref()
-                                .is_some_and(|view| view.shows_compact_row(&tab.grid, row))
+                                .is_some_and(|view| view.shows_compact_row(&tab.current_result.grid, row))
                         });
                         if !current {
                             return;
@@ -674,20 +685,28 @@ mod tests {
             db_wire::QueryResultPager::new(vec![ColumnMeta::new("name", DataType::Text)]).unwrap(),
         );
         pager.append_row([None::<&[u8]>]).unwrap();
-        tab.grid.set_pager(pager);
+        tab.current_result.grid.set_pager(pager);
         show_row(&mut tab, 0, 0);
         let view = tab.record_view.as_mut().unwrap();
         view.compact = true;
-        assert!(view.shows_compact_row(&tab.grid, 0));
+        assert!(view.shows_compact_row(&tab.current_result.grid, 0));
 
-        tab.grid
+        tab.current_result
+            .grid
             .stage(|changes| changes.set_cell(0, 0, None, Some("new".into())));
-        view.update_compact_cell(0, preview(b"new"), tab.grid.changeset_revision());
+        view.update_compact_cell(
+            0,
+            preview(b"new"),
+            tab.current_result.grid.changeset_revision(),
+        );
 
-        assert!(view.shows_compact_row(&tab.grid, 0));
+        assert!(view.shows_compact_row(&tab.current_result.grid, 0));
         let record = view.result.as_ref().unwrap().as_ref().unwrap();
         assert_eq!(record.values, [Field::Text("new".into())]);
-        assert_eq!(tab.grid.cell_value(0, 0).as_deref(), Some("new"));
+        assert_eq!(
+            tab.current_result.grid.cell_value(0, 0).as_deref(),
+            Some("new")
+        );
     }
 
     #[test]
@@ -702,15 +721,15 @@ mod tests {
             .unwrap(),
         );
         pager.append_row([None::<&[u8]>; 2]).unwrap();
-        tab.grid.set_pager(pager);
-        tab.grid.hide_column(0);
+        tab.current_result.grid.set_pager(pager);
+        tab.current_result.grid.hide_column(0);
         show_row(&mut tab, 0, 0);
         tab.record_view.as_mut().unwrap().compact = true;
-        tab.grid.selection = ui_grid::GridSelection::single(0, 0);
+        tab.current_result.grid.selection = ui_grid::GridSelection::single(0, 0);
 
         tab.leave_record_view();
 
-        assert_eq!(tab.grid.selection.focus.unwrap().col, 1);
+        assert_eq!(tab.current_result.grid.selection.focus.unwrap().col, 1);
     }
 
     #[test]
@@ -739,7 +758,7 @@ mod tests {
             db_wire::QueryResultPager::new(vec![ColumnMeta::new("id", DataType::Int8)]).unwrap(),
         );
         pager.append_row([Some(b"7".as_slice())]).unwrap();
-        tab.grid =
+        tab.current_result.grid =
             ui_grid::VirtualDataGrid::new(Some(pager.clone()), ui_core::theme::Theme::dark());
         tab.view_mode = DataViewMode::Text;
         tab.show_record(super::RecordView {
@@ -748,7 +767,7 @@ mod tests {
             row: 0,
             first_col: 0,
             request: Arc::new(()),
-            changeset_revision: tab.grid.changeset_revision(),
+            changeset_revision: tab.current_result.grid.changeset_revision(),
             result: None,
         });
         assert_eq!(tab.view_mode, DataViewMode::Text);
@@ -775,8 +794,12 @@ mod tests {
 
     fn show_row(tab: &mut crate::workspace::TabState, row: u64, first_col: usize) {
         use std::sync::Arc;
-        let pager = tab.grid.pager.as_ref().unwrap().clone();
-        let projection = project_row(&tab.grid.changeset, row, first_col..pager.columns.len());
+        let pager = tab.current_result.grid.pager.as_ref().unwrap().clone();
+        let projection = project_row(
+            &tab.current_result.grid.changeset,
+            row,
+            first_col..pager.columns.len(),
+        );
         let result = read_record(&pager, projection, first_col);
         tab.show_record(super::RecordView {
             compact: false,
@@ -784,7 +807,7 @@ mod tests {
             row,
             first_col,
             request: Arc::new(()),
-            changeset_revision: tab.grid.changeset_revision(),
+            changeset_revision: tab.current_result.grid.changeset_revision(),
             result: Some(result),
         });
     }
@@ -802,9 +825,9 @@ mod tests {
                 );
                 pager.append_row([Some(b"7".as_slice())]).unwrap();
                 pager.append_row([Some(b"8".as_slice())]).unwrap();
-                tab.grid =
+                tab.current_result.grid =
                     ui_grid::VirtualDataGrid::new(Some(pager), ui_core::theme::Theme::dark());
-                tab.grid.selection = ui_grid::GridSelection::single(0, 0);
+                tab.current_result.grid.selection = ui_grid::GridSelection::single(0, 0);
                 tab.view_mode = mode;
                 show_row(&mut tab, 0, 0);
                 assert_eq!(tab.view_mode, mode);
@@ -827,8 +850,8 @@ mod tests {
                 tab.leave_record_view();
                 assert!(tab.record_view.is_none());
                 assert_eq!(tab.view_mode, mode);
-                assert_eq!(tab.grid.selection.focus.unwrap().row, 1);
-                assert!(tab.grid.auto_fetch_paused.get());
+                assert_eq!(tab.current_result.grid.selection.focus.unwrap().row, 1);
+                assert!(tab.current_result.grid.auto_fetch_paused.get());
                 show_row(&mut tab, 1, 0);
                 tab.close_record_view();
                 assert!(tab.record_view.is_none());
@@ -851,7 +874,8 @@ mod tests {
         pager
             .append_row([Some(b"7".as_slice()), Some(b"false".as_slice())])
             .unwrap();
-        tab.grid = ui_grid::VirtualDataGrid::new(Some(pager), ui_core::theme::Theme::dark());
+        tab.current_result.grid =
+            ui_grid::VirtualDataGrid::new(Some(pager), ui_core::theme::Theme::dark());
         show_row(&mut tab, 0, 0);
         assert_eq!(
             tab.record_text().unwrap(),
@@ -873,12 +897,13 @@ mod tests {
         tab.record_view.as_mut().unwrap().result = Some(Err("read failed".into()));
         assert!(tab.record_text().is_none());
         show_row(&mut tab, 0, 0);
-        tab.grid
+        tab.current_result
+            .grid
             .stage(|changes| changes.set_cell(0, 0, Some(b"7".to_vec()), Some("9".into())));
         assert!(tab.record_text().is_none());
-        tab.grid.selection = ui_grid::GridSelection::single(0, 1);
+        tab.current_result.grid.selection = ui_grid::GridSelection::single(0, 1);
         tab.leave_record_view();
-        assert_eq!(tab.grid.selection.focus.unwrap().col, 1);
+        assert_eq!(tab.current_result.grid.selection.focus.unwrap().col, 1);
     }
 
     #[test]

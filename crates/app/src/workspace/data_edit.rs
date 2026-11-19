@@ -60,7 +60,7 @@ impl Workspace {
         !self.operations.is_running()
             && (tab.table_name.is_some() || self.editable_query_result(self.active_tab))
             && tab.reference_picker.is_none()
-            && tab.grid.pager.is_some()
+            && tab.current_result.grid.pager.is_some()
             && self
                 .tab_session(self.active_tab)
                 .driver
@@ -70,9 +70,10 @@ impl Workspace {
 
     /// Whether the active tab has staged edits waiting for Save or Cancel
     pub(super) fn has_pending_edits(&self) -> bool {
-        self.tabs
-            .get(self.active_tab)
-            .is_some_and(|t| t.grid.changeset.is_dirty() || t.grid.editing_cell.is_some())
+        self.tabs.get(self.active_tab).is_some_and(|t| {
+            t.current_result.grid.changeset.is_dirty()
+                || t.current_result.grid.editing_cell.is_some()
+        })
     }
 
     /// Opens the in-place editor on a cell (double-click or the "Edit cell" button)
@@ -82,24 +83,26 @@ impl Workspace {
             return;
         }
         let tab = &mut self.tabs[self.active_tab];
-        let is_deleted = matches!(tab.grid.changeset.resolve_row(row), RowRef::Fetched(f) if tab.grid.changeset.is_deleted(f));
+        let is_deleted = matches!(tab.current_result.grid.changeset.resolve_row(row), RowRef::Fetched(f) if tab.current_result.grid.changeset.is_deleted(f));
         let compact_row = tab
             .record_view
             .as_ref()
-            .is_some_and(|view| view.shows_compact_row(&tab.grid, row));
+            .is_some_and(|view| view.shows_compact_row(&tab.current_result.grid, row));
         let visible = if compact_row {
-            tab.grid
+            tab.current_result
+                .grid
                 .pager
                 .as_ref()
                 .is_some_and(|pager| col < pager.columns.len())
         } else {
-            tab.grid.display_columns().contains(&col)
+            tab.current_result.grid.display_columns().contains(&col)
         };
-        if is_deleted || row >= tab.grid.row_count() || !visible {
+        if is_deleted || row >= tab.current_result.grid.row_count() || !visible {
             return;
         }
         if tab.is_script()
             && !tab
+                .current_result
                 .grid
                 .pager
                 .as_ref()
@@ -107,17 +110,18 @@ impl Workspace {
                 .and_then(|origin| origin.columns.get(col))
                 .is_some_and(|column| column.writable && !column.key)
         {
-            tab.last_error = Some("This query result column is read-only".into());
+            tab.current_result.last_error = Some("This query result column is read-only".into());
             return;
         }
         if tab
+            .current_result
             .grid
             .pager
             .as_ref()
             .and_then(|pager| pager.columns.get(col))
             .is_some_and(|column| column.data_type == DataType::Bytea)
         {
-            tab.last_error =
+            tab.current_result.last_error =
                 Some("Use Value editor to edit binary bytes without text conversion".into());
             return;
         }
@@ -128,9 +132,13 @@ impl Workspace {
         {
             tab.leave_record_view();
         }
-        let text = tab.grid.cell_value(row, col).unwrap_or_default();
-        tab.grid.selection = ui_grid::GridSelection::single(row, col);
-        tab.grid.editing_cell = Some(CellEdit {
+        let text = tab
+            .current_result
+            .grid
+            .cell_value(row, col)
+            .unwrap_or_default();
+        tab.current_result.grid.selection = ui_grid::GridSelection::single(row, col);
+        tab.current_result.grid.editing_cell = Some(CellEdit {
             row,
             col,
             text,
@@ -148,7 +156,7 @@ impl Workspace {
         let focus = self
             .tabs
             .get(self.active_tab)
-            .and_then(|t| t.grid.selection.focus);
+            .and_then(|t| t.current_result.grid.selection.focus);
         if let Some(f) = focus {
             self.begin_cell_edit(f.row, f.col);
         }
@@ -162,22 +170,27 @@ impl Workspace {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
-        let Some(edit) = tab.grid.editing_cell.take() else {
+        let Some(edit) = tab.current_result.grid.editing_cell.take() else {
             return;
         };
-        let Some(pager) = tab.grid.pager.clone() else {
+        let Some(pager) = tab.current_result.grid.pager.clone() else {
             return;
         };
-        let unchanged_text =
-            tab.grid.cell_value(edit.row, edit.col).as_deref() == Some(edit.text.as_str());
+        let unchanged_text = tab
+            .current_result
+            .grid
+            .cell_value(edit.row, edit.col)
+            .as_deref()
+            == Some(edit.text.as_str());
         let record_view = tab
             .record_view
             .as_mut()
-            .filter(|view| view.shows_compact_row(&tab.grid, edit.row));
+            .filter(|view| view.shows_compact_row(&tab.current_result.grid, edit.row));
         let record_value = record_view
             .as_ref()
             .map(|_| super::record_view::preview(edit.text.as_bytes()));
-        tab.grid
+        tab.current_result
+            .grid
             .stage(|changeset| match changeset.resolve_row(edit.row) {
                 RowRef::New(i) => {
                     if let Some(row) = changeset.inserted_rows.get_mut(i)
@@ -201,7 +214,11 @@ impl Workspace {
                 }
             });
         if let Some((view, value)) = record_view.zip(record_value) {
-            view.update_compact_cell(edit.col, value, tab.grid.changeset_revision());
+            view.update_compact_cell(
+                edit.col,
+                value,
+                tab.current_result.grid.changeset_revision(),
+            );
         }
     }
 
@@ -215,7 +232,7 @@ impl Workspace {
             return;
         }
         let tab = &mut self.tabs[self.active_tab];
-        let Some(pager) = tab.grid.pager.clone() else {
+        let Some(pager) = tab.current_result.grid.pager.clone() else {
             return;
         };
         let Some(column) = pager.columns.get(focus.col) else {
@@ -230,18 +247,21 @@ impl Workspace {
         {
             return;
         }
-        if tab.schema_stale || tab.grid.editing_cell.is_some() || focus.row >= tab.grid.row_count()
+        if tab.schema_stale
+            || tab.current_result.grid.editing_cell.is_some()
+            || focus.row >= tab.current_result.grid.row_count()
         {
             return;
         }
         if !default && !column.nullable {
-            tab.last_error = Some(format!("Column {} does not accept SQL NULL", column.name));
+            tab.current_result.last_error =
+                Some(format!("Column {} does not accept SQL NULL", column.name));
             cx.notify();
             return;
         }
-        let row = tab.grid.changeset.resolve_row(focus.row);
+        let row = tab.current_result.grid.changeset.resolve_row(focus.row);
         match row {
-            RowRef::New(index) => tab.grid.stage(|changes| {
+            RowRef::New(index) => tab.current_result.grid.stage(|changes| {
                 let row = &mut changes.inserted_rows[index];
                 row.values[focus.col] = None;
                 if default {
@@ -250,20 +270,23 @@ impl Workspace {
                     row.explicit_nulls.insert(focus.col);
                 }
             }),
-            RowRef::Fetched(row) if !default && !tab.grid.changeset.is_deleted(row) => {
+            RowRef::Fetched(row)
+                if !default && !tab.current_result.grid.changeset.is_deleted(row) =>
+            {
                 let Some((page, local_row)) = pager.locate_row(row) else {
                     return;
                 };
                 let page = match pager.get_page(page) {
                     Ok(page) => page,
                     Err(error) => {
-                        tab.last_error = Some(format!("Cannot read original cell: {error}"));
+                        tab.current_result.last_error =
+                            Some(format!("Cannot read original cell: {error}"));
                         cx.notify();
                         return;
                     }
                 };
                 let original = page.get_cell(local_row, focus.col).map(<[u8]>::to_vec);
-                tab.grid.stage(|changes| {
+                tab.current_result.grid.stage(|changes| {
                     if original.is_some() {
                         changes.set_cell(row, focus.col, original, None);
                     } else {
@@ -273,7 +296,7 @@ impl Workspace {
             }
             _ => return,
         }
-        tab.last_error = None;
+        tab.current_result.last_error = None;
         cx.notify();
     }
 
@@ -283,7 +306,7 @@ impl Workspace {
             return;
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            tab.grid.editing_cell = None;
+            tab.current_result.grid.editing_cell = None;
         }
     }
 
@@ -304,32 +327,37 @@ impl Workspace {
         self.commit_cell_edit();
         let tab = &mut self.tabs[self.active_tab];
         let num_cols = tab
+            .current_result
             .grid
             .pager
             .as_ref()
             .map(|p| p.num_cols() as usize)
             .unwrap_or(0);
-        let Some(first_column) = tab.grid.display_columns().first().copied() else {
+        let Some(first_column) = tab.current_result.grid.display_columns().first().copied() else {
             return;
         };
-        let row_count = tab.grid.row_count();
+        let row_count = tab.current_result.grid.row_count();
         let row = tab
+            .current_result
             .grid
             .selection
             .focus
             .map(|f| (f.row + 1).min(row_count))
             .unwrap_or(row_count);
-        tab.grid
+        tab.current_result
+            .grid
             .stage(|changeset| changeset.insert_row_at(row, vec![None; num_cols]));
-        tab.grid
+        tab.current_result
+            .grid
             .vertical_scroll_handle
             .scroll_to_item(row as usize, ScrollStrategy::Bottom);
         let col = tab
+            .current_result
             .grid
             .selection
             .focus
             .map(|f| f.col)
-            .filter(|col| tab.grid.display_columns().contains(col))
+            .filter(|col| tab.current_result.grid.display_columns().contains(col))
             .unwrap_or(first_column);
         self.begin_cell_edit(row, col);
     }
@@ -350,24 +378,25 @@ impl Workspace {
         self.commit_cell_edit();
         let provider = self.tab_provider(self.active_tab);
         let tab = &mut self.tabs[self.active_tab];
-        let Some((min_r, max_r, _, _)) = tab.grid.selection.bounding_box() else {
+        let Some((min_r, max_r, _, _)) = tab.current_result.grid.selection.bounding_box() else {
             return;
         };
         let num_cols = tab
+            .current_result
             .grid
             .pager
             .as_ref()
             .map(|p| p.num_cols() as usize)
             .unwrap_or(0);
-        let max_r = max_r.min(tab.grid.row_count().saturating_sub(1));
+        let max_r = max_r.min(tab.current_result.grid.row_count().saturating_sub(1));
         let (Some(&first_column), Some(&last_column)) = (
-            tab.grid.display_columns().first(),
-            tab.grid.display_columns().last(),
+            tab.current_result.grid.display_columns().first(),
+            tab.current_result.grid.display_columns().last(),
         ) else {
             return;
         };
         if let Err(error) = validate_duplicate_range(min_r, max_r, num_cols) {
-            tab.last_error = Some(error);
+            tab.current_result.last_error = Some(error);
             return;
         }
         let mut bytes = 0usize;
@@ -375,7 +404,8 @@ impl Workspace {
             .map(|row| {
                 let values = (0..num_cols)
                     .map(|column| {
-                        let value = duplicate_cell(&tab.grid, row, column, provider)?;
+                        let value =
+                            duplicate_cell(&tab.current_result.grid, row, column, provider)?;
                         bytes += value.as_ref().map_or(0, String::len);
                         if bytes > super::value_files::MAX_VALUE_BYTES {
                             return Err("Duplicate values exceed the 256 KiB budget".into());
@@ -383,8 +413,8 @@ impl Workspace {
                         Ok(value)
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                let nulls = match tab.grid.changeset.resolve_row(row) {
-                    RowRef::New(index) => tab.grid.changeset.inserted_rows[index]
+                let nulls = match tab.current_result.grid.changeset.resolve_row(row) {
+                    RowRef::New(index) => tab.current_result.grid.changeset.inserted_rows[index]
                         .explicit_nulls
                         .clone(),
                     RowRef::Fetched(_) => values
@@ -399,7 +429,7 @@ impl Workspace {
         let copies = match copies {
             Ok(copies) => copies,
             Err(error) => {
-                tab.last_error = Some(error);
+                tab.current_result.last_error = Some(error);
                 return;
             }
         };
@@ -408,7 +438,7 @@ impl Workspace {
         }
         let first_new = max_r + 1;
         let added = copies.len() as u64;
-        tab.grid.stage(|changeset| {
+        tab.current_result.grid.stage(|changeset| {
             for (i, (values, nulls)) in copies.into_iter().enumerate() {
                 let position = first_new + i as u64;
                 changeset.insert_row_at(position, values);
@@ -417,7 +447,7 @@ impl Workspace {
                 }
             }
         });
-        tab.grid.selection.set_range(
+        tab.current_result.grid.selection.set_range(
             ui_grid::GridCoord {
                 row: first_new,
                 col: first_column,
@@ -427,7 +457,8 @@ impl Workspace {
                 col: last_column,
             },
         );
-        tab.grid
+        tab.current_result
+            .grid
             .vertical_scroll_handle
             .scroll_to_item((first_new + added - 1) as usize, ScrollStrategy::Bottom);
     }
@@ -447,11 +478,11 @@ impl Workspace {
         }
         self.cancel_cell_edit();
         let tab = &mut self.tabs[self.active_tab];
-        let Some((min_r, max_r, _, _)) = tab.grid.selection.bounding_box() else {
+        let Some((min_r, max_r, _, _)) = tab.current_result.grid.selection.bounding_box() else {
             return;
         };
-        let max_r = max_r.min(tab.grid.row_count().saturating_sub(1));
-        let dropped_new_rows = tab.grid.stage(|changeset| {
+        let max_r = max_r.min(tab.current_result.grid.row_count().saturating_sub(1));
+        let dropped_new_rows = tab.current_result.grid.stage(|changeset| {
             let mut dropped_new_rows = false;
             // Bottom up, so dropping a new row does not move the rows still to visit
             for r in (min_r..=max_r).rev() {
@@ -468,7 +499,7 @@ impl Workspace {
             dropped_new_rows
         });
         if dropped_new_rows {
-            tab.grid.selection.clear();
+            tab.current_result.grid.selection.clear();
         }
     }
 
@@ -478,14 +509,14 @@ impl Workspace {
             return;
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            tab.grid.editing_cell = None;
+            tab.current_result.grid.editing_cell = None;
             if tab.record_view.as_ref().is_some_and(|view| view.compact) {
                 tab.leave_record_view();
             }
-            let had_rows = !tab.grid.changeset.inserted_rows.is_empty();
-            tab.grid.stage(|changeset| changeset.clear());
+            let had_rows = !tab.current_result.grid.changeset.inserted_rows.is_empty();
+            tab.current_result.grid.stage(|changeset| changeset.clear());
             if had_rows {
-                tab.grid.selection.clear();
+                tab.current_result.grid.selection.clear();
             }
         }
     }
@@ -500,7 +531,7 @@ impl Workspace {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
-        if tab.grid.step_staged_edits(redo)
+        if tab.current_result.grid.step_staged_edits(redo)
             && tab.record_view.as_ref().is_some_and(|view| view.compact)
         {
             tab.leave_record_view();
@@ -509,13 +540,13 @@ impl Workspace {
 
     pub(super) fn table_edit_statements(&self, index: usize) -> Result<Vec<String>, String> {
         let tab = self.tabs.get(index).ok_or("Table tab is unavailable")?;
-        if !tab.grid.changeset.is_dirty() {
+        if !tab.current_result.grid.changeset.is_dirty() {
             return Ok(Vec::new());
         }
         let (Some(schema), Some(table), Some(pager)) = (
             tab.schema_name.clone(),
             tab.table_name.clone(),
-            tab.grid.pager.clone(),
+            tab.current_result.grid.pager.clone(),
         ) else {
             return Err("Table result is unavailable".into());
         };
@@ -544,7 +575,7 @@ impl Workspace {
             Vec::new()
         };
 
-        let changes = &tab.grid.changeset;
+        let changes = &tab.current_result.grid.changeset;
         let request = RowChanges {
             changes: changes
                 .changes
@@ -580,7 +611,7 @@ impl Workspace {
         if let Some(tab) = self.tabs.get_mut(self.active_tab)
             && tab.schema_stale
         {
-            tab.last_error =
+            tab.current_result.last_error =
                 Some("Schema changed; cancel staged row edits and reload before saving".into());
             cx.notify();
             return;
@@ -597,7 +628,7 @@ impl Workspace {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        if !tab.grid.changeset.is_dirty() {
+        if !tab.current_result.grid.changeset.is_dirty() {
             return;
         }
         let Some(driver) = self.tab_session(self.active_tab).driver.clone() else {
@@ -619,7 +650,7 @@ impl Workspace {
         let statements = match self.table_edit_statements(self.active_tab) {
             Ok(statements) => statements,
             Err(error) => {
-                self.tabs[self.active_tab].last_error = Some(error);
+                self.tabs[self.active_tab].current_result.last_error = Some(error);
                 cx.notify();
                 return;
             }
@@ -629,7 +660,7 @@ impl Workspace {
             .connection_id
             .clone()
             .expect("table tab owns a connection");
-        let saved_changes = tab.grid.changeset.clone();
+        let saved_changes = tab.current_result.grid.changeset.clone();
         let Some(operation_id) =
             self.operations
                 .begin(tab_id, connection_id, driver.clone(), OperationKind::Save)
@@ -673,7 +704,7 @@ impl Workspace {
         let has_selection = self
             .tabs
             .get(self.active_tab)
-            .is_some_and(|t| t.grid.selection.focus.is_some());
+            .is_some_and(|t| t.current_result.grid.selection.focus.is_some());
         let dirty = self.has_pending_edits() && !self.operations.is_running();
 
         let button =
@@ -790,7 +821,13 @@ impl Workspace {
         &self,
         cx: &mut Context<Self>,
     ) -> Option<(u64, usize, CellEditorRenderer)> {
-        let edit = self.tabs.get(self.active_tab)?.grid.editing_cell.clone()?;
+        let edit = self
+            .tabs
+            .get(self.active_tab)?
+            .current_result
+            .grid
+            .editing_cell
+            .clone()?;
         let caret_visible = self.input.cursor_visible;
         let workspace = cx.entity().downgrade();
         let pick: CaretPick = Rc::new(move |index, kind, _, cx| {
@@ -798,7 +835,7 @@ impl Workspace {
                 if let Some(e) = this
                     .tabs
                     .get_mut(this.active_tab)
-                    .and_then(|t| t.grid.editing_cell.as_mut())
+                    .and_then(|t| t.current_result.grid.editing_cell.as_mut())
                 {
                     apply_pick(&mut e.caret, &mut e.anchor, index, kind, true);
                 }

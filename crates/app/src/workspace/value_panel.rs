@@ -150,7 +150,7 @@ impl Workspace {
         if self
             .tabs
             .get(self.active_tab)
-            .and_then(|t| t.grid.editing_cell.as_ref())
+            .and_then(|t| t.current_result.grid.editing_cell.as_ref())
             .is_some_and(|e| (e.row, e.col) != (row, col))
         {
             self.commit_cell_edit();
@@ -164,10 +164,10 @@ impl Workspace {
         };
         tab.editor_focused = false;
         let coord = ui_grid::GridCoord { row, col };
-        let prev_col = tab.grid.selection.focus.map(|f| f.col);
-        match tab.grid.selection.anchor {
-            Some(anchor) if extend => tab.grid.selection.set_range(anchor, coord),
-            _ => tab.grid.selection = ui_grid::GridSelection::single(row, col),
+        let prev_col = tab.current_result.grid.selection.focus.map(|f| f.col);
+        match tab.current_result.grid.selection.anchor {
+            Some(anchor) if extend => tab.current_result.grid.selection.set_range(anchor, coord),
+            _ => tab.current_result.grid.selection = ui_grid::GridSelection::single(row, col),
         }
         if prev_col != Some(col) {
             self.value_panel.format_override = None;
@@ -182,7 +182,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<Arc<CellValue>> {
         let tab = self.tabs.get(index)?;
-        let grid = &tab.grid;
+        let grid = &tab.current_result.grid;
         let focus = grid.selection.focus?;
         let pager = grid.pager.as_ref()?;
         let column = pager.columns.get(focus.col)?;

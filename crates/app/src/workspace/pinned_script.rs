@@ -104,7 +104,7 @@ impl Workspace {
         ) {
             Ok(statements) => Some(statements),
             Err(error) => {
-                self.tabs[index].last_error = Some(error);
+                self.tabs[index].current_result.last_error = Some(error);
                 cx.notify();
                 None
             }
@@ -120,10 +120,10 @@ impl Workspace {
         timeout: Option<std::time::Duration>,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs[index].grid.changeset.is_dirty()
-            || self.tabs[index].grid.editing_cell.is_some()
+        if self.tabs[index].current_result.grid.changeset.is_dirty()
+            || self.tabs[index].current_result.grid.editing_cell.is_some()
         {
-            self.tabs[index].last_error =
+            self.tabs[index].current_result.last_error =
                 Some("Save or Cancel result edits before running SQL".into());
             cx.notify();
             return;
@@ -153,7 +153,7 @@ impl Workspace {
             tab.transaction_state = "Idle".into();
         }
         tab.pending_statements.clear();
-        tab.last_error = None;
+        tab.current_result.last_error = None;
         tab.export.message = None;
         tab.script_status = Some("Opening tab session…".into());
         let (tx, rx) = flume::unbounded();
@@ -274,7 +274,7 @@ impl Workspace {
             }
             ScriptEvent::Stream(event) => {
                 if matches!(event, StreamEvent::Completed { .. })
-                    && let Some(sql) = &tab.script_sql
+                    && let Some(sql) = &tab.current_result.script_sql
                     && let Some(state) = sql_intel::session_transaction_transition(sql)
                 {
                     tab.transaction_state = state.into();
@@ -304,7 +304,11 @@ impl Workspace {
                 if let ExecutionKind::Schema(expected) = kind
                     && outcome.error.is_none()
                     && !outcome.cancelled
-                    && !schema_readback_matches(tab.grid.pager.as_deref(), expected, provider)
+                    && !schema_readback_matches(
+                        tab.current_result.grid.pager.as_deref(),
+                        expected,
+                        provider,
+                    )
                 {
                     outcome.error = Some(format!(
                         "Server did not confirm {expected} as the current schema"

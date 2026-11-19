@@ -177,7 +177,7 @@ impl Workspace {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, &driver));
         if !same_driver || self.tab_provider(index) != provider {
-            self.tabs[index].last_error = Some(
+            self.tabs[index].current_result.last_error = Some(
                 "Connection changed while choosing session settings; reopen the selector".into(),
             );
             cx.notify();
@@ -190,7 +190,7 @@ impl Workspace {
             && super::transaction_mode::client_managed(provider)
         {
             if let Err(error) = apply_client_mode(&mut self.tabs[index], enabled) {
-                self.tabs[index].last_error = Some(error);
+                self.tabs[index].current_result.last_error = Some(error);
             }
             cx.notify();
             return;
@@ -210,7 +210,7 @@ impl Workspace {
                 }
             }
             Err(error) => {
-                self.tabs[index].last_error = Some(error);
+                self.tabs[index].current_result.last_error = Some(error);
                 cx.notify();
             }
         }
@@ -234,7 +234,7 @@ impl Workspace {
             return;
         };
         if !isolation_change_allowed(&self.tabs[index].transaction_state) {
-            self.tabs[index].last_error =
+            self.tabs[index].current_result.last_error =
                 Some("Commit or Rollback before changing isolation".into());
             cx.notify();
             return;
@@ -265,7 +265,7 @@ impl Workspace {
         let preview = match preview {
             Ok(preview) => preview.join("\n"),
             Err(error) => {
-                self.tabs[index].last_error = Some(error);
+                self.tabs[index].current_result.last_error = Some(error);
                 cx.notify();
                 return;
             }

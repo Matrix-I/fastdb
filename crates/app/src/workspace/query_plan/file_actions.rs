@@ -45,20 +45,20 @@ impl TabState {
     ) -> Result<()> {
         ensure!(
             !running
-                && same_result(original, &self.grid.pager)
-                && !self.grid.changeset.is_dirty()
-                && self.grid.editing_cell.is_none(),
+                && same_result(original, &self.current_result.grid.pager)
+                && !self.current_result.grid.changeset.is_dirty()
+                && self.current_result.grid.editing_cell.is_none(),
             "Result changed while choosing a plan; reopen the file"
         );
         if let Some(report) = loaded.comparison {
-            self.plan_comparison = Some(report.into());
-            self.show_plan = true;
+            self.current_result.plan_comparison = Some(report.into());
+            self.current_result.show_plan = true;
         } else {
             self.new_script_result("-- Opened saved query plan (read-only)".into());
-            self.grid.set_pager(loaded.pager);
-            self.query_plan = Some(loaded.plan);
-            self.show_plan = true;
-            self.plan_scroll = ScrollHandle::new();
+            self.current_result.grid.set_pager(loaded.pager);
+            self.current_result.query_plan = Some(loaded.plan);
+            self.current_result.show_plan = true;
+            self.current_result.plan_scroll = ScrollHandle::new();
             self.script_status = Some("Opened native plan; no SQL was executed".into());
         }
         Ok(())
@@ -73,15 +73,15 @@ impl Workspace {
         let Some(tab) = self
             .tabs
             .get_mut(index)
-            .filter(|tab| !tab.plan_file_busy && tab.query_plan.is_some())
+            .filter(|tab| !tab.plan_file_busy && tab.current_result.query_plan.is_some())
         else {
             return;
         };
-        let Some(pager) = tab.grid.pager.clone() else {
+        let Some(pager) = tab.current_result.grid.pager.clone() else {
             return;
         };
         let id = tab.id;
-        let provider = tab.query_plan.as_ref().unwrap().provider;
+        let provider = tab.current_result.query_plan.as_ref().unwrap().provider;
         tab.plan_file_busy = true;
         tab.script_status = Some("Choose where to save the native query plan…".into());
         let dialog = cx.prompt_for_new_path(
@@ -114,7 +114,8 @@ impl Workspace {
                         Ok(message) => tab.script_status = message,
                         Err(error) => {
                             tab.script_status = None;
-                            tab.last_error = Some(format!("Cannot save plan: {error}"));
+                            tab.current_result.last_error =
+                                Some(format!("Cannot save plan: {error}"));
                         }
                     }
                 }
@@ -140,20 +141,26 @@ impl Workspace {
         else {
             return;
         };
-        if tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some() {
-            tab.last_error = Some("Save or Cancel result edits before opening a plan".into());
+        if tab.current_result.grid.changeset.is_dirty()
+            || tab.current_result.grid.editing_cell.is_some()
+        {
+            tab.current_result.last_error =
+                Some("Save or Cancel result edits before opening a plan".into());
             cx.notify();
             return;
         }
-        if compare && tab.query_plan.is_none() {
+        if compare && tab.current_result.query_plan.is_none() {
             return;
         }
         let id = tab.id;
-        let original = tab.grid.pager.clone();
+        let original = tab.current_result.grid.pager.clone();
         let current = if compare {
-            original
-                .clone()
-                .zip(tab.query_plan.as_ref().map(|plan| plan.provider))
+            original.clone().zip(
+                tab.current_result
+                    .query_plan
+                    .as_ref()
+                    .map(|plan| plan.provider),
+            )
         } else {
             None
         };
@@ -195,11 +202,14 @@ impl Workspace {
                     match outcome {
                         Ok(Some(loaded)) => {
                             if let Err(error) = tab.accept_file_plan(&original, loaded, running) {
-                                tab.last_error = Some(error.to_string());
+                                tab.current_result.last_error = Some(error.to_string());
                             }
                         }
                         Ok(None) => {}
-                        Err(error) => tab.last_error = Some(format!("Cannot open plan: {error}")),
+                        Err(error) => {
+                            tab.current_result.last_error =
+                                Some(format!("Cannot open plan: {error}"))
+                        }
                     }
                 }
                 cx.notify();
@@ -260,32 +270,44 @@ mod tests {
             ui_core::theme::Theme::dark(),
         );
         tab.new_script_result("SELECT 42".into());
-        tab.grid.set_pager(original.clone());
+        tab.current_result.grid.set_pager(original.clone());
         let expected = Some(original.clone());
         assert!(
             tab.accept_file_plan(&expected, load(&path, None).unwrap(), true)
                 .is_err()
         );
         assert_eq!(tab.result_count(), 1);
-        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &original));
+        assert!(Arc::ptr_eq(
+            tab.current_result.grid.pager.as_ref().unwrap(),
+            &original
+        ));
         tab.accept_file_plan(&expected, load(&path, None).unwrap(), false)
             .unwrap();
         assert_eq!(tab.result_count(), 2);
         assert_eq!(
-            tab.query_plan.as_ref().unwrap().provider,
+            tab.current_result.query_plan.as_ref().unwrap().provider,
             DbDriverKind::Postgres
         );
         assert_eq!(
-            tab.grid.pager.as_ref().unwrap().get_cell(0, 0),
+            tab.current_result
+                .grid
+                .pager
+                .as_ref()
+                .unwrap()
+                .get_cell(0, 0),
             target.get_cell(0, 0)
         );
         tab.select_result(0);
-        assert_eq!(tab.script_sql.as_deref(), Some("SELECT 42"));
+        assert_eq!(tab.current_result.script_sql.as_deref(), Some("SELECT 42"));
         let comparison = load(&path, Some((original.clone(), DbDriverKind::Postgres))).unwrap();
         tab.accept_file_plan(&expected, comparison, false).unwrap();
-        assert!(Arc::ptr_eq(tab.grid.pager.as_ref().unwrap(), &original));
+        assert!(Arc::ptr_eq(
+            tab.current_result.grid.pager.as_ref().unwrap(),
+            &original
+        ));
         assert!(
-            tab.plan_comparison
+            tab.current_result
+                .plan_comparison
                 .as_ref()
                 .unwrap()
                 .contains("Changed: Result")

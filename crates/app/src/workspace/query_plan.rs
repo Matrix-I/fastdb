@@ -146,14 +146,16 @@ fn sqlite_plan_cell(pager: &QueryResultPager, row: u64, column: usize) -> Result
 impl Workspace {
     fn navigate_expensive_plan(&mut self, id: u64, backwards: bool, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id)
-            && let Some(plan) = &mut tab.query_plan
+            && let Some(plan) = &mut tab.current_result.query_plan
             && let Some(selected) = plan.select_expensive(backwards)
             && let Some(visible) = plan
                 .visible_indices()
                 .iter()
                 .position(|index| *index == selected)
         {
-            tab.plan_scroll.scroll_to_item(visible + PLAN_HEADER_ROWS);
+            tab.current_result
+                .plan_scroll
+                .scroll_to_item(visible + PLAN_HEADER_ROWS);
         }
         cx.notify();
     }
@@ -210,7 +212,7 @@ impl Workspace {
                 };
                 self.start_pinned_plan(index, driver, sql, analyze, cx);
             }
-            Err(error) => self.tabs[index].last_error = Some(error.to_string()),
+            Err(error) => self.tabs[index].current_result.last_error = Some(error.to_string()),
         }
         cx.notify();
     }
@@ -223,7 +225,11 @@ impl Workspace {
         let theme = &self.theme;
         let tab = &self.tabs[index];
         let tab_id = tab.id;
-        let plan = tab.query_plan.as_ref().expect("plan view requires a plan");
+        let plan = tab
+            .current_result
+            .query_plan
+            .as_ref()
+            .expect("plan view requires a plan");
         let navigation = div()
             .flex()
             .gap_2()
@@ -263,18 +269,18 @@ impl Workspace {
             .when(plan.expensive_basis().is_none(), |row| {
                 row.child("No cost or runtime metrics for expensive-node navigation")
             });
-        let mut tree = div().id("query-plan-tree").track_scroll(&tab.plan_scroll).flex().flex_col().flex_1().min_h_0()
+        let mut tree = div().id("query-plan-tree").track_scroll(&tab.current_result.plan_scroll).flex().flex_col().flex_1().min_h_0()
             .overflow_y_scroll().p_3().gap_2().text_size(px(12.0)).text_color(theme.text_primary)
             .child(navigation)
             .child(div().text_color(theme.text_secondary).child(plan.summary.clone()))
             .child(div().text_color(theme.text_muted).child("When reported, cost bars are relative to the root and actual node times and rows are per loop."));
         let mut comparison = div().flex().flex_col().gap_2();
-        if let Some(report) = &tab.plan_comparison {
+        if let Some(report) = &tab.current_result.plan_comparison {
             comparison = comparison
                 .child(script_tools::tool("Close comparison").on_click(cx.listener(
                     move |this, _, _, cx| {
                         if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                            tab.plan_comparison = None;
+                            tab.current_result.plan_comparison = None;
                         }
                         cx.notify();
                     },
@@ -314,7 +320,7 @@ impl Workspace {
                             .tabs
                             .iter_mut()
                             .find(|t| t.id == tab_id)
-                            .and_then(|t| t.query_plan.as_mut())
+                            .and_then(|t| t.current_result.query_plan.as_mut())
                             && let Some(node) = plan.nodes.get_mut(i)
                         {
                             node.collapsed = !node.collapsed;

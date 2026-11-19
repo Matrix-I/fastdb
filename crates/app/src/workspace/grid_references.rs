@@ -158,9 +158,11 @@ impl Workspace {
         focus: ui_grid::GridCoord,
     ) -> Vec<GridReference> {
         let tab = &self.tabs[index];
-        let (Some(schema), Some(table), Some(pager)) =
-            (&tab.schema_name, &tab.table_name, &tab.grid.pager)
-        else {
+        let (Some(schema), Some(table), Some(pager)) = (
+            &tab.schema_name,
+            &tab.table_name,
+            &tab.current_result.grid.pager,
+        ) else {
             return Vec::new();
         };
         let Some(column) = pager.columns.get(focus.col) else {
@@ -216,43 +218,46 @@ impl Workspace {
         };
         let connection = connection.clone();
         let session = self.tab_session(index);
-        let result = reference_filter(&tab.grid, focus.row, &reference).and_then(|spec| {
-            let columns = session
-                .table_columns
-                .get(&(
-                    reference.target_schema.clone(),
-                    reference.target_table.clone(),
-                ))
-                .ok_or("Related table metadata is unavailable")?
-                .iter()
-                .map(|column| column.name.clone())
-                .collect::<Vec<_>>();
-            if matches!(session.kind, DbDriverKind::MySql | DbDriverKind::MariaDb) {
-                let source = tab
-                    .grid
-                    .pager
-                    .as_ref()
-                    .ok_or("Source result is unavailable")?;
-                if reference.pairs.iter().any(|(column, _)| {
-                    source.columns.iter().any(|meta| {
-                        meta.name == *column
-                            && !matches!(meta.data_type, DataType::Text | DataType::Varchar)
-                    })
-                }) {
-                    return Err(
-                        "MySQL lookup requires text keys to avoid implicit numeric coercion".into(),
-                    );
+        let result =
+            reference_filter(&tab.current_result.grid, focus.row, &reference).and_then(|spec| {
+                let columns = session
+                    .table_columns
+                    .get(&(
+                        reference.target_schema.clone(),
+                        reference.target_table.clone(),
+                    ))
+                    .ok_or("Related table metadata is unavailable")?
+                    .iter()
+                    .map(|column| column.name.clone())
+                    .collect::<Vec<_>>();
+                if matches!(session.kind, DbDriverKind::MySql | DbDriverKind::MariaDb) {
+                    let source = tab
+                        .current_result
+                        .grid
+                        .pager
+                        .as_ref()
+                        .ok_or("Source result is unavailable")?;
+                    if reference.pairs.iter().any(|(column, _)| {
+                        source.columns.iter().any(|meta| {
+                            meta.name == *column
+                                && !matches!(meta.data_type, DataType::Text | DataType::Varchar)
+                        })
+                    }) {
+                        return Err(
+                            "MySQL lookup requires text keys to avoid implicit numeric coercion"
+                                .into(),
+                        );
+                    }
                 }
-            }
-            let sql = spec
-                .sql(session.kind, &columns)
-                .map_err(|error| error.to_string())?;
-            Ok((spec, sql))
-        });
+                let sql = spec
+                    .sql(session.kind, &columns)
+                    .map_err(|error| error.to_string())?;
+                Ok((spec, sql))
+            });
         let (spec, sql) = match result {
             Ok(result) => result,
             Err(error) => {
-                self.tabs[index].last_error = Some(error);
+                self.tabs[index].current_result.last_error = Some(error);
                 cx.notify();
                 return;
             }
@@ -311,12 +316,13 @@ impl Workspace {
         }
         let index = self.active_tab;
         let tab = &self.tabs[index];
-        let (Some(connection), Some(pager)) = (&tab.connection_id, &tab.grid.pager) else {
+        let (Some(connection), Some(pager)) = (&tab.connection_id, &tab.current_result.grid.pager)
+        else {
             return;
         };
         if tab.schema_stale
-            || tab.grid.editing_cell.is_some()
-            || focus.row >= tab.grid.row_count()
+            || tab.current_result.grid.editing_cell.is_some()
+            || focus.row >= tab.current_result.grid.row_count()
             || !self.grid_references(index, focus).contains(&reference)
         {
             return;
@@ -327,7 +333,7 @@ impl Workspace {
         let picker = ReferencePicker {
             source_tab: tab.id,
             source_pager: Arc::downgrade(pager),
-            source_revision: tab.grid.changeset_revision(),
+            source_revision: tab.current_result.grid.changeset_revision(),
             source_driver: Arc::downgrade(driver),
             source_row: focus.row,
             source_connection: connection.clone(),
@@ -366,16 +372,18 @@ impl Workspace {
             Ok(values) => values,
             Err(error) => {
                 if let Some(tab) = self.tabs.get_mut(index) {
-                    tab.last_error = Some(error);
+                    tab.current_result.last_error = Some(error);
                 }
                 cx.notify();
                 return;
             }
         };
-        if let Err(error) =
-            super::grid_paste::stage_reference_values(&mut self.tabs[source].grid, row, values)
-        {
-            self.tabs[index].last_error = Some(error);
+        if let Err(error) = super::grid_paste::stage_reference_values(
+            &mut self.tabs[source].current_result.grid,
+            row,
+            values,
+        ) {
+            self.tabs[index].current_result.last_error = Some(error);
             cx.notify();
             return;
         }
@@ -392,7 +400,10 @@ impl Workspace {
             .reference_picker
             .as_ref()
             .ok_or("No active key lookup")?;
-        if tab.schema_stale || tab.grid.changeset.is_dirty() || tab.grid.editing_cell.is_some() {
+        if tab.schema_stale
+            || tab.current_result.grid.changeset.is_dirty()
+            || tab.current_result.grid.editing_cell.is_some()
+        {
             return Err("Choose a saved row from the lookup result".into());
         }
         let source = self
@@ -407,13 +418,14 @@ impl Workspace {
             .ok_or("Source result changed")?;
         if origin.connection_id.as_deref() != Some(&picker.source_connection)
             || !origin
+                .current_result
                 .grid
                 .pager
                 .as_ref()
                 .is_some_and(|pager| Arc::ptr_eq(pager, &source_pager))
-            || origin.grid.changeset_revision() != picker.source_revision
+            || origin.current_result.grid.changeset_revision() != picker.source_revision
             || origin.schema_stale
-            || origin.grid.editing_cell.is_some()
+            || origin.current_result.grid.editing_cell.is_some()
             || !self
                 .tab_session(source)
                 .driver
@@ -428,12 +440,14 @@ impl Workspace {
             return Err("Source result or staged edits changed. Reopen key lookup.".into());
         }
         let row = tab
+            .current_result
             .grid
             .selection
             .focus
             .ok_or("Select a lookup row first")?
             .row;
         let pager = tab
+            .current_result
             .grid
             .pager
             .as_ref()
