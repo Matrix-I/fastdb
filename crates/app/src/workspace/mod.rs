@@ -84,6 +84,7 @@ mod session_context;
 mod session_controls;
 mod software_update;
 mod sql_script;
+mod staged_cell;
 mod tab_context_menu;
 mod table_session;
 mod table_transaction;
