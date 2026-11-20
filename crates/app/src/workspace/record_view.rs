@@ -1,5 +1,6 @@
 //! Read-only, bounded snapshots of one loaded grid row.
 use super::script_tools::tool;
+use super::staged_cell::StagedCell;
 use super::*;
 use gpui::prelude::FluentBuilder;
 use ui_grid::{Changeset, RowRef};
@@ -79,45 +80,24 @@ fn record_columns(first_col: Option<usize>, column_count: usize) -> std::ops::Ra
 }
 
 fn project_row(changes: &Changeset, row: u64, columns: std::ops::Range<usize>) -> RowProjection {
-    match changes.resolve_row(row) {
-        RowRef::Fetched(index) => RowProjection {
-            fetched: Some(index),
-            state: if changes.is_deleted(index) {
-                "Marked for deletion"
-            } else {
-                "Loaded row"
-            },
-            values: columns
-                .map(|col| {
-                    changes
-                        .edited_value(index, col)
-                        .map(|value| value.map_or(Field::Null, |text| preview(text.as_bytes())))
-                })
-                .collect(),
-        },
-        RowRef::New(index) => RowProjection {
-            fetched: None,
-            state: "New row",
-            values: columns
-                .map(|col| {
-                    if changes
-                        .inserted_rows
-                        .get(index)
-                        .is_some_and(|row| row.explicit_nulls.contains(&col))
-                    {
-                        return Some(Field::Null);
-                    }
-                    Some(
-                        changes
-                            .inserted_rows
-                            .get(index)
-                            .and_then(|row| row.values.get(col))
-                            .and_then(Option::as_deref)
-                            .map_or(Field::Default, |text| preview(text.as_bytes())),
-                    )
-                })
-                .collect(),
-        },
+    let row = changes.resolve_row(row);
+    let (fetched, state) = match row {
+        RowRef::Fetched(index) if changes.is_deleted(index) => (Some(index), "Marked for deletion"),
+        RowRef::Fetched(index) => (Some(index), "Loaded row"),
+        RowRef::New(_) => (None, "New row"),
+    };
+    let values = columns
+        .map(|col| match StagedCell::lookup(changes, row, col) {
+            Some(StagedCell::Unchanged) => None,
+            Some(StagedCell::Null) => Some(Field::Null),
+            Some(StagedCell::Text(text)) => Some(preview(text.as_bytes())),
+            Some(StagedCell::Default) | None => Some(Field::Default),
+        })
+        .collect();
+    RowProjection {
+        fetched,
+        state,
+        values,
     }
 }
 

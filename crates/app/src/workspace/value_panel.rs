@@ -1,9 +1,9 @@
+use super::staged_cell::StagedCell;
 use super::value_editor::{ValueRead, read_value};
 use super::value_format::{FormattedValue, ValueFormat, detect_format, format_value};
 use super::*;
 use gpui::prelude::FluentBuilder;
 use std::sync::atomic::{AtomicBool, Ordering};
-use ui_grid::RowRef;
 
 /// Default width of the record value side panel
 pub(super) const VALUE_PANEL_WIDTH: f32 = 340.0;
@@ -189,6 +189,9 @@ impl Workspace {
         if focus.row >= grid.row_count() {
             return None;
         }
+        let row = grid.changeset.resolve_row(focus.row);
+        let cell = StagedCell::lookup(&grid.changeset, row, focus.col)?;
+        let default = cell == StagedCell::Default;
         let key = PreviewKey {
             tab: tab.id,
             pager: Arc::as_ptr(pager) as usize,
@@ -198,13 +201,7 @@ impl Workspace {
             format: self.value_panel.format_override,
             auto_format: self.value_panel.auto_format,
             utc: self.value_panel.utc_timestamps,
-            default: match grid.changeset.resolve_row(focus.row) {
-                RowRef::New(index) => {
-                    let row = &grid.changeset.inserted_rows[index];
-                    row.values[focus.col].is_none() && !row.explicit_nulls.contains(&focus.col)
-                }
-                _ => false,
-            },
+            default,
         };
         if self.value_panel.request.as_ref() == Some(&key) {
             return self.value_panel.preview.clone();
@@ -219,13 +216,7 @@ impl Workspace {
             return None;
         }
         let job = PreviewJob(self.value_panel.job.clone());
-        let row = grid.changeset.resolve_row(focus.row);
-        let staged = match row {
-            RowRef::Fetched(row) => grid.changeset.edited_value(row, focus.col),
-            RowRef::New(index) => {
-                Some(grid.changeset.inserted_rows[index].values[focus.col].as_deref())
-            }
-        };
+        let staged = cell.value();
         // Check staged bytes before cloning on the UI thread.
         if staged
             .flatten()

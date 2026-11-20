@@ -1,4 +1,5 @@
 use super::script_tools::tool;
+use super::staged_cell::StagedCell;
 use super::value_files::MAX_VALUE_BYTES;
 use super::value_format::{ValueFormat, detect_format};
 use super::*;
@@ -216,23 +217,12 @@ impl Workspace {
         {
             return;
         }
-        let (staged, default) = match row {
-            RowRef::Fetched(row) => (
-                tab.current_result
-                    .grid
-                    .changeset
-                    .edited_value(row, focus.col),
-                false,
-            ),
-            RowRef::New(index) => {
-                let inserted = &tab.current_result.grid.changeset.inserted_rows[index];
-                (
-                    Some(inserted.values[focus.col].as_deref()),
-                    inserted.values[focus.col].is_none()
-                        && !inserted.explicit_nulls.contains(&focus.col),
-                )
-            }
+        let Some(cell) = StagedCell::lookup(&tab.current_result.grid.changeset, row, focus.col)
+        else {
+            return;
         };
+        let default = cell == StagedCell::Default;
+        let staged = cell.value();
         if staged.flatten().is_some_and(|text| {
             text.len()
                 > if data_type == DataType::Bytea {
