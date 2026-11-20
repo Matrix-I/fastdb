@@ -39,7 +39,7 @@ A merged lookup could collapse NULL and default, or let a worker use a stale sna
 
 **Test level** — Unit tests with a real `Changeset`. Existing app tests exercise real pagers and guard logic. This change adds no database, filesystem, or network calls.
 
-- [ ] Run the existing focused suites before editing to characterize the baseline.
+- [x] Run the existing focused suites before editing to characterize the baseline.
 
 ```bash
 cargo test -p fastdb-app workspace::record_view
@@ -47,7 +47,7 @@ cargo test -p fastdb-app workspace::value_panel
 cargo test -p fastdb-app workspace::value_editor
 ```
 
-- [ ] Declare `mod staged_cell;` and start the file with the following test module. Run `cargo test -p fastdb-app staged_lookup_preserves_cell_states_and_row_positions`. Expect compilation to fail because `StagedCell` is absent.
+- [x] Declare `mod staged_cell;` and start the file with the following test module. Run `cargo test -p fastdb-app staged_lookup_preserves_cell_states_and_row_positions`. Expect compilation to fail because `StagedCell` is absent.
 
 ```rust
 #[cfg(test)]
@@ -86,7 +86,7 @@ mod tests {
 }
 ```
 
-- [ ] Implement the helper above the tests.
+- [x] Implement the helper above the tests.
 
 ```rust
 use ui_grid::{Changeset, RowRef};
@@ -127,7 +127,7 @@ impl<'a> StagedCell<'a> {
 }
 ```
 
-- [ ] Import `super::staged_cell::StagedCell` at each caller. In `value_panel.rs` replace the top-level `use ui_grid::RowRef;` with that import and retain the test module's separate `RowRef` import. After the row-count guard and before `let key`, use the following code. Set `PreviewKey::default` to `default`; remove the second row lookup and its staged-value match after creating `PreviewJob`.
+- [x] Import `super::staged_cell::StagedCell` at each caller. In `value_panel.rs` replace the top-level `use ui_grid::RowRef;` with that import and retain the test module's separate `RowRef` import. After the row-count guard and before `let key`, use the following code. Set `PreviewKey::default` to `default`; remove the second row lookup and its staged-value match after creating `PreviewJob`.
 
 ```rust
 let row = grid.changeset.resolve_row(focus.row);
@@ -135,8 +135,8 @@ let cell = StagedCell::lookup(&grid.changeset, row, focus.col)?;
 let default = cell == StagedCell::Default;
 ```
 
-- [ ] Immediately after `let job = PreviewJob(self.value_panel.job.clone());` bind `let staged = cell.value();`. Leave the existing size check before the owned clone and keep the async completion test against the same preview key.
-- [ ] In `value_editor.rs`, keep `RowRef` and the fetched-row deletion guard. Replace the `let (staged, default) = match row` block with the following code. Retain the staged-value size checks, `stage_value`, and source identity checks.
+- [x] Immediately after `let job = PreviewJob(self.value_panel.job.clone());` bind `let staged = cell.value();`. Leave the existing size check before the owned clone and keep the async completion test against the same preview key.
+- [x] In `value_editor.rs`, keep `RowRef` and the fetched-row deletion guard. Replace the `let (staged, default) = match row` block with the following code. Retain the staged-value size checks, `stage_value`, and source identity checks. — Note: rebased onto `main` (`d4f055a`, after PR #23), so `&tab.current_result.grid.changeset` is used per Technical Defaults.
 
 ```rust
 let Some(cell) = StagedCell::lookup(&tab.grid.changeset, row, focus.col) else {
@@ -146,7 +146,7 @@ let default = cell == StagedCell::Default;
 let staged = cell.value();
 ```
 
-- [ ] In `record_view.rs`, replace `project_row` with the code below. Retain `preview`, `read_record`, and the column range logic.
+- [x] In `record_view.rs`, replace `project_row` with the code below. Retain `preview`, `read_record`, and the column range logic.
 
 ```rust
 fn project_row(changes: &Changeset, row: u64, columns: std::ops::Range<usize>) -> RowProjection {
@@ -168,7 +168,7 @@ fn project_row(changes: &Changeset, row: u64, columns: std::ops::Range<usize>) -
 }
 ```
 
-- [ ] Run all four focused test commands above with the implementation in place. Expect the new test to pass and the three existing suites to stay green. Ready to commit the five workspace files as `refactor(app): share staged cell lookup` after verification and explicit authorization.
+- [x] Run all four focused test commands above with the implementation in place. Expect the new test to pass and the three existing suites to stay green. Ready to commit the five workspace files as `refactor(app): share staged cell lookup` after verification and explicit authorization.
 
 ## Task 2 · Verification & Docs
 
@@ -176,7 +176,22 @@ fn project_row(changes: &Changeset, row: u64, columns: std::ops::Range<usize>) -
 
 **Consumes** — Task 1. **Produces** — full verification results and review verdict. **Test levels** — workspace unit/integration, desktop end-to-end.
 
-- [ ] Run `cargo fmt --all` then inspect `git status --short`, the full `git diff HEAD`, and all untracked implementation files. Run `git diff --check` and check for unrelated changes, debug output, or secrets.
-- [ ] Run `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, and `cargo test --workspace`. Record each outcome and provider tests skipped.
-- [ ] Run `cargo run -p fastdb-app`. User desktop acceptance on a disposable editable table with nullable text verifies new-row default, explicit NULL, and empty text in Panels, Value Editor, and Record. Also stage an edit to a fetched cell, inspect it across those surfaces, and undo it. Check that switching selection during a pending preview cannot display stale data for the new cell. Leave staged changes unsaved and close using Cancel. Record launch failures and platforms not exercised.
-- [ ] Self-review the four cases, malformed-index fallback, borrowed data before the worker clone, bounds/size checks, stale async guards, names and stable API use, write-path isolation, and tests. Apply `code-review-strict` to the final diff, address findings or report them, and repeat verification after edits. Clean up temporary verification artifacts and keep the runnable binary and reusable dependencies.
+- [x] Run `cargo fmt --all` then inspect `git status --short`, the full `git diff HEAD`, and all untracked implementation files. Run `git diff --check` and check for unrelated changes, debug output, or secrets.
+- [x] Run `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, and `cargo test --workspace`. Record each outcome and provider tests skipped.
+- [ ] Run `cargo run -p fastdb-app`. User desktop acceptance on a disposable editable table with nullable text verifies new-row default, explicit NULL, and empty text in Panels, Value Editor, and Record. Also stage an edit to a fetched cell, inspect it across those surfaces, and undo it. Check that switching selection during a pending preview cannot display stale data for the new cell. Leave staged changes unsaved and close using Cancel. Record launch failures and platforms not exercised. — Launch smoke test passed on Linux desktop; manual interactive GUI acceptance pending user verification; macOS not exercised.
+- [x] Self-review the four cases, malformed-index fallback, borrowed data before the worker clone, bounds/size checks, stale async guards, names and stable API use, write-path isolation, and tests. Apply `code-review-strict` to the final diff, address findings or report them, and repeat verification after edits. Clean up temporary verification artifacts and keep the runnable binary and reusable dependencies.
+
+## Verification record
+
+- **Rebase:** Based on `origin/main` (`d4f055a`, after PR #23 `refactor(app): unify script result state`); `value_editor.rs` uses `tab.current_result.grid.changeset` per Technical Defaults.
+- **Checks (all exit 0):**
+  - `cargo fmt --all -- --check` — clean
+  - `git diff --check` — clean
+  - `cargo check --workspace --all-targets` — clean (pre-existing manifest `unused_dependencies` warnings only)
+  - `cargo clippy --workspace --all-targets -- -D warnings` — 0 clippy warnings
+  - `cargo build --workspace --all-targets` — clean; runnable binary kept at `target/debug/fastdb`
+  - Focused suites: `staged_lookup_preserves_cell_states_and_row_positions` (1 passed), `workspace::record_view` (10 passed), `workspace::value_panel` (1 passed), `workspace::value_editor` (4 passed)
+  - `cargo test --workspace` — 825 passed, 0 failed, 0 ignored across 42 test suites
+- **Skipped provider tests:** `crates/db-wire/tests/provider_test.rs` skipped 4 live ODBC tests (`FASTDB_TEST_DB2_PORT`, `FASTDB_TEST_ORACLE_PORT`, `FASTDB_TEST_SQLSERVER_PORT` unset); live PostgreSQL/MySQL tests skipped with `FASTDB_TEST_*` unset.
+- **Desktop launch:** `timeout 4s cargo run -p fastdb-app` launched on Linux Wayland/X11 desktop (initialized 1920x1040 Vulkan/blade surface without crash, exited 124 on timeout). Interactive GUI acceptance on Linux is pending user verification; macOS was not exercised.
+- **Review (`code-review-strict`, round 1):** Approved (0 Critical, 0 Important, 0 Minor). Guide docs (`docs/guide/type-handling.md`, `docs/guide/navigator-and-tables.md`) reviewed and remain accurate without edits. Temporary verification artifacts under `/tmp` removed.
