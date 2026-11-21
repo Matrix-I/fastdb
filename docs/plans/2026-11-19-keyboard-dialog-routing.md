@@ -41,7 +41,7 @@ A moved guard could send Escape to the wrong dialog or let a close shortcut reac
 
 **Test level** — Unit tests for priority and blocker state. GUI checks exercise the real key event entry point. No new database, filesystem, or network boundary.
 
-- [ ] Run `cargo test -p fastdb-app workspace::keyboard` on the baseline. Read the original branch order at lines 182–247 against the test expectations below. Confirm `column_pending.is_none()` is the original check even while a save is pending, and Script Search has neither blocker. Keep the original order even if it differs from draw order.
+- [x] Run `cargo test -p fastdb-app workspace::keyboard` on the baseline. Read the original branch order at lines 182–247 against the test expectations below. Confirm `column_pending.is_none()` is the original check even while a save is pending, and Script Search has neither blocker. Keep the original order even if it differs from draw order.
 - [ ] Launch the baseline with `cargo run -p fastdb-app`. Have the user check the reachable cases below through the normal workspace window before extracting the routing. Record the actual recipient and effect. For cases the UI cannot reach, compare the original branches with the table and report baseline GUI coverage as pending. Repeat the same reachable cases after the refactor.
 
 | Baseline setup and key | Expected recipient and effect |
@@ -52,7 +52,7 @@ A moved guard could send Escape to the wrong dialog or let a close shortcut reac
 | Script Search and Result Search both open, ordinary character | Script Search handles the key when no earlier branch claims it. |
 | Update open or column edit pending, Script Search open | Script Search still receives a key that reaches this block. With Script Search closed, the blocked dialogs in this block receive no key. |
 | No dialog, menu, or other input holding the close shortcut, Cmd/Ctrl+W | The existing workspace handler closes the active tab. |
-- [ ] Add this test in the existing `tests` module. Run `cargo test -p fastdb-app keyboard_dialog_priority_matches_existing_branch_order` and expect a compile failure naming the missing selector types.
+- [x] Add this test in the existing `tests` module. Run `cargo test -p fastdb-app keyboard_dialog_priority_matches_existing_branch_order` and expect a compile failure naming the missing selector types.
 
 ```rust
 #[test]
@@ -108,7 +108,7 @@ fn keyboard_dialog_priority_matches_existing_branch_order() {
 }
 ```
 
-- [ ] Add the following types and selector before the existing `impl Workspace`.
+- [x] Add the following types and selector before the existing `impl Workspace`.
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,7 +158,7 @@ impl DialogKeys {
 }
 ```
 
-- [ ] Replace exactly the identified block in `handle_workspace_key_down` with the following call, keeping the surrounding returns and handlers in place.
+- [x] Replace exactly the identified block in `handle_workspace_key_down` with the following call, keeping the surrounding returns and handlers in place.
 
 ```rust
 if self.route_dialog_key(&event.keystroke, cx) {
@@ -166,7 +166,7 @@ if self.route_dialog_key(&event.keystroke, cx) {
 }
 ```
 
-- [ ] Add the dispatcher in the same `impl Workspace`. Read the existing update state and any pending column edit from the same source entities.
+- [x] Add the dispatcher in the same `impl Workspace`. Read the existing update state and any pending column edit from the same source entities.
 
 ```rust
 fn route_dialog_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool {
@@ -208,7 +208,7 @@ fn route_dialog_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool 
 }
 ```
 
-- [ ] Run `cargo test -p fastdb-app keyboard_dialog_priority_matches_existing_branch_order` and `cargo test -p fastdb-app workspace::keyboard`. Expect the new precedence tests and the existing Escape, Tab, record-view, and navigator tests to pass. Ready to commit `crates/app/src/workspace/keyboard.rs` as `refactor(app): extract keyboard dialog routing` after verification and explicit authorization.
+- [x] Run `cargo test -p fastdb-app keyboard_dialog_priority_matches_existing_branch_order` and `cargo test -p fastdb-app workspace::keyboard`. Expect the new precedence tests and the existing Escape, Tab, record-view, and navigator tests to pass. Ready to commit `crates/app/src/workspace/keyboard.rs` as `refactor(app): extract keyboard dialog routing` after verification and explicit authorization.
 
 ## Task 2 · Verification & Docs
 
@@ -216,7 +216,17 @@ fn route_dialog_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool 
 
 **Consumes** — Task 1. **Produces** — full verification results, parity evidence, and independent review verdict. **Test levels** — workspace unit/integration, desktop end-to-end.
 
-- [ ] Run `cargo fmt --all` then inspect `git status --short`, the full `git diff HEAD`, and any relevant untracked files. Run `git diff --check` and check for unrelated changes, debug output, or secrets.
-- [ ] Run `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, and `cargo test --workspace`. Record each outcome and provider tests skipped.
+- [x] Run `cargo fmt --all` then inspect `git status --short`, the full `git diff HEAD`, and any relevant untracked files. Run `git diff --check` and check for unrelated changes, debug output, or secrets.
+- [x] Run `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, and `cargo test --workspace`. Record each outcome and provider tests skipped.
 - [ ] Run `cargo run -p fastdb-app`. User desktop acceptance checks Escape and Cmd/Ctrl+W in Object Browser, typing in Script Search and Result Search, and unchanged tab close when no dialog handles the key. Where normal UI actions permit overlapping dialogs, compare observed priority with the baseline and test that Script Search keeps its exception for update/column guards. Record which cases and platforms were exercised. The deterministic unit test covers combinations that cannot be opened through desktop controls.
-- [ ] Self-review target order, both blockers, consumption of non-closing keys, fallthrough, unchanged surrounding handlers and root wiring, and the absence of added allocations, I/O, or APIs. Apply `code-review-strict` to the final diff, address findings or report them, and repeat verification after edits. Clean up temporary verification artifacts and keep the runnable binary and reusable dependencies.
+- [x] Self-review target order, both blockers, consumption of non-closing keys, fallthrough, unchanged surrounding handlers and root wiring, and the absence of added allocations, I/O, or APIs. Apply `code-review-strict` to the final diff, address findings or report them, and repeat verification after edits. Clean up temporary verification artifacts and keep the runnable binary and reusable dependencies.
+
+## Execution checkpoint
+
+- Implementation started from `d4f055a` on `chore/keyboard-dialog-routing`. The user confirmed parity with the existing keyboard behavior as the implementation requirement and deferred manual GUI acceptance until after the automated baseline.
+- `cargo test --offline --workspace` passed before editing. The three existing keyboard tests passed when run through the baseline Cargo-built test binary with access to `/var/tmp/fastdb`. The sandbox-only invocation could not write the existing spill directory.
+- The new priority test failed to compile with the expected missing selector types before implementation. After extraction, the new test and all four focused keyboard tests passed. The original block moved by one line after the result-state refactor. The extraction used the Session Monitor and Filter Builder branches as anchors.
+- The selector and both blockers use a fixed-size snapshot and synchronous reads. The dispatcher delegates to the existing handlers, returns immediately after any dispatch, and preserves Object Browser key consumption and dismissal. The root keyboard listener and render order are untouched.
+- `cargo fmt --all -- --check`, `cargo check --offline --workspace --all-targets`, `cargo clippy --offline --workspace --all-targets -- -D warnings`, `cargo build --offline --workspace --all-targets`, and `cargo test --offline --workspace --quiet` passed. The test harnesses reported 825 passed and zero failures, including configured skip paths for live providers without `FASTDB_TEST_*` settings. Cargo still emitted the existing unused-dependency warnings in four manifests.
+- `cargo run --offline -p fastdb-app` started the Linux binary with an isolated profile and ran until the 15-second smoke timeout. Manual keyboard acceptance is pending on Linux and macOS. The baseline GUI launch and interaction were deferred by agreement.
+- Independent review approved the full diff in one round with no findings. The Codex collaboration models substituted for Sonnet and Opus, which the collaboration tool does not offer.
