@@ -38,19 +38,21 @@ impl<'a> StagedCell<'a> {
         }
     }
 
-    /// An unchanged cell is read from the pager. Callers track the default flag separately.
-    pub(super) fn value(self) -> Option<Option<&'a str>> {
+    /// The staged value in `ValueRead::staged` form (`None` reads the pager), and whether
+    /// the cell is a column DEFAULT, which that form cannot tell apart from NULL
+    pub(super) fn staged(self) -> (Option<Option<&'a str>>, bool) {
         match self {
-            Self::Unchanged => None,
-            Self::Default | Self::Null => Some(None),
-            Self::Text(text) => Some(Some(text)),
+            Self::Unchanged => (None, false),
+            Self::Default => (Some(None), true),
+            Self::Null => (Some(None), false),
+            Self::Text(text) => (Some(Some(text)), false),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::StagedCell::{self, Default, Null, Text, Unchanged};
+    use super::StagedCell::{self, Null, Text, Unchanged};
     use ui_grid::{Changeset, RowRef};
 
     #[test]
@@ -66,7 +68,7 @@ mod tests {
 
         let inserted = changes.resolve_row(1);
         assert_eq!(inserted, RowRef::New(0));
-        for (col, expected) in [Default, Null, Text(""), Text("text")]
+        for (col, expected) in [StagedCell::Default, Null, Text(""), Text("text")]
             .into_iter()
             .enumerate()
         {
@@ -82,10 +84,10 @@ mod tests {
             assert_eq!(StagedCell::lookup(&changes, fetched, col), Some(expected));
         }
 
-        assert_eq!(Unchanged.value(), None);
-        assert_eq!(Null.value(), Some(None));
-        assert_eq!(Default.value(), Some(None));
-        assert_eq!(Text("").value(), Some(Some("")));
+        assert_eq!(Unchanged.staged(), (None, false));
+        assert_eq!(Null.staged(), (Some(None), false));
+        assert_eq!(StagedCell::Default.staged(), (Some(None), true));
+        assert_eq!(Text("").staged(), (Some(Some("")), false));
 
         changes.inserted_rows[0].explicit_nulls.insert(4);
         assert_eq!(StagedCell::lookup(&changes, inserted, 4), Some(Null));
