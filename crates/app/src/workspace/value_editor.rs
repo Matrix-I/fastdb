@@ -221,8 +221,7 @@ impl Workspace {
         else {
             return;
         };
-        let default = cell == StagedCell::Default;
-        let staged = cell.value();
+        let (staged, default) = cell.staged();
         if staged.flatten().is_some_and(|text| {
             text.len()
                 > if data_type == DataType::Bytea {

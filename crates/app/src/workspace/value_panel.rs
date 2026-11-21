@@ -190,8 +190,7 @@ impl Workspace {
             return None;
         }
         let row = grid.changeset.resolve_row(focus.row);
-        let cell = StagedCell::lookup(&grid.changeset, row, focus.col)?;
-        let default = cell == StagedCell::Default;
+        let (staged, default) = StagedCell::lookup(&grid.changeset, row, focus.col)?.staged();
         let key = PreviewKey {
             tab: tab.id,
             pager: Arc::as_ptr(pager) as usize,
@@ -216,7 +215,6 @@ impl Workspace {
             return None;
         }
         let job = PreviewJob(self.value_panel.job.clone());
-        let staged = cell.value();
         // Check staged bytes before cloning on the UI thread.
         if staged
             .flatten()
