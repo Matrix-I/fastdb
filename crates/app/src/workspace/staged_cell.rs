@@ -1,14 +1,21 @@
+//! One reading of a grid cell's staged state, shared by the Value Panel, Value Editor and
+//! Record view so they cannot disagree on NULL versus column DEFAULT.
 use ui_grid::{Changeset, RowRef};
 
+/// What the changeset says about one cell, borrowed from it
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StagedCell<'a> {
+    /// A fetched cell with no staged edit; its value is read from the pager
     Unchanged,
+    /// A new-row cell with no value, left out of the INSERT so the column default applies
     Default,
+    /// Staged as SQL NULL: an edited fetched cell or an explicit NULL in a new row
     Null,
     Text(&'a str),
 }
 
 impl<'a> StagedCell<'a> {
+    /// `None` when `row` or `col` lies outside the changeset's new rows
     pub(super) fn lookup(changes: &'a Changeset, row: RowRef, col: usize) -> Option<Self> {
         match row {
             RowRef::Fetched(index) => Some(match changes.edited_value(index, col) {
