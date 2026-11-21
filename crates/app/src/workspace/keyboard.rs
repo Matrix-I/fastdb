@@ -38,6 +38,52 @@ fn opens_record_view(tab: &TabState, event: &KeyDownEvent) -> bool {
             .is_some_and(|cell| cell.row < tab.current_result.grid.row_count())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DialogKeyTarget {
+    ObjectBrowser,
+    DefinitionSearch,
+    ObjectSearch,
+    SchemaAction,
+    Import,
+    Parameters,
+    Snippets,
+    ScriptSearch,
+    ResultSearch,
+}
+
+#[derive(Clone, Copy)]
+struct DialogKeys {
+    object_browser: bool,
+    definition_search: bool,
+    object_search: bool,
+    schema_action: bool,
+    import: bool,
+    parameters: bool,
+    snippets: bool,
+    script_search: bool,
+    result_search: bool,
+}
+
+impl DialogKeys {
+    fn target(self, blocked: bool) -> Option<DialogKeyTarget> {
+        use DialogKeyTarget::*;
+
+        [
+            (ObjectBrowser, self.object_browser),
+            (DefinitionSearch, self.definition_search),
+            (ObjectSearch, self.object_search),
+            (SchemaAction, self.schema_action),
+            (Import, self.import),
+            (Parameters, self.parameters),
+            (Snippets, self.snippets),
+            (ScriptSearch, self.script_search),
+            (ResultSearch, self.result_search),
+        ]
+        .into_iter()
+        .find_map(|(target, open)| (open && (!blocked || target == ScriptSearch)).then_some(target))
+    }
+}
+
 impl Workspace {
     /// Handles every key press for the window: app shortcuts, the connection form,
     /// the filter bar and the SQL editor
@@ -180,70 +226,7 @@ impl Workspace {
             }
             return;
         }
-        if self.object_browser.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            if event.keystroke.key == "escape"
-                || ((event.keystroke.modifiers.platform || event.keystroke.modifiers.control)
-                    && event.keystroke.key.eq_ignore_ascii_case("w"))
-            {
-                self.object_browser = None;
-                cx.notify();
-            }
-            return;
-        }
-        if self.definition_search.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            self.definition_search_key(&event.keystroke, cx);
-            return;
-        }
-        if self.object_search.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            self.object_search_key(&event.keystroke, cx);
-            return;
-        }
-        if self.schema_action_modal.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            self.schema_action_modal_key(&event.keystroke, cx);
-            return;
-        }
-        if self.import_modal.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            self.import_modal_key(&event.keystroke, cx);
-            return;
-        }
-        if self.params_modal.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            self.handle_params_modal_key(&event.keystroke, cx);
-            return;
-        }
-        if self.snippet_modal.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            self.handle_snippet_modal_key(&event.keystroke, cx);
-            return;
-        }
-        if self.script_search.is_some() {
-            self.search_key(&event.keystroke, cx);
-            return;
-        }
-        if self.result_search.is_some()
-            && !self.updates.read(cx).is_open()
-            && self.column_pending.is_none()
-        {
-            self.result_search_key(&event.keystroke, cx);
+        if self.route_dialog_key(&event.keystroke, cx) {
             return;
         }
         if self.filter_builder.is_some() {
@@ -625,6 +608,44 @@ impl Workspace {
         }
     }
 
+    fn route_dialog_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool {
+        let dialogs = DialogKeys {
+            object_browser: self.object_browser.is_some(),
+            definition_search: self.definition_search.is_some(),
+            object_search: self.object_search.is_some(),
+            schema_action: self.schema_action_modal.is_some(),
+            import: self.import_modal.is_some(),
+            parameters: self.params_modal.is_some(),
+            snippets: self.snippet_modal.is_some(),
+            script_search: self.script_search.is_some(),
+            result_search: self.result_search.is_some(),
+        };
+        let blocked = self.column_pending.is_some() || self.updates.read(cx).is_open();
+        let Some(target) = dialogs.target(blocked) else {
+            return false;
+        };
+        match target {
+            DialogKeyTarget::ObjectBrowser => {
+                if key.key == "escape"
+                    || ((key.modifiers.platform || key.modifiers.control)
+                        && key.key.eq_ignore_ascii_case("w"))
+                {
+                    self.object_browser = None;
+                    cx.notify();
+                }
+            }
+            DialogKeyTarget::DefinitionSearch => self.definition_search_key(key, cx),
+            DialogKeyTarget::ObjectSearch => self.object_search_key(key, cx),
+            DialogKeyTarget::SchemaAction => self.schema_action_modal_key(key, cx),
+            DialogKeyTarget::Import => self.import_modal_key(key, cx),
+            DialogKeyTarget::Parameters => self.handle_params_modal_key(key, cx),
+            DialogKeyTarget::Snippets => self.handle_snippet_modal_key(key, cx),
+            DialogKeyTarget::ScriptSearch => self.search_key(key, cx),
+            DialogKeyTarget::ResultSearch => self.result_search_key(key, cx),
+        }
+        true
+    }
+
     fn handle_ddl_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return false;
@@ -739,6 +760,58 @@ mod tests {
     use ui_grid::{GridSelection, VirtualDataGrid};
 
     use super::{DataViewMode, TabState, TableSubTab, closes_record_view, opens_record_view};
+
+    #[test]
+    fn keyboard_dialog_priority_matches_existing_branch_order() {
+        use super::{DialogKeyTarget::*, DialogKeys};
+
+        let mut keys = DialogKeys {
+            object_browser: true,
+            definition_search: true,
+            object_search: true,
+            schema_action: true,
+            import: true,
+            parameters: true,
+            snippets: true,
+            script_search: true,
+            result_search: true,
+        };
+
+        assert_eq!(keys.target(true), Some(ScriptSearch));
+        assert_eq!(keys.target(false), Some(ObjectBrowser));
+        keys.object_browser = false;
+        assert_eq!(keys.target(false), Some(DefinitionSearch));
+        keys.definition_search = false;
+        assert_eq!(keys.target(false), Some(ObjectSearch));
+        keys.object_search = false;
+        assert_eq!(keys.target(false), Some(SchemaAction));
+        keys.schema_action = false;
+        assert_eq!(keys.target(false), Some(Import));
+        keys.import = false;
+        assert_eq!(keys.target(false), Some(Parameters));
+        keys.parameters = false;
+        assert_eq!(keys.target(false), Some(Snippets));
+        keys.snippets = false;
+        assert_eq!(keys.target(false), Some(ScriptSearch));
+        keys.script_search = false;
+        assert_eq!(keys.target(false), Some(ResultSearch));
+        assert_eq!(keys.target(true), None);
+        keys.result_search = false;
+        assert_eq!(keys.target(false), None);
+
+        let blocked = DialogKeys {
+            object_browser: true,
+            definition_search: true,
+            object_search: true,
+            schema_action: true,
+            import: true,
+            parameters: true,
+            snippets: true,
+            result_search: true,
+            ..keys
+        };
+        assert_eq!(blocked.target(true), None);
+    }
 
     #[test]
     fn escape_clears_navigator_selection_and_its_range_anchor() {
