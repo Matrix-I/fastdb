@@ -3,20 +3,19 @@
 Current release scope (2026-11-05): **PostgreSQL acceptance is required**. Follow
 [the ordered v0.2.0 PostgreSQL runbook](testing/0.2.0-postgres-manual-acceptance.md).
 MariaDB, Oracle, SQL Server and Db2 are disabled with **Feature is coming**.
-MySQL/SQLite are outside this manual release gate. Historical matrix rows below
-retain their evidence status; no manual case is marked passed by this update.
-This matrix is a test protocol, not evidence of successful desktop workflows.
-Historical provider runs are recorded in [PROVIDERS.md](PROVIDERS.md); they do
-not replace acceptance on the current build.
+MySQL and SQLite are outside this manual release gate. The automated data
+workflow covers all three enabled providers. Record desktop results for the
+build under test using the [case record](#desktop-case-record). Historical
+provider runs are recorded in [PROVIDERS.md](PROVIDERS.md).
 
 ## Provider matrix
 
 | Provider | Connect/browse/run | Edit/save/read-back | Export/read-back | Cancel/disconnect | Desktop status |
 | --- | --- | --- | --- | --- | --- |
-| PostgreSQL | Automated live (15.19, 2026-11-09) | Automated live: change/insert/delete, row-count and FK failure rollback, fresh-connection read-back | Automated live: exact CSV bytes, SQL replay read-back | Automated live: cancel + fresh read, tab-session close rolls back | Pending |
-| MySQL | Automated live (8.4.13, 2026-11-09) | Automated live (same cases) | Automated live (same cases) | Automated live (same cases) | Pending |
+| PostgreSQL | Automated live: connect, metadata, stream, filter/order and script failure | Automated live: change/insert/delete, row-count and FK failure rollback, fresh-connection read-back | Automated live: exact CSV bytes and SQL replay | Automated live: native cancel, fresh read and rollback releases writer | Pending |
+| MySQL | Automated live (same cases) | Automated live (same cases) | Automated live (same cases) | Automated live (same cases) | Pending |
 | MariaDB | Pending separately from MySQL | Pending | Pending | Pending | Pending |
-| SQLite | Automated in-memory browse/run | Automated planned edit and atomic rollback | Automated CSV output and SQL read-back | Existing driver cancellation tests; desktop disconnect pending | Skipped by user |
+| SQLite | Automated file fixture: connect, metadata, stream and script failure | Automated: change/insert/delete, atomic rollback and read-back | Automated: exact CSV bytes and SQL replay | Automated: native interrupt, fresh read, rollback releases writer and reopen | Pending (manual run previously skipped) |
 | SQL Server | Pending; vendor ODBC required | Pending | Pending | Pending | Pending |
 | Oracle | Pending; vendor ODBC required | Pending | Pending | Pending | Pending |
 | Db2 LUW | Pending; vendor ODBC required | Pending | Pending | Pending | Pending; previous live validation incomplete |
@@ -60,8 +59,11 @@ quotes/newlines, an exact decimal and a foreign key; use native provider types.
   errors must remain attached to the original owner.
 - Close/reopen a tab during asynchronous completion. Late results must not target
   a reused position in the tab list.
-- Stage edits, then request refresh, filter/history, close, disconnect and Quit.
-  Confirm the documented guard and verify no silent loss or unintended save.
+- Stage an edit, then request refresh, filter/history, close, disconnect,
+  reconnect on the same profile and Quit. Verify the owning grid keeps the
+  draft until Save or Cancel. Repeat a departure with an active cell editor,
+  then check that a clean tab on another connection can still close. Verify
+  dirty column drafts prompt for Save, Discard or Cancel.
 - PostgreSQL: use two script runs to create/use a temporary table; Begin, write,
   fail a statement, Rollback and read independently. Repeat with a savepoint.
   Other providers have session implementations, but their desktop/live acceptance
@@ -74,14 +76,43 @@ quotes/newlines, an exact decimal and a foreign key; use native provider types.
   repeat with pending saves, save failures and dirty column drafts. Failed saves
   must keep the app open with feedback.
 
+## Desktop case record
+
+For PostgreSQL, use the ordered runbook's [P0-05 release decision
+criteria](testing/0.2.0-postgres-manual-acceptance.md#release-decision-and-result-template).
+Use the workflow names for MySQL and SQLite and record provider-specific fixture
+limits in the results.
+
+| Workflow | PostgreSQL runbook cases |
+| --- | --- |
+| Connect | C02, C04 |
+| Browse | B01–B03 |
+| Run | S01, S05 |
+| Edit, save and read back | G01–G03 |
+| Export and read back | X01–X06 |
+| Cancel and disconnect | S06, L02 |
+| Connection ownership and stale completion | L01, L02 |
+| Pending edits and Quit | L03, L04 |
+| Failed transaction recovery | G03, T02, T03 |
+
+Copy one result row per provider and case. Use `Pending` until attempted,
+`Pass` when every applicable check matches, `Fail` for a mismatch and
+`Blocked` if a fixture or prerequisite prevents execution.
+
+| Provider / version | Build / OS / scale | Case | Expected outcome | Actual outcome | Status | Evidence / limitation |
+| --- | --- | --- | --- | --- | --- | --- |
+| | | | | | Pending | |
+
 ## Automated evidence boundaries
 
-`cargo test -p db-wire --test workflow_test --locked` exercises one connected
-in-memory SQLite fixture from metadata/streaming through planned edits, a failed
-multi-statement transaction, read-back, exact CSV bytes and SQL export into an
-independent database. It also verifies that a same-named table on another
-connection stays unchanged. It does not prove desktop routing, filesystem
-reconnection, cancellation/disconnect or other-provider compatibility.
+`cargo test -p db-wire --test workflow_test --locked` exercises a temporary
+SQLite database file. It pings, reads metadata, streams rows, stops a sequential
+script after its failing statement, plans an update/insert/delete, and tests
+atomic rollback on a later failed batch. It checks exact CSV bytes and replays
+SQL into an independent database. A separate same-named table stays unchanged.
+After interrupting a long read the test reads the saved rows again, verifies
+that closing the tab session releases the writer, and reopens the file to
+read back committed edits.
 
 The same suite has `postgres_live_workflow` and `mysql_live_workflow`, which run
 when `FASTDB_TEST_PG_PORT` / `FASTDB_TEST_MYSQL_PORT` are set (plus optional
@@ -98,16 +129,17 @@ the following steps in order:
    through a fresh connection.
 5. **Export:** exact CSV bytes, and SQL INSERTs replayed into another table.
 6. **Identity:** the same-named table in the other database is unchanged.
-7. **Cancel:** a long read is cancelled, followed by a fresh read on the same
-   connection.
-8. **Disconnect:** closing a tab session with an open transaction leaves no
-   committed row.
+7. **Cancel:** a long read reports the provider's native interruption, followed
+   by a fresh read on the same connection.
+8. **Disconnect:** closing a tab session rolls back its open transaction. The
+   pinned session can see its write, another connection cannot see it before
+   close, and that connection can insert the same primary key after close.
 
-It does not prove desktop routing, stale UI completions, MariaDB or ODBC
-providers. Validation on 2026-11-09 (commit after `5070f94`, macOS 27.2 arm64)
-used a local PostgreSQL 15.19 cluster and a `mysql:8.4` (8.4.13) container. Both
-tests passed. A mutated expectation made both fail, confirming that the
-assertions were exercised.
+The workspace unit tests cover operation ownership and stale generation
+rejection across two distinct connections, and the save gate's rejection of
+departures with pending grid edits. Keyboard focus and desktop routing remain
+manual acceptance cases. MariaDB, ODBC and TLS require separate fixtures.
+See [live runs and server versions](PROVIDERS.md#workflow-acceptance-2026-11-22).
 
 `cargo test --workspace --locked` runs deterministic unit tests and SQLite
 integration tests. Live tests often return early when their `FASTDB_TEST_*`
@@ -120,7 +152,3 @@ edits), `filter_test`, `metadata_capabilities_test`, `postgres_test`, `mysql_tes
 `script_session_test`, `catalog_test`, `column_test`, `provider_test` and `tls_test`.
 Export unit tests include SQLite SQL read-back and writer-error checks. None of
 these alone verifies focus routing, clipboard integration or desktop layout.
-
-For each completed manual case record: provider, case, expected outcome, actual
-outcome, pass/fail/blocked, evidence path, and limitations. Leave unchecked cases
-pending rather than treating unavailable credentials/drivers as passing results.

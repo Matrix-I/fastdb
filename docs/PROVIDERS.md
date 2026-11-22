@@ -289,6 +289,16 @@ A separate PostgreSQL 18 container passed all four PostgreSQL integration tests:
 binary decoding against server text, incremental streaming of 20,000 rows,
 query cancellation and connection reuse across short-lived caller runtimes.
 
+### Workflow acceptance (2026-11-22)
+
+With the disposable server ports configured, `FASTDB_REQUIRE_DB_TESTS=1 cargo
+test -p db-wire --test workflow_test --locked -- --nocapture` passed all three
+workflows on Linux x86_64 with PostgreSQL 16.16, MySQL 8.4.13 and a temporary
+SQLite file. The suite requires native cancellation or interruption and
+checks that an independent connection can write the same primary key after
+the session closes. SQLite also reopens the file and reads committed data.
+See the [workflow matrix](WORKFLOW_ACCEPTANCE.md) for pending desktop cases.
+
 ### Workflow acceptance (2026-11-09)
 
 `FASTDB_TEST_PG_PORT=… FASTDB_TEST_MYSQL_PORT=… cargo test -p db-wire --test

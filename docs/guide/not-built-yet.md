@@ -6,6 +6,8 @@
 
 - **Transaction log acceptance.** The split transaction toolbar selector (`T`/arrow for the mode menu, `Auto`/`Manual` label for the session-only Transaction log) and bounded disk-backed log modal have automated coverage; manual GUI acceptance is pending.
 
+- **Workflow acceptance.** The SQLite, PostgreSQL and MySQL data paths have automated coverage. Manual acceptance of the [desktop workflow cases](../WORKFLOW_ACCEPTANCE.md#desktop-case-record), including the guard on tab close, disconnect and Quit with staged grid edits, remains pending.
+
 - **Table transactions acceptance.** Table tabs own dedicated physical sessions with Auto-Commit and Manual modes, Save/Commit/Rollback transaction boundaries, read-your-writes, and batch savepoint recovery; manual GUI verification is pending.
 
 - **Workspace header acceptance.** Separate title/toolbar/tab rows, always-visible transaction controls (Commit/Rollback disabled in Auto-Commit) and button-anchored menus are implemented; native dragging/zoom, narrow-window scrolling and popup placement await manual GUI acceptance. Smart commit remains unavailable.
