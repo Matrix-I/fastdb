@@ -205,7 +205,7 @@ impl UpdateController {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let release_clone = release.clone();
-        let html_url = release.html_url.clone();
+        let html_url = crate::updater::release_page_url(&release.tag_name);
         let release_date = release
             .published_at
             .get(..10)

@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use futures::StreamExt;
+#[cfg(any(target_os = "macos", test))]
+mod install_workspace;
+mod verification;
+pub use verification::{VerificationFailure, VerifiedInstaller};
+const RELEASE_KEY: &str = include_str!("../../../resources/minisign.pub");
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -121,7 +125,7 @@ impl UpdateState {
 #[derive(Debug, Clone)]
 pub enum DownloadProgressEvent {
     Progress { downloaded: u64, total: Option<u64> },
-    Finished { path: PathBuf },
+    Finished { installer: VerifiedInstaller },
     Failed { error: String },
 }
 
@@ -474,141 +478,81 @@ async fn fetch_release_redirect(
     }))
 }
 
-/// Downloads a release asset to destination path with progress notifications
+pub fn release_page_url(tag: &str) -> String {
+    let releases = format!("https://github.com/{DEFAULT_REPO}/releases");
+    let prefix = format!("{releases}/tag/");
+    let url = format!("{prefix}{tag}");
+    if release_tag_from_url(&url, &prefix).is_ok() {
+        url
+    } else {
+        releases
+    }
+}
+
+/// Runs on the shared Tokio reactor even when called from a GPUI background task.
 pub async fn download_asset_file(
-    http_client: reqwest::Client,
-    asset_url: String,
-    dest_path: PathBuf,
+    client: reqwest::Client,
+    assets: Vec<ReleaseAsset>,
+    asset: ReleaseAsset,
+    dir: PathBuf,
     sender: flume::Sender<DownloadProgressEvent>,
 ) {
-    let error_sender = sender.clone();
-    if let Err(error) = db_wire::run_on_shared_runtime(async move {
-        download_asset_file_inner(http_client, asset_url, dest_path, sender).await;
-        Ok(())
+    download_with_key(client, assets, asset, dir, sender, RELEASE_KEY).await
+}
+
+async fn download_with_key(
+    client: reqwest::Client,
+    assets: Vec<ReleaseAsset>,
+    asset: ReleaseAsset,
+    dir: PathBuf,
+    sender: flume::Sender<DownloadProgressEvent>,
+    trusted_key: &'static str,
+) {
+    let progress = sender.clone();
+    let result = db_wire::run_on_shared_runtime(async move {
+        verification::download(client, assets, asset, dir, progress, trusted_key).await
     })
-    .await
-    {
-        let _ = error_sender.send(DownloadProgressEvent::Failed {
-            error: format!("Update download task failed: {error}"),
-        });
+    .await;
+    let event = match result {
+        Ok(installer) => DownloadProgressEvent::Finished { installer },
+        Err(error) => DownloadProgressEvent::Failed {
+            error: format!("{error:#}"),
+        },
+    };
+    let _ = sender.send_async(event).await;
+}
+
+enum InstallOutcome {
+    Applied,
+    #[cfg(any(target_os = "macos", test))]
+    OpenManually,
+}
+
+pub struct InstallerActions<'a> {
+    apply_native: &'a dyn Fn(&Path) -> Result<InstallOutcome>,
+    open_native: &'a dyn Fn(&Path) -> Result<()>,
+}
+
+pub const NATIVE_INSTALLER: InstallerActions<'static> = InstallerActions {
+    apply_native: &apply_native_installer,
+    open_native: &open_native_installer,
+};
+
+impl InstallerActions<'_> {
+    pub fn open(&self, installer: &VerifiedInstaller) -> Result<()> {
+        installer.with_verified_file(self.open_native)
+    }
+
+    pub fn apply(&self, installer: &VerifiedInstaller) -> Result<()> {
+        match installer.with_verified_file(self.apply_native)? {
+            InstallOutcome::Applied => Ok(()),
+            #[cfg(any(target_os = "macos", test))]
+            InstallOutcome::OpenManually => self.open(installer),
+        }
     }
 }
 
-async fn download_asset_file_inner(
-    http_client: reqwest::Client,
-    asset_url: String,
-    dest_path: PathBuf,
-    sender: flume::Sender<DownloadProgressEvent>,
-) {
-    if let Some(parent) = dest_path.parent()
-        && let Err(e) = fs::create_dir_all(parent)
-    {
-        let _ = sender.send(DownloadProgressEvent::Failed {
-            error: format!("Failed to create download directory: {}", e),
-        });
-        return;
-    }
-
-    let part_path = dest_path.with_extension(format!(
-        "{}.part",
-        dest_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("tmp")
-    ));
-
-    let resp = match http_client
-        .get(&asset_url)
-        .header("User-Agent", "FastDB-Updater")
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = sender.send(DownloadProgressEvent::Failed {
-                error: format!("Download request failed: {}", e),
-            });
-            return;
-        }
-    };
-
-    if !resp.status().is_success() {
-        let _ = sender.send(DownloadProgressEvent::Failed {
-            error: format!("Server responded with status {}", resp.status()),
-        });
-        return;
-    }
-
-    let total_bytes = resp.content_length();
-    let mut downloaded = 0u64;
-
-    let file = match fs::File::create(&part_path) {
-        Ok(f) => f,
-        Err(e) => {
-            let _ = sender.send(DownloadProgressEvent::Failed {
-                error: format!("Failed to create temporary file: {}", e),
-            });
-            return;
-        }
-    };
-
-    use std::io::Write;
-    let mut writer = std::io::BufWriter::new(file);
-    let mut stream = resp.bytes_stream();
-
-    while let Some(chunk_res) = stream.next().await {
-        match chunk_res {
-            Ok(bytes) => {
-                if let Err(e) = writer.write_all(&bytes) {
-                    let _ = sender.send(DownloadProgressEvent::Failed {
-                        error: format!("Failed writing to disk: {}", e),
-                    });
-                    let _ = fs::remove_file(&part_path);
-                    return;
-                }
-                downloaded += bytes.len() as u64;
-                let _ = sender.send(DownloadProgressEvent::Progress {
-                    downloaded,
-                    total: total_bytes,
-                });
-            }
-            Err(e) => {
-                let _ = sender.send(DownloadProgressEvent::Failed {
-                    error: format!("Error reading download stream: {}", e),
-                });
-                let _ = fs::remove_file(&part_path);
-                return;
-            }
-        }
-    }
-
-    if let Err(e) = writer.flush() {
-        let _ = sender.send(DownloadProgressEvent::Failed {
-            error: format!("Failed to flush file to disk: {}", e),
-        });
-        let _ = fs::remove_file(&part_path);
-        return;
-    }
-    drop(writer);
-
-    // Atomically rename .part file to target file
-    if let Err(e) = fs::rename(&part_path, &dest_path) {
-        let _ = sender.send(DownloadProgressEvent::Failed {
-            error: format!("Failed to finalize downloaded file: {}", e),
-        });
-        return;
-    }
-
-    info!("Downloaded update asset to {}", dest_path.display());
-    let _ = sender.send(DownloadProgressEvent::Finished { path: dest_path });
-}
-
-/// Opens the downloaded installer or reveals it in the file manager
-pub fn open_installer_file(path: &Path) -> Result<()> {
-    if !path.exists() {
-        bail!("Downloaded file does not exist: {}", path.display());
-    }
-
+fn open_native_installer(path: &Path) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let ext = path
@@ -662,130 +606,105 @@ pub fn find_macos_app_bundle() -> Option<PathBuf> {
     None
 }
 
-/// Automatically applies/installs the downloaded update file.
-/// Modeled after Laplace Terminal's self-updater.
-pub fn apply_update_file(downloaded_file: &Path) -> Result<()> {
-    if !downloaded_file.exists() {
-        bail!(
-            "Downloaded file does not exist: {}",
-            downloaded_file.display()
-        );
+#[cfg(not(target_os = "macos"))]
+fn apply_native_installer(path: &Path) -> Result<InstallOutcome> {
+    open_native_installer(path)?;
+    Ok(InstallOutcome::Applied)
+}
+
+#[cfg(target_os = "macos")]
+fn apply_native_installer(path: &Path) -> Result<InstallOutcome> {
+    let bundle =
+        find_macos_app_bundle().unwrap_or_else(|| PathBuf::from("/Applications/FastDB.app"));
+    apply_macos_installer(path, &platform_hal::paths::updates_dir(), &bundle)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn apply_macos_installer(package: &Path, updates: &Path, bundle: &Path) -> Result<InstallOutcome> {
+    use std::process::Command;
+
+    let ext = package
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(ext.as_str(), "dmg" | "zip") {
+        return Ok(InstallOutcome::OpenManually);
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        let filename = downloaded_file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        let app_bundle_dest =
-            find_macos_app_bundle().unwrap_or_else(|| PathBuf::from("/Applications/FastDB.app"));
-
-        info!(
-            "Applying update to app bundle: {}",
-            app_bundle_dest.display()
-        );
-
-        if filename.ends_with(".dmg") {
-            let mount_point = platform_hal::paths::updates_dir().join("dmg_mount");
-            let _ = fs::remove_dir_all(&mount_point);
-            let _ = fs::create_dir_all(&mount_point);
-
-            // Mount DMG quietly
-            let attach_status = std::process::Command::new("hdiutil")
-                .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
-                .arg(&mount_point)
-                .arg(downloaded_file)
-                .status()
-                .context("Failed to run hdiutil attach")?;
-
-            if !attach_status.success() {
-                // If silent mount fails, open DMG as fallback
-                return open_installer_file(downloaded_file);
-            }
-
-            let staged_app = mount_point.join("FastDB.app");
-            let mut install_success = false;
-
-            if staged_app.exists() {
-                let ditto = std::process::Command::new("/usr/bin/ditto")
-                    .arg(&staged_app)
-                    .arg(&app_bundle_dest)
-                    .status();
-
-                if let Ok(status) = ditto
-                    && status.success()
-                {
-                    install_success = true;
-                    let _ = std::process::Command::new("codesign")
-                        .args(["--force", "--deep", "--sign", "-"])
-                        .arg(&app_bundle_dest)
-                        .status();
-                    let _ = std::process::Command::new("touch")
-                        .arg(&app_bundle_dest)
-                        .status();
-                }
-            }
-
-            // Always detach the DMG and clean mount point
-            let _ = std::process::Command::new("hdiutil")
-                .args(["detach", "-force"])
-                .arg(&mount_point)
-                .status();
-            let _ = fs::remove_dir_all(&mount_point);
-
-            if install_success {
-                info!(
-                    "Successfully installed FastDB update into {}",
-                    app_bundle_dest.display()
-                );
-                return Ok(());
-            }
-
-            // Fallback: open DMG installer
-            return open_installer_file(downloaded_file);
-        } else if filename.ends_with(".zip") {
-            let staging = platform_hal::paths::updates_dir().join("staging");
-            let _ = fs::remove_dir_all(&staging);
-            let _ = fs::create_dir_all(&staging);
-
-            let ditto = std::process::Command::new("/usr/bin/ditto")
-                .args(["-xk"])
-                .arg(downloaded_file)
-                .arg(&staging)
-                .status()
-                .context("Failed to extract update zip archive")?;
-
-            if ditto.success() {
-                let staged_app = staging.join("FastDB.app");
-                if staged_app.exists() {
-                    let _ = std::process::Command::new("/usr/bin/ditto")
-                        .arg(&staged_app)
-                        .arg(&app_bundle_dest)
-                        .status();
-                    let _ = std::process::Command::new("codesign")
-                        .args(["--force", "--deep", "--sign", "-"])
-                        .arg(&app_bundle_dest)
-                        .status();
-                    let _ = std::process::Command::new("touch")
-                        .arg(&app_bundle_dest)
-                        .status();
-                    let _ = fs::remove_dir_all(&staging);
-                    return Ok(());
-                }
-            }
-            return open_installer_file(downloaded_file);
+    let _lock = install_workspace::acquire(updates)?;
+    let stage = install_workspace::new_stage(updates)?;
+    info!("Applying update to app bundle: {}", bundle.display());
+    if ext == "dmg" {
+        // A mount point must never be removed recursively: detach first, then remove the empty directory.
+        let mount = stage.keep();
+        let attach = Command::new("hdiutil")
+            .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
+            .arg(&mount)
+            .arg(package)
+            .status();
+        if !matches!(&attach, Ok(status) if status.success()) {
+            fs::remove_dir(&mount).context("Cannot clean up update mount point")?;
+            attach.context("Failed to run hdiutil attach")?;
+            return Ok(InstallOutcome::OpenManually);
         }
-
-        open_installer_file(downloaded_file)
+        let staged_app = mount.join("FastDB.app");
+        let installed = staged_app.exists()
+            && Command::new("/usr/bin/ditto")
+                .arg(&staged_app)
+                .arg(bundle)
+                .status()
+                .is_ok_and(|status| status.success());
+        if installed {
+            let _ = Command::new("codesign")
+                .args(["--force", "--deep", "--sign", "-"])
+                .arg(bundle)
+                .status();
+            let _ = Command::new("touch").arg(bundle).status();
+        }
+        let detach = Command::new("hdiutil")
+            .args(["detach", "-force"])
+            .arg(&mount)
+            .status()
+            .with_context(|| format!("Cannot detach update mount {}", mount.display()))?;
+        anyhow::ensure!(
+            detach.success(),
+            "Cannot detach update mount {}",
+            mount.display()
+        );
+        fs::remove_dir(&mount).context("Cannot remove update mount point")?;
+        return Ok(if installed {
+            InstallOutcome::Applied
+        } else {
+            InstallOutcome::OpenManually
+        });
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        open_installer_file(downloaded_file)
+    let extracted = Command::new("/usr/bin/ditto")
+        .args(["-xk"])
+        .arg(package)
+        .arg(stage.path())
+        .status()
+        .context("Failed to extract update zip archive")?;
+    let staged_app = stage.path().join("FastDB.app");
+    if !extracted.success() || !staged_app.exists() {
+        stage
+            .close()
+            .context("Cannot clean up update staging directory")?;
+        return Ok(InstallOutcome::OpenManually);
     }
+    let _ = Command::new("/usr/bin/ditto")
+        .arg(&staged_app)
+        .arg(bundle)
+        .status();
+    let _ = Command::new("codesign")
+        .args(["--force", "--deep", "--sign", "-"])
+        .arg(bundle)
+        .status();
+    let _ = Command::new("touch").arg(bundle).status();
+    stage
+        .close()
+        .context("Cannot clean up update staging directory")?;
+    Ok(InstallOutcome::Applied)
 }
 
 /// Relaunches the updated FastDB application and terminates current process
@@ -808,44 +727,12 @@ pub fn restart_application() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use super::verification::{parse_asset_checksum, release_metadata_asset, validate_asset_name};
     use super::*;
 
     fn lookup_release(responses: Vec<(&'static str, String)>) -> Result<Option<ReleaseInfo>> {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            for (path, response) in responses {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                let mut socket = loop {
-                    match listener.accept() {
-                        Ok((socket, _)) => break socket,
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            assert!(std::time::Instant::now() < deadline, "Missing {path}");
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                        Err(error) => panic!("HTTP accept failed: {error}"),
-                    }
-                };
-                socket.set_nonblocking(false).unwrap();
-                socket
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                let mut request = Vec::new();
-                let mut chunk = [0; 1024];
-                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                    let count = socket.read(&mut chunk).unwrap();
-                    assert!(count > 0);
-                    request.extend_from_slice(&chunk[..count]);
-                    assert!(request.len() <= 64 * 1024);
-                }
-                let request = String::from_utf8(request).unwrap();
-                assert_eq!(request.split_whitespace().nth(1), Some(path));
-                socket.write_all(response.as_bytes()).unwrap();
-            }
-        });
+        let (base_url, server) = serve_http(responses);
         let result = futures::executor::block_on(db_wire::run_on_shared_runtime(async move {
             let client = reqwest::Client::builder().no_proxy().build()?;
             fetch_latest_release(
@@ -1011,67 +898,371 @@ mod tests {
 
     // GPUI polls background work without entering a Tokio runtime. Exercise the
     // same entry points with a plain executor and a local HTTP server.
-    fn serve_http(body: &'static str) -> (String, std::thread::JoinHandle<()>) {
-        use std::io::{Read, Write};
+    fn serve_http(responses: Vec<(&'static str, String)>) -> (String, std::thread::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(
-                            std::time::Instant::now() < deadline,
-                            "HTTP request never arrived"
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                    Err(e) => panic!("HTTP accept failed: {e}"),
+            futures::executor::block_on(db_wire::run_on_shared_runtime(async move {
+                let listener = tokio::net::TcpListener::from_std(listener)?;
+                for (path, response) in responses {
+                    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let mut request = Vec::new();
+                        let mut chunk = [0; 1024];
+                        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                            let count = socket.read(&mut chunk).await.unwrap();
+                            assert!(count > 0);
+                            request.extend_from_slice(&chunk[..count]);
+                            assert!(request.len() <= 64 * 1024);
+                        }
+                        let request = String::from_utf8(request).unwrap();
+                        assert_eq!(request.split_whitespace().nth(1), Some(path));
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    })
+                    .await
+                    .with_context(|| format!("Timed out serving {path}"))?;
                 }
-            };
-            socket.set_nonblocking(false).unwrap();
-            socket
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .unwrap();
-            let mut request = Vec::new();
-            let mut chunk = [0; 1024];
-            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                let count = socket.read(&mut chunk).expect("HTTP request read failed");
-                assert!(count > 0, "HTTP peer closed before finishing headers");
-                request.extend_from_slice(&chunk[..count]);
-                assert!(request.len() <= 64 * 1024, "HTTP headers too large");
-            }
-            write!(
-                socket,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
+                Ok(())
+            }))
             .unwrap();
         });
-        (format!("http://{address}/update.dmg"), server)
+        (base_url, server)
+    }
+
+    #[test]
+    fn signed_checksum_uses_one_exact_safe_filename() {
+        let zeros = "00".repeat(32);
+        let lines = format!("{zeros}  other.dmg\n{zeros} *FastDB.dmg\n");
+        assert_eq!(
+            parse_asset_checksum(lines.as_bytes(), "FastDB.dmg").unwrap(),
+            [0; 32]
+        );
+        assert!(parse_asset_checksum(lines.as_bytes(), "fastdb.dmg").is_err());
+
+        let duplicate = format!("{zeros}  FastDB.dmg\n{zeros} *FastDB.dmg\n");
+        assert!(parse_asset_checksum(duplicate.as_bytes(), "FastDB.dmg").is_err());
+        assert!(parse_asset_checksum(b"invalid  FastDB.dmg\n", "FastDB.dmg").is_err());
+
+        for name in [
+            "",
+            ".",
+            "..",
+            "../FastDB.dmg",
+            "/tmp/file.dmg",
+            "a\\file.dmg",
+        ] {
+            assert!(validate_asset_name(name).is_err(), "{name:?}");
+        }
+        assert!(validate_asset_name("FastDB.dmg").is_ok());
+    }
+
+    #[test]
+    fn release_metadata_lookup_rejects_ambiguity() {
+        let manifest = ReleaseAsset {
+            name: "SHA256SUMS.txt".into(),
+            browser_download_url: "https://example.invalid/manifest".into(),
+            size: 16,
+        };
+        assert!(release_metadata_asset(&[], "SHA256SUMS.txt").is_err());
+        assert_eq!(
+            release_metadata_asset(std::slice::from_ref(&manifest), "SHA256SUMS.txt").unwrap(),
+            &manifest,
+        );
+        assert!(release_metadata_asset(&[manifest.clone(), manifest], "SHA256SUMS.txt").is_err());
+    }
+
+    #[test]
+    fn release_link_opens_only_the_configured_github_release_page() {
+        let releases = "https://github.com/Matrix-I/fastdb/releases";
+        assert_eq!(
+            release_page_url("v0.3.0-rc.1"),
+            format!("{releases}/tag/v0.3.0-rc.1"),
+        );
+        for tag in [
+            "file:///tmp/update.dmg",
+            "open-installer:payload",
+            "../../download",
+            "v1.2.3?x=1",
+        ] {
+            assert_eq!(release_page_url(tag), releases);
+        }
+    }
+
+    const MANIFEST: &str = include_str!("updater/fixtures/manifest");
+    const SIGNATURE: &str = include_str!("updater/fixtures/manifest.minisig");
+    const FIXTURE_KEY: &str = include_str!("updater/fixtures/test.pub");
+
+    fn download_fixture(
+        responses: Vec<(&'static str, String)>,
+        key: &'static str,
+        dir: &Path,
+    ) -> Vec<DownloadProgressEvent> {
+        let (base, server) = serve_http(responses);
+        let asset = |name: &str| ReleaseAsset {
+            name: name.into(),
+            browser_download_url: format!("{base}/{name}"),
+            size: 0,
+        };
+        let package = asset("update.dmg");
+        let assets = vec![
+            package.clone(),
+            asset("SHA256SUMS.txt"),
+            asset("SHA256SUMS.txt.minisig"),
+        ];
+        let (tx, rx) = flume::unbounded();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        futures::executor::block_on(download_with_key(
+            client,
+            assets,
+            package,
+            dir.to_owned(),
+            tx,
+            key,
+        ));
+        server.join().unwrap();
+        rx.try_iter().collect()
+    }
+
+    fn signed_responses(manifest: &str, signature: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("/SHA256SUMS.txt", response("200 OK", "", manifest)),
+            ("/SHA256SUMS.txt.minisig", response("200 OK", "", signature)),
+        ]
+    }
+
+    pub(crate) fn download_test_installer(dir: &Path) -> VerifiedInstaller {
+        let mut responses = signed_responses(MANIFEST, SIGNATURE);
+        responses.push(("/update.dmg", response("200 OK", "", "test update bytes")));
+        let events = download_fixture(responses, FIXTURE_KEY, dir);
+        let Some(DownloadProgressEvent::Finished { installer }) = events.last() else {
+            panic!("{events:?}")
+        };
+        installer.clone()
+    }
+
+    pub(crate) fn recording_apply_error(installer: &VerifiedInstaller) -> anyhow::Error {
+        let actions = InstallerActions {
+            apply_native: &|_| bail!("Fixture native installer unavailable"),
+            open_native: &|_| panic!("Changed file reached native open"),
+        };
+        actions.apply(installer).unwrap_err()
     }
 
     #[test]
     fn download_works_without_a_caller_tokio_runtime() {
-        let (url, server) = serve_http("test update bytes");
         let temp = tempfile::tempdir().unwrap();
         let dest = temp.path().join("update.dmg");
-        let (tx, rx) = flume::unbounded();
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
-
-        futures::executor::block_on(download_asset_file(client, url, dest.clone(), tx));
-        server.join().unwrap();
-
-        let events: Vec<_> = rx.try_iter().collect();
-        assert!(
-            matches!(events.last(), Some(DownloadProgressEvent::Finished { path }) if path == &dest),
-            "{events:?}"
-        );
+        let installer = download_test_installer(temp.path());
+        assert_eq!(installer.path(), dest);
         assert_eq!(fs::read(&dest).unwrap(), b"test update bytes");
-        assert!(!dest.with_extension("dmg.part").exists());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        let calls = std::cell::RefCell::new(Vec::new());
+        let actions = InstallerActions {
+            apply_native: &|path| {
+                assert_eq!(path, dest);
+                calls.borrow_mut().push("apply");
+                Ok(InstallOutcome::Applied)
+            },
+            open_native: &|path| {
+                assert_eq!(path, dest);
+                calls.borrow_mut().push("open");
+                Ok(())
+            },
+        };
+        actions.apply(&installer).unwrap();
+        actions.open(&installer).unwrap();
+        let assert_blocked = || {
+            assert!(
+                actions
+                    .apply(&installer)
+                    .unwrap_err()
+                    .is::<VerificationFailure>()
+            );
+            assert!(
+                actions
+                    .open(&installer)
+                    .unwrap_err()
+                    .is::<VerificationFailure>()
+            );
+        };
+        let fallback = InstallerActions {
+            apply_native: &|path| {
+                fs::write(path, b"changed")?;
+                Ok(InstallOutcome::OpenManually)
+            },
+            open_native: actions.open_native,
+        };
+        assert!(
+            fallback
+                .apply(&installer)
+                .unwrap_err()
+                .is::<VerificationFailure>()
+        );
+        assert_blocked();
+        fs::remove_file(&dest).unwrap();
+        assert_blocked();
+        #[cfg(unix)]
+        {
+            let original = temp.path().join("original");
+            fs::write(&original, b"test update bytes").unwrap();
+            std::os::unix::fs::symlink(original, &dest).unwrap();
+            assert_blocked();
+        }
+        assert_eq!(calls.into_inner(), ["apply", "open"]);
+    }
+
+    #[test]
+    fn installation_workspaces_are_isolated_and_exclusive() {
+        let root = tempfile::tempdir().unwrap();
+        let first = install_workspace::acquire(root.path()).unwrap();
+        let stage_one = install_workspace::new_stage(root.path()).unwrap();
+        let stage_two = install_workspace::new_stage(root.path()).unwrap();
+        fs::write(stage_one.path().join("FastDB.app"), b"first").unwrap();
+        fs::write(stage_two.path().join("FastDB.app"), b"second").unwrap();
+        assert_eq!(
+            fs::read(stage_one.path().join("FastDB.app")).unwrap(),
+            b"first"
+        );
+        assert_ne!(stage_one.path(), stage_two.path());
+        assert!(
+            install_workspace::acquire(root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("already installing")
+        );
+        let install = apply_macos_installer(
+            Path::new("update.zip"),
+            root.path(),
+            &root.path().join("FastDB.app"),
+        );
+        assert!(matches!(install, Err(error) if error.is::<fs::TryLockError>()));
+        drop(first);
+        let _next = install_workspace::acquire(root.path()).unwrap();
+        assert!(install_workspace::acquire(root.path()).is_err());
+        let second = stage_two.path().to_owned();
+        stage_two.close().unwrap();
+        assert!(!second.exists());
+        assert!(stage_one.path().is_dir());
+    }
+
+    #[test]
+    fn unverified_download_preserves_destination_and_reports_reason() {
+        let missing = || response("404 Not Found", "", "");
+        let mut bad_package = signed_responses(MANIFEST, SIGNATURE);
+        bad_package.push(("/update.dmg", response("200 OK", "", "changed")));
+        for (responses, key, reason) in [
+            (
+                vec![("/SHA256SUMS.txt", missing())],
+                FIXTURE_KEY,
+                "SHA256SUMS.txt returned HTTP 404",
+            ),
+            (
+                vec![
+                    ("/SHA256SUMS.txt", response("200 OK", "", MANIFEST)),
+                    ("/SHA256SUMS.txt.minisig", missing()),
+                ],
+                FIXTURE_KEY,
+                "SHA256SUMS.txt.minisig returned HTTP 404",
+            ),
+            (
+                signed_responses(MANIFEST, "invalid"),
+                FIXTURE_KEY,
+                "Invalid update manifest signature",
+            ),
+            (
+                signed_responses(MANIFEST, SIGNATURE),
+                RELEASE_KEY,
+                "signature verification failed",
+            ),
+            (
+                signed_responses(include_str!("updater/fixtures/other-manifest"), SIGNATURE),
+                FIXTURE_KEY,
+                "signature verification failed",
+            ),
+            (
+                signed_responses(
+                    include_str!("updater/fixtures/other-manifest"),
+                    include_str!("updater/fixtures/other-manifest.minisig"),
+                ),
+                FIXTURE_KEY,
+                "No checksum",
+            ),
+            (bad_package, FIXTURE_KEY, "checksum mismatch"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let dest = temp.path().join("update.dmg");
+            fs::write(&dest, "existing").unwrap();
+            let events = download_fixture(responses, key, temp.path());
+            let terminal: Vec<_> = events
+                .iter()
+                .filter(|e| !matches!(e, DownloadProgressEvent::Progress { .. }))
+                .collect();
+            assert!(
+                matches!(terminal.as_slice(), [DownloadProgressEvent::Failed{error}] if error.contains(reason)),
+                "{events:?}"
+            );
+            assert_eq!(fs::read(&dest).unwrap(), b"existing");
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn invalid_release_metadata_is_rejected_before_any_download() {
+        let asset = |name: &str| ReleaseAsset {
+            name: name.into(),
+            browser_download_url: "unused".into(),
+            size: 0,
+        };
+        let package = "update.dmg";
+        let manifest = "SHA256SUMS.txt";
+        let signature = "SHA256SUMS.txt.minisig";
+        for (selected, names, reason) in [
+            (
+                package,
+                vec![package, manifest],
+                "missing SHA256SUMS.txt.minisig",
+            ),
+            (package, vec![package, signature], "missing SHA256SUMS.txt"),
+            (
+                package,
+                vec![package, manifest, manifest, signature],
+                "Duplicate release asset SHA256SUMS.txt",
+            ),
+            (
+                package,
+                vec![package, package, manifest, signature],
+                "Duplicate release asset update.dmg",
+            ),
+            (
+                "../update.dmg",
+                vec!["../update.dmg", manifest, signature],
+                "Invalid update asset filename",
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path().join("downloads");
+            fs::create_dir(&dir).unwrap();
+            let dest = dir.join(package);
+            fs::write(&dest, b"existing").unwrap();
+            let (tx, rx) = flume::unbounded();
+            futures::executor::block_on(download_asset_file(
+                reqwest::Client::new(),
+                names.into_iter().map(asset).collect(),
+                asset(selected),
+                dir.clone(),
+                tx,
+            ));
+            let events: Vec<_> = rx.try_iter().collect();
+            assert!(
+                matches!(events.as_slice(), [DownloadProgressEvent::Failed { error }] if error.contains(reason)),
+                "{events:?}"
+            );
+            assert_eq!(fs::read(dest).unwrap(), b"existing");
+            assert_eq!(fs::read_dir(dir).unwrap().count(), 1);
+            assert!(!temp.path().join(package).exists());
+        }
     }
 
     #[test]
