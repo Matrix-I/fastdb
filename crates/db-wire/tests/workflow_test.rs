@@ -3,19 +3,32 @@ use db_wire::export::{export_to_csv, export_to_sql_inserts_for_target};
 use db_wire::sql::{RowChanges, SqlDialect};
 use db_wire::{DatabaseDriver, DbDriverKind, SqliteDriver, StreamEvent};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[tokio::test]
 async fn sqlite_browse_edit_failure_recovery_and_export_readback() {
-    let source = SqliteDriver::new_memory();
+    let directory = tempfile::tempdir().unwrap();
+    let config = db_wire::ConnectionConfig {
+        driver: DbDriverKind::Sqlite,
+        database: directory
+            .path()
+            .join("source.sqlite")
+            .to_str()
+            .unwrap()
+            .into(),
+        ..Default::default()
+    };
+    let source: Arc<dyn DatabaseDriver> = Arc::new(SqliteDriver::new(config.clone()).unwrap());
+    source.ping().await.unwrap();
     let other = SqliteDriver::new_memory();
-    for driver in [&source, &other] {
+    for driver in [source.as_ref(), &other] {
         driver
             .execute_query("CREATE TABLE sample(id INTEGER PRIMARY KEY, value TEXT)")
             .await
             .unwrap();
     }
     source
-        .execute_query("INSERT INTO sample VALUES (1,'before'),(2,NULL),(3,'')")
+        .execute_query("INSERT INTO sample VALUES (1,'before'),(2,NULL),(3,''),(4,'delete me')")
         .await
         .unwrap();
     other
@@ -43,12 +56,40 @@ async fn sqlite_browse_edit_failure_recovery_and_export_readback() {
     };
     assert!(matches!(
         events.last(),
-        Some(StreamEvent::Completed { total_rows: 3, .. })
+        Some(StreamEvent::Completed { total_rows: 4, .. })
     ));
+    let (started, completed, outcome) = run_statements(
+        source.clone(),
+        &[
+            "SELECT id FROM sample ORDER BY id",
+            "SELECT id FROM missing_sample",
+            "SELECT 1",
+        ],
+        None,
+    )
+    .await;
+    assert_eq!(
+        started,
+        [
+            "SELECT id FROM sample ORDER BY id",
+            "SELECT id FROM missing_sample"
+        ]
+    );
+    assert_eq!(completed, [4]);
+    assert!(
+        outcome
+            .error
+            .is_some_and(|error| error.contains("missing_sample"))
+    );
+
     let mut draft = RowChanges::default();
     draft
         .changes
         .insert((0, 1), Some("名,'quoted'\nline".into()));
+    draft
+        .inserted_rows
+        .push(vec![Some("5".into()), Some("inserted".into())]);
+    draft.deleted_rows.insert(3);
     let planned = draft
         .plan_sql(
             "\"sample\"",
@@ -57,7 +98,7 @@ async fn sqlite_browse_edit_failure_recovery_and_export_readback() {
             SqlDialect(DbDriverKind::Sqlite),
         )
         .unwrap();
-    assert_eq!(source.apply_row_changes(&planned).await.unwrap(), 1);
+    assert_eq!(source.apply_row_changes(&planned).await.unwrap(), 3);
     let failed = vec![
         "UPDATE sample SET value='must roll back' WHERE id=1".into(),
         "UPDATE sample SET value='missing' WHERE id=99".into(),
@@ -67,7 +108,7 @@ async fn sqlite_browse_edit_failure_recovery_and_export_readback() {
         .execute_query("SELECT id,value FROM sample ORDER BY id")
         .await
         .unwrap();
-    assert_eq!(count, 3);
+    assert_eq!(count, 4);
     assert_eq!(
         saved.get_cell(0, 1),
         Some("名,'quoted'\nline".as_bytes().to_vec())
@@ -75,10 +116,10 @@ async fn sqlite_browse_edit_failure_recovery_and_export_readback() {
     assert_eq!(saved.get_cell(1, 1), None);
     assert_eq!(saved.get_cell(2, 1), Some(Vec::new()));
     let mut csv = Vec::new();
-    assert_eq!(export_to_csv(&saved, &mut csv).unwrap(), 3);
+    assert_eq!(export_to_csv(&saved, &mut csv).unwrap(), 4);
     assert_eq!(
         String::from_utf8(csv).unwrap(),
-        "id,value\n1,\"名,'quoted'\nline\"\n2,\n3,\n"
+        "id,value\n1,\"名,'quoted'\nline\"\n2,\n3,\n5,inserted\n"
     );
     let destination = SqliteDriver::new_memory();
     destination
@@ -96,18 +137,18 @@ async fn sqlite_browse_edit_failure_recovery_and_export_readback() {
             count
         )
         .unwrap(),
-        3
+        4
     );
     for statement in String::from_utf8(sql).unwrap().split_inclusive(';') {
         if !statement.trim().is_empty() {
             destination.execute_query(statement).await.unwrap();
         }
     }
-    let (restored, rows, _) = destination
+    let (restored, restored_count, _) = destination
         .execute_query("SELECT id,value FROM sample ORDER BY id")
         .await
         .unwrap();
-    assert_eq!(rows, count);
+    assert_eq!(restored_count, count);
     for row in 0..count {
         for col in 0..2 {
             assert_eq!(restored.get_cell(row, col), saved.get_cell(row, col));
@@ -118,6 +159,74 @@ async fn sqlite_browse_edit_failure_recovery_and_export_readback() {
         .await
         .unwrap();
     assert_eq!(isolated.get_cell(0, 0), Some(b"other connection".to_vec()));
+
+    let (sender, receiver) = flume::unbounded();
+    let runner = source.clone();
+    let mut query = tokio::spawn(async move {
+        runner
+            .execute_streaming(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n \
+                 WHERE i < 1000000000) SELECT COUNT(*) FROM n",
+                sender,
+            )
+            .await
+    });
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), receiver.recv_async())
+            .await
+            .expect("SQLite query must start promptly")
+            .unwrap(),
+        StreamEvent::SchemaReady(_)
+    ));
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            source.cancel_active_query().await.unwrap();
+            if let Ok(joined) = tokio::time::timeout(Duration::from_millis(100), &mut query).await {
+                break joined.unwrap();
+            }
+        }
+    })
+    .await
+    .expect("interrupted SQLite query must stop promptly");
+    assert!(format!("{:#}", result.unwrap_err()).contains("interrupt"));
+    assert!(
+        receiver
+            .drain()
+            .any(|event| matches!(event, StreamEvent::Error(_)))
+    );
+    let saved_sql = "SELECT id, value FROM sample ORDER BY id";
+    let expected = [
+        row(&[Some("1"), Some("名,'quoted'\nline")]),
+        row(&[Some("2"), None]),
+        row(&[Some("3"), Some("")]),
+        row(&[Some("5"), Some("inserted")]),
+    ];
+    assert_eq!(rows(&source, saved_sql).await, expected);
+
+    let fresh: Arc<dyn DatabaseDriver> = Arc::new(SqliteDriver::new(config.clone()).unwrap());
+    assert_session_rollback(
+        source.clone(),
+        &fresh,
+        "BEGIN",
+        "INSERT INTO sample VALUES (9, 'reused after rollback')",
+        "SELECT id FROM sample WHERE id = 9",
+    )
+    .await;
+    assert_eq!(
+        rows(&fresh, "SELECT value FROM sample WHERE id = 9").await,
+        [row(&[Some("reused after rollback")])]
+    );
+    drop((source, fresh));
+    let reopened: Arc<dyn DatabaseDriver> = Arc::new(SqliteDriver::new(config).unwrap());
+    reopened.ping().await.unwrap();
+    assert_eq!(
+        rows(
+            &reopened,
+            "SELECT id, value FROM sample WHERE id < 9 ORDER BY id"
+        )
+        .await,
+        expected
+    );
 }
 
 /// A live provider for the shared data-path workflow. Each run owns two disposable
@@ -262,6 +371,36 @@ async fn run_statements(
         }
     }
     (started, completed, outcome.expect("script must finish"))
+}
+
+async fn assert_session_rollback(
+    source: Arc<dyn DatabaseDriver>,
+    fresh: &Arc<dyn DatabaseDriver>,
+    begin: &str,
+    insert: &str,
+    probe: &str,
+) {
+    let owner = Arc::new(db_wire::script::TabSession::default());
+    let (started, _, outcome) =
+        run_statements(source.clone(), &[begin, insert], Some(&owner)).await;
+    assert_eq!(started, [begin, insert]);
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    // Command statements may report zero-row completion on some providers.
+    let (_, completed, outcome) = run_statements(source, &[probe], Some(&owner)).await;
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert_eq!(completed, [1], "the pinned session must see its write");
+    assert!(rows(fresh, probe).await.is_empty());
+
+    owner.close();
+    let affected = tokio::time::timeout(
+        Duration::from_secs(10),
+        fresh.apply_row_changes(&[insert.to_owned()]),
+    )
+    .await
+    .expect("the disconnected session must release the writer")
+    .expect("an independent writer must be able to reuse the rolled-back key");
+    assert_eq!(affected, 1);
+    assert_eq!(rows(fresh, probe).await.len(), 1);
 }
 
 /// connect → browse/filter → run script with a failing statement → edit/save/read-back
@@ -434,11 +573,11 @@ async fn live_workflow(p: LiveProvider) {
     let long_query = p.long_query;
     let (tx, _rx) = flume::unbounded();
     let mut query = tokio::spawn(async move { runner.execute_streaming(long_query, tx).await });
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let result = loop {
         // Repeat until the server has started the query; cancelling before it runs is a no-op.
         source.cancel_active_query().await.unwrap();
-        match tokio::time::timeout(std::time::Duration::from_millis(250), &mut query).await {
+        match tokio::time::timeout(Duration::from_millis(250), &mut query).await {
             Ok(joined) => break joined.unwrap(),
             Err(_) => assert!(
                 tokio::time::Instant::now() < deadline,
@@ -446,32 +585,31 @@ async fn live_workflow(p: LiveProvider) {
             ),
         }
     };
-    assert!(result.is_err(), "cancelled query must report an error");
+    let error = format!("{:#}", result.unwrap_err());
+    let marker = match p.kind {
+        DbDriverKind::Postgres => "canceling statement",
+        DbDriverKind::MySql => "interrupted",
+        kind => panic!("unexpected workflow provider: {kind:?}"),
+    };
+    assert!(error.contains(marker), "expected cancellation: {error}");
     assert_eq!(
         rows(&source, "SELECT COUNT(*) FROM wf_items").await,
         [row(&[Some("3")])]
     );
 
     // Disconnect: closing a tab session rolls back its open transaction.
-    let owner = Arc::new(db_wire::script::TabSession::default());
-    let insert = "INSERT INTO wf_items VALUES (9, 'uncommitted', 1, NULL)";
-    let (_, _, outcome) = run_statements(source.clone(), &[p.begin, insert], Some(&owner)).await;
-    assert!(outcome.error.is_none(), "{:?}", outcome.error);
-    owner.close();
-    let probe = "SELECT COUNT(*) FROM wf_items WHERE id = 9";
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    // The server releases the aborted session's transaction once it sees the closed socket.
-    loop {
-        let (pager, _, _) = fresh.execute_query(probe).await.unwrap();
-        if text(&pager, 0, 0).as_deref() == Some("0") {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "uncommitted row must not persist"
-        );
-        tokio::task::yield_now().await;
-    }
+    assert_session_rollback(
+        source.clone(),
+        &fresh,
+        p.begin,
+        "INSERT INTO wf_items VALUES (9, 'reused after rollback', 1, NULL)",
+        "SELECT id FROM wf_items WHERE id = 9",
+    )
+    .await;
+    assert_eq!(
+        rows(&fresh, "SELECT label FROM wf_items WHERE id = 9").await,
+        [row(&[Some("reused after rollback")])]
+    );
 
     drop((source, other, fresh));
     let admin = p.driver(p.admin_database);
