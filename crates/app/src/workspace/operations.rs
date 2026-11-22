@@ -109,6 +109,13 @@ mod tests {
             ..ConnectionConfig::default()
         })
         .unwrap();
+        let other_driver = create_driver(ConnectionConfig {
+            driver: db_wire::DbDriverKind::Sqlite,
+            database: ":memory:".into(),
+            ..ConnectionConfig::default()
+        })
+        .unwrap();
+        assert!(!Arc::ptr_eq(&driver, &other_driver));
         let mut runs = Operations::default();
         let first = runs
             .begin(
@@ -122,7 +129,7 @@ mod tests {
             runs.begin(
                 8,
                 "connection-b".into(),
-                driver.clone(),
+                other_driver.clone(),
                 OperationKind::Query
             )
             .is_none()
@@ -137,10 +144,19 @@ mod tests {
         assert!(runs.request_cancel().is_some());
         assert!(runs.finish(first));
         let second = runs
-            .begin(8, "connection-b".into(), driver, OperationKind::Save)
+            .begin(
+                8,
+                "connection-b".into(),
+                other_driver.clone(),
+                OperationKind::Save,
+            )
             .unwrap();
         assert!(!runs.finish(first));
+        assert!(!runs.matches(first, 8));
+        assert!(!runs.matches(second, 7));
         assert!(runs.matches(second, 8));
+        assert!(Arc::ptr_eq(&runs.active().unwrap().driver, &other_driver));
+        assert_eq!(runs.active().unwrap().connection_id, "connection-b");
         assert!(runs.request_cancel().is_none());
         assert!(runs.finish(second));
     }
