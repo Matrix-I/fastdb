@@ -1,5 +1,4 @@
-use crate::updater::ReleaseInfo;
-use std::path::PathBuf;
+use crate::updater::{ReleaseInfo, VerificationFailure, VerifiedInstaller};
 /// State of the active download and installation in the update dialog
 #[derive(Debug, Clone)]
 pub enum DownloadUiState {
@@ -14,11 +13,35 @@ pub enum DownloadUiState {
         new_version: String,
     },
     Finished {
-        path: PathBuf,
+        installer: VerifiedInstaller,
+        reason: String,
     },
     Failed {
         error: String,
     },
+}
+
+impl DownloadUiState {
+    pub(super) fn after_install(
+        result: anyhow::Result<()>,
+        installer: VerifiedInstaller,
+        new_version: String,
+    ) -> Self {
+        match result {
+            Ok(()) => Self::Complete { new_version },
+            Err(error)
+                if error.is::<VerificationFailure>() || error.is::<std::fs::TryLockError>() =>
+            {
+                Self::Failed {
+                    error: error.to_string(),
+                }
+            }
+            Err(error) => Self::Finished {
+                installer,
+                reason: format!("{error:#}"),
+            },
+        }
+    }
 }
 
 /// Current status shown inside the update dialog

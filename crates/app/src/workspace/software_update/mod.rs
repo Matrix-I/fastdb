@@ -119,6 +119,8 @@ mod tests {
         {
             *download = DownloadUiState::Installing;
         }
+        controller.skip_current_version();
+        assert!(controller.update_state.skipped_version.is_none());
         controller.close_update_dialog();
         assert!(controller.is_open());
         assert!(controller.is_busy());
@@ -127,6 +129,24 @@ mod tests {
         assert!(!controller.is_open());
         assert_eq!(controller.check_id, 1);
     }
+    #[test]
+    fn verification_and_native_install_errors_have_distinct_recovery_actions() {
+        let temp = tempfile::tempdir().unwrap();
+        let installer = crate::updater::tests::download_test_installer(temp.path());
+        let native_error = crate::updater::tests::recording_apply_error(&installer);
+        let state =
+            DownloadUiState::after_install(Err(native_error), installer.clone(), "v1.0.0".into());
+        assert!(
+            matches!(state, DownloadUiState::Finished { installer: saved, reason } if saved.path() == installer.path() && reason == "Fixture native installer unavailable")
+        );
+        std::fs::write(installer.path(), b"changed").unwrap();
+        let error = crate::updater::tests::recording_apply_error(&installer);
+        let state = DownloadUiState::after_install(Err(error), installer, "v1.0.0".into());
+        assert!(
+            matches!(state, DownloadUiState::Failed { error } if error.contains("checksum mismatch"))
+        );
+    }
+
     fn release_fixture() -> ReleaseInfo {
         ReleaseInfo {
             tag_name: "v0.2.0".into(),

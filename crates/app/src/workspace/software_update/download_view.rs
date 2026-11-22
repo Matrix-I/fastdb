@@ -1,5 +1,5 @@
 use super::*;
-use crate::updater::{format_bytes, open_installer_file};
+use crate::updater::format_bytes;
 impl UpdateController {
     pub(super) fn render_download_section(
         &self,
@@ -114,7 +114,7 @@ impl UpdateController {
                     div()
                         .text_size(px(11.0))
                         .text_color(theme.text_secondary)
-                        .child("Applying update to application bundle and verifying signature..."),
+                        .child("Checking the downloaded file before launching the installer..."),
                 )
                 .into_any_element(),
             DownloadUiState::Complete { new_version } => div()
@@ -147,8 +147,7 @@ impl UpdateController {
                         )),
                 )
                 .into_any_element(),
-            DownloadUiState::Finished { path } => {
-                let p = path.clone();
+            DownloadUiState::Finished { installer, reason } => {
                 div()
                     .flex()
                     .items_center()
@@ -166,7 +165,7 @@ impl UpdateController {
                             .text_size(px(11.0))
                             .text_color(rgb(0x3fb950))
                             .child(div().child("✓"))
-                            .child(div().child(format!("Downloaded: {}", p.display()))),
+                            .child(div().flex().flex_col().child(format!("Downloaded: {}", installer.path().display())).child(format!("Automatic installation failed: {reason}"))),
                     )
                     .child(
                         div()
@@ -178,8 +177,8 @@ impl UpdateController {
                             .text_size(px(11.0))
                             .text_color(theme.text_primary)
                             .cursor_pointer()
-                            .on_click(cx.listener(move |_, _, _, _| {
-                                let _ = open_installer_file(&p);
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_verified_installer(false, cx);
                             }))
                             .child("Show in Folder"),
                     )
@@ -301,30 +300,25 @@ impl UpdateController {
                 .child(div().child("🚀"))
                 .child("Restart Now")
                 .into_any_element(),
-            DownloadUiState::Finished { path } => {
-                let p = path.clone();
-                div()
-                    .id("btn-open-installer")
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .px_4()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(rgb(0x238636))
-                    .text_color(rgb(0xffffff))
-                    .font_weight(FontWeight::BOLD)
-                    .text_size(px(12.0))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let _ = open_installer_file(&p);
-                        this.close_update_dialog();
-                        cx.notify();
-                    }))
-                    .child(div().child("🚀"))
-                    .child("Open Installer")
-                    .into_any_element()
-            }
+            DownloadUiState::Finished { .. } => div()
+                .id("btn-open-installer")
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_4()
+                .py_1p5()
+                .rounded_md()
+                .bg(rgb(0x238636))
+                .text_color(rgb(0xffffff))
+                .font_weight(FontWeight::BOLD)
+                .text_size(px(12.0))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.open_verified_installer(true, cx);
+                }))
+                .child(div().child("🚀"))
+                .child("Open Installer")
+                .into_any_element(),
             DownloadUiState::Failed { .. } => div()
                 .id("btn-retry-download")
                 .px_4()
