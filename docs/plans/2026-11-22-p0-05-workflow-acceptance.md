@@ -66,7 +66,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
 **Test level:** integration against a real SQLite file.
 **RED:** n/a for existing product behavior. Add characterization and verify that deliberately skipping close causes the independent insert to fail.
 
-- [ ] Replace only the source's in-memory constructor with a real file and preserve the existing edit, type, CSV, SQL replay and connection-isolation assertions. Add the script check after the browse assertions:
+- [x] Replace only the source's in-memory constructor with a real file and preserve the existing edit, type, CSV, SQL replay and connection-isolation assertions. Add the script check after the browse assertions:
 
   ```rust
   let directory = tempfile::tempdir().unwrap();
@@ -94,7 +94,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   ```
 
   Keep the existing other connection separate by binding both entries in the setup loop as references to `dyn DatabaseDriver`, or by wrapping the existing in-memory driver in `Arc<dyn DatabaseDriver>`. Keep the SQL replay destination separate from both. Rename the replay row count binding from `rows` to `restored_count` so it does not shadow the `rows` helper.
-- [ ] Include staged insert and delete in the same existing SQLite Save as the update. Add `(4,'delete me')` to the source seed, expect four streamed rows and four rows in the first successful script result, then add the following before `plan_sql`:
+- [x] Include staged insert and delete in the same existing SQLite Save as the update. Add `(4,'delete me')` to the source seed, expect four streamed rows and four rows in the first successful script result, then add the following before `plan_sql`:
 
   ```rust
   draft.inserted_rows.push(vec![Some("5".into()), Some("inserted".into())]);
@@ -103,7 +103,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
 
   Expect three changes from `apply_row_changes`, four saved/replayed/exported rows, ID 5 text `inserted` and absence of ID 4. Append the inserted row to the exact CSV expectation and the expected read-back array below; retain NULL and empty fields and the existing foreign fixture.
 
-- [ ] Add bounded cancellation and close/reconnect checks at the end of that fixture. Use the helper in this task for SQLite and in task 2 for the live fixtures:
+- [x] Add bounded cancellation and close/reconnect checks at the end of that fixture. Use the helper in this task for SQLite and in task 2 for the live fixtures:
 
   ```rust
   async fn assert_session_rollback(
@@ -200,7 +200,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   );
   ```
 
-- [ ] Run `cargo test -p db-wire --test workflow_test --locked sqlite_browse_edit_failure_recovery_and_export_readback -- --nocapture`. Temporarily omit `owner.close()` in the helper and verify the same test fails at the independent write. Restore and rerun. Keep test-only insert SQL constant and in the disposable fixtures.
+- [x] Run `cargo test -p db-wire --test workflow_test --locked sqlite_browse_edit_failure_recovery_and_export_readback -- --nocapture`. Temporarily omit `owner.close()` in the helper and verify the same test fails at the independent write. Restore and rerun. Keep test-only insert SQL constant and in the disposable fixtures.
 
 ### Task 2: Strengthen live disconnect and workspace ownership evidence
 
@@ -209,7 +209,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
 **Test level:** PostgreSQL/MySQL integration and deterministic workspace unit test.
 **RED:** n/a for existing product behavior. Validate the new assertions against controlled regressions.
 
-- [ ] Replace the live disconnect read-only probe with the task 1 helper. Do not change the preceding save/export/cancel assertions or the fixture cleanup:
+- [x] Replace the live disconnect read-only probe with the task 1 helper. Do not change the preceding save/export/cancel assertions or the fixture cleanup:
 
   ```rust
   assert_session_rollback(
@@ -226,7 +226,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   );
   ```
 
-- [ ] In the live cancellation block require the provider's native cancellation error, as already asserted in `postgres_test.rs` and `mysql_test.rs`. Retain the fresh read:
+- [x] In the live cancellation block require the provider's native cancellation error, as already asserted in `postgres_test.rs` and `mysql_test.rs`. Retain the fresh read:
 
   ```rust
   let error = format!("{:#}", result.unwrap_err());
@@ -238,7 +238,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   assert!(error.contains(marker), "expected cancellation: {error}");
   ```
 
-- [ ] Extend `stale_completion_and_cancellation_keep_the_original_owner` to exercise distinct actual drivers and a late event targeting the current tab with an obsolete generation. Bind `other_driver` immediately after `driver`, use its clone for connection B's refused operation, and replace the old second-operation block:
+- [x] Extend `stale_completion_and_cancellation_keep_the_original_owner` to exercise distinct actual drivers and a late event targeting the current tab with an obsolete generation. Bind `other_driver` immediately after `driver`, use its clone for connection B's refused operation, and replace the old second-operation block:
 
   ```rust
   let other_driver = create_driver(ConnectionConfig {
@@ -262,7 +262,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   assert!(runs.finish(second));
   ```
 
-- [ ] Run `cargo test -p fastdb-app --locked stale_completion_and_cancellation_keep_the_original_owner`. Temporarily make `matches` ignore generation, then verify the test fails at the obsolete generation assertion. Restore and rerun. With both disposable servers configured, run `FASTDB_REQUIRE_DB_TESTS=1 cargo test -p db-wire --test workflow_test --locked -- --nocapture`, and verify both named server tests exercised the live providers.
+- [x] Run `cargo test -p fastdb-app --locked stale_completion_and_cancellation_keep_the_original_owner`. Temporarily make `matches` ignore generation, then verify the test fails at the obsolete generation assertion. Restore and rerun. With both disposable servers configured, run `FASTDB_REQUIRE_DB_TESTS=1 cargo test -p db-wire --test workflow_test --locked -- --nocapture`, and verify both named server tests exercised the live providers.
 
 ### Task 3: Prevent departure with unresolved table grid edits
 
@@ -271,7 +271,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
 **Test level:** deterministic unit regression against the actual save-gate decision. Interactive close, Quit and disconnect are covered by the manual checklist.
 **Root cause:** `f18b5ff` introduced a guard for editable script results. Table grids never entered that guard; `close_saved_tabs` removes them and after Quit their drafts are absent from session serialization. The source path was confirmed at `515d7b4` by tracing a staged table row through `close_tabs_where` → `save_then` → `close_saved_tabs`. A save/flush can also yield before final departure. The accepted L03 requirement rejects silently lost grid edits.
 
-- [ ] Extract the existing save-gate condition into the pure helper without changing behavior first. Route the normal guard through the helper. Prove baseline RED for the actual action with the following regression, including a separate still-open cell editor built with the fields in `ui-grid/src/grid_element.rs`:
+- [x] Extract the existing save-gate condition into the pure helper without changing behavior first. Route the normal guard through the helper. Prove baseline RED for the actual action with the following regression, including a separate still-open cell editor built with the fields in `ui-grid/src/grid_element.rs`:
 
   ```rust
   #[test]
@@ -334,7 +334,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   }
   ```
 
-- [ ] Implement the departure predicate in the helper. Preserve existing script-result action behavior and error text. Apply the table branch only for the actionable targets:
+- [x] Implement the departure predicate in the helper. Preserve existing script-result action behavior and error text. Apply the table branch only for the actionable targets:
 
   ```rust
   fn pending_grid_edit(
@@ -372,7 +372,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   ```
 
   Move the existing selection, feedback and notify to `pub(super) fn block_pending_grid_edit(&mut self, ids: &[u64], action: &AfterSave, cx: &mut Context<Self>) -> bool`. Call it in `save_then`, before asynchronously completed saves dispatch `after_save`, and again before final Quit/restart in the flush callback. Use the original target IDs for Close and resolve Quit/restart and owner-scoped actions against the current tabs in those callbacks. Leave the existing column guard and filter/refresh behavior in place.
-- [ ] In the async connect result callback, just before replacing an existing session in `connections.rs`, use the owner-scoped decision with an empty captured list. The successful result and its newly created driver can be dropped safely. Keep the current connection and show the existing form error for the rejected retry:
+- [x] In the async connect result callback, just before replacing an existing session in `connections.rs`, use the owner-scoped decision with an empty captured list. The successful result and its newly created driver can be dropped safely. Keep the current connection and show the existing form error for the rejected retry:
 
   ```rust
   if this.connections.sessions.contains_key(&conn_id) {
@@ -386,7 +386,7 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
   }
   ```
 
-- [ ] Run `cargo test -p fastdb-app --locked table_departure_keeps_pending_grid_edits_in_their_owner` before and after the predicate change. Record the failing assertion and passing command. Read all departure callers and launch the app with an isolated profile. Update the table guide and acceptance case L03 to mention the Save/Cancel gate; leave the manual checks pending.
+- [x] Run `cargo test -p fastdb-app --locked table_departure_keeps_pending_grid_edits_in_their_owner` before and after the predicate change. Record the failing assertion and passing command. Read all departure callers and launch the app with an isolated profile. Update the table guide and acceptance case L03 to mention the Save/Cancel gate; leave the manual checks pending.
 
 ### Task 4: Verification & Docs
 
@@ -394,8 +394,20 @@ An acceptance result must demonstrate the stated workflow on its owning connecti
 **Interfaces:** Existing desktop workflow protocol and PostgreSQL runbook case IDs.
 **RED:** n/a — no executable behavior for the prose, checked with link and full-diff review.
 
-- [ ] Update the SQLite matrix row and automated evidence to describe the file fixture, interruption, writer-wait rollback proof and reopen. Record the exact PostgreSQL/MySQL versions and distinguish existing assertions from this run. Keep the four disabled provider rows pending.
-- [ ] Add a desktop recording template and mapping for connect/browse/run/edit/export/cancel and the cross-cutting ownership, stale-event, pending-edit and failed-transaction cases. Preserve the existing repeatable protocol and link the PostgreSQL runbook's required case IDs. Keep historical SQLite skip visible and current interaction pending. Preserve the roadmap checkbox while desktop acceptance is pending.
-- [ ] Review the complete tracked and untracked diff. Run `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked`, `cargo build --workspace --all-targets --locked`, and `FASTDB_REQUIRE_DB_TESTS=1 cargo test --workspace --locked -- --nocapture` with the disposable PostgreSQL 16 and MySQL 8.4 fixtures configured. Inspect skips and real live workflow results. CI runs the tests in its live database job. Record both the CI-version result and the already reproduced PostgreSQL 18.7 baseline query-plan assertion failure.
-- [ ] Run `git diff --check` and verify document links. Complete independent code review and the final self-review gates. Record manual desktop acceptance and the unconfigured MariaDB/ODBC and TLS suites as pending. Dispose of temporary test containers.
+- [x] Update the SQLite matrix row and automated evidence to describe the file fixture, interruption, writer-wait rollback proof and reopen. Record the exact PostgreSQL/MySQL versions and distinguish existing assertions from this run. Keep the four disabled provider rows pending.
+- [x] Add a desktop recording template and mapping for connect/browse/run/edit/export/cancel and the cross-cutting ownership, stale-event, pending-edit and failed-transaction cases. Preserve the existing repeatable protocol and link the PostgreSQL runbook's required case IDs. Keep historical SQLite skip visible and current interaction pending. Preserve the roadmap checkbox while desktop acceptance is pending.
+- [x] Review the complete tracked and untracked diff. Run `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked`, `cargo build --workspace --all-targets --locked`, and `FASTDB_REQUIRE_DB_TESTS=1 cargo test --workspace --locked -- --nocapture` with the disposable PostgreSQL 16 and MySQL 8.4 fixtures configured. Inspect skips and real live workflow results. CI runs the tests in its live database job. Record both the CI-version result and the already reproduced PostgreSQL 18.7 baseline query-plan assertion failure.
+- [x] Run `git diff --check` and verify document links. Complete independent code review and the final self-review gates. Record manual desktop acceptance and the unconfigured MariaDB/ODBC and TLS suites as pending. Dispose of temporary test containers.
 - [ ] Commit the audited plan and scoped changes, fetch `origin`, verify `git merge-base --is-ancestor origin/main HEAD`, push the feature branch, open the PR, and verify its URL and head/base. The PR must state the enabled-provider decision and evidence limitations.
+
+## Execution evidence
+
+- Baseline `515d7b4` passed on Linux with PostgreSQL 16.16 and MySQL 8.4.13. With PostgreSQL 18.7 the workflow itself passed, and the separate existing `structured_numeric_filter_uses_index_at_realistic_volume` test failed because the server reported JSON `11.0` where the assertion expected `11`.
+- Guard regression on the equivalent baseline save gate: one failure at the Close decision (received `None` for the staged table target). After the fix, the regression passed. The test covers active editors, clean and unrelated targets, and tabs absent from the original departure snapshot.
+- The SQLite no-close mutation failed at the independent write with SQLite's database-locked error. Ignoring the operation generation failed the stale-completion assertion. Both mutants were removed and the focused tests passed again.
+- `FASTDB_REQUIRE_DB_TESTS=1 cargo test -p db-wire --test workflow_test --locked --offline -- --nocapture` ran all three workflows and passed. PostgreSQL and MySQL ran against disposable loopback servers. SQLite used a temporary file. The SQLite cancellation fixture's query plan uses a constant seed, a recursive CTE and an aggregate. It adds no application query or index.
+- `cargo fmt --all`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`, and `cargo build --workspace --all-targets --locked --offline` passed. Existing Cargo unused-dependency manifest warnings remain. Affected stale Cargo fingerprints were refreshed and the compile and test paths were checked against this worktree.
+- `FASTDB_REQUIRE_DB_TESTS=1 cargo test --workspace --locked --offline -- --nocapture` passed 834 harness tests across 42 suites with both live ports configured. The three named workflow tests ran. MariaDB, vendor ODBC and separate TLS suites reported skips because their fixtures were not configured.
+- `timeout 15s cargo run -p fastdb-app --locked --offline` initialized the Linux Vulkan surface with an isolated profile and ran until the intentional timeout. Interactive focus, shortcuts, file dialogs and the desktop matrix are pending the user's run. macOS launch was not exercised.
+- Independent first-party plan review found transaction-event, stale-scope and reconnect gaps. The plan incorporates the corrected probes and rechecks. Final first-party branch review approved with no Critical or Important findings. Its minor observation is that a failed SQLite interrupt may leave the finite fixture query running until the test harness exits. Automatic approval review rejected the external Claude Opus launch because it could disclose private repository data, so the specified Claude reviewer and implementer models were unavailable.
+- The departure check uses the same save gate and only scans tabs during user actions or save completion. Current affected tabs are recomputed after async boundaries, unrelated connection tabs are excluded, and failure leaves grid edits and the live session in place. The guard adds no persisted formats, credentials, production SQL, database calls or render work.
