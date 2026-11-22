@@ -157,7 +157,46 @@ pub(super) enum AfterSave {
     DeleteConnection(String),
 }
 
-use super::{Context, Workspace};
+use super::{Context, TabState, TableSubTab, Workspace};
+
+fn pending_grid_edit(
+    tabs: &[TabState],
+    ids: &[u64],
+    action: &AfterSave,
+) -> Option<(usize, &'static str)> {
+    if matches!(action, AfterSave::None) {
+        return None;
+    }
+    let leaves_table = matches!(
+        action,
+        AfterSave::Close(_)
+            | AfterSave::Quit
+            | AfterSave::Restart
+            | AfterSave::Disconnect(_)
+            | AfterSave::DeleteConnection(_)
+    );
+    tabs.iter().enumerate().find_map(|(index, tab)| {
+        let affected = match action {
+            AfterSave::Quit | AfterSave::Restart => true,
+            AfterSave::Disconnect(owner) | AfterSave::DeleteConnection(owner) => {
+                tab.connection_id.as_deref() == Some(owner.as_str())
+            }
+            _ => ids.contains(&tab.id),
+        };
+        let grid = &tab.current_result.grid;
+        if !affected || !(grid.changeset.is_dirty() || grid.editing_cell.is_some()) {
+            return None;
+        }
+        if tab.is_script() {
+            Some((index, "Save or Cancel query result edits before continuing"))
+        } else if leaves_table && tab.table_name.is_some() && tab.column_editor.is_none() {
+            Some((index, "Save or Cancel row edits before continuing"))
+        } else {
+            None
+        }
+    })
+}
+
 impl Workspace {
     pub(super) fn schedule_autosave(&mut self, id: u64, revision: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
@@ -177,19 +216,27 @@ impl Workspace {
         })
         .detach();
     }
+    pub(super) fn block_pending_grid_edit(
+        &mut self,
+        ids: &[u64],
+        action: &AfterSave,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((index, message)) = pending_grid_edit(&self.tabs, ids, action) else {
+            return false;
+        };
+        self.active_tab = index;
+        let tab = &mut self.tabs[index];
+        if tab.table_name.is_some() {
+            tab.active_subtab = TableSubTab::Data;
+        }
+        tab.current_result.last_error = Some(message.into());
+        cx.notify();
+        true
+    }
+
     pub(super) fn save_then(&mut self, ids: Vec<u64>, action: AfterSave, cx: &mut Context<Self>) {
-        if !matches!(action, AfterSave::None)
-            && let Some(index) = self.tabs.iter().position(|tab| {
-                ids.contains(&tab.id)
-                    && tab.is_script()
-                    && (tab.current_result.grid.changeset.is_dirty()
-                        || tab.current_result.grid.editing_cell.is_some())
-            })
-        {
-            self.active_tab = index;
-            self.tabs[index].current_result.last_error =
-                Some("Save or Cancel query result edits before continuing".into());
-            cx.notify();
+        if self.block_pending_grid_edit(&ids, &action, cx) {
             return;
         }
         if self.guard_column_action(&ids, &action, cx) {
@@ -235,7 +282,7 @@ impl Workspace {
                     }
                 }
                 cx.notify();
-                if failed {
+                if failed || this.block_pending_grid_edit(&ids, &action, cx) {
                     return;
                 }
                 if !matches!(action, AfterSave::None)
@@ -295,16 +342,11 @@ impl Workspace {
                         if !super::administration::allows_departure(this.administration.as_ref()) {
                             return;
                         }
+                        if this.block_pending_grid_edit(&[], &action, cx) {
+                            return;
+                        }
                         if this.tabs.iter().any(|t| t.is_dirty()) {
-                            this.save_then(
-                                this.tabs.iter().map(|t| t.id).collect(),
-                                if restart {
-                                    AfterSave::Restart
-                                } else {
-                                    AfterSave::Quit
-                                },
-                                cx,
-                            );
+                            this.save_then(this.tabs.iter().map(|t| t.id).collect(), action, cx);
                         } else {
                             this.allow_quit = true;
                             this.save_session();
@@ -360,6 +402,78 @@ impl Workspace {
 mod tests {
     use super::{SaveQueue, atomic_write};
     use std::sync::{Arc, Mutex};
+    #[test]
+    fn table_departure_keeps_pending_grid_edits_in_their_owner() {
+        use super::{AfterSave, pending_grid_edit};
+        use crate::workspace::TabState;
+        use sql_intel::SchemaCache;
+        use ui_core::theme::Theme;
+
+        let cache = Arc::new(SchemaCache::new().unwrap());
+        let mut dirty = TabState::table(1, "main", "items", Theme::dark(), cache.clone());
+        dirty.connection_id = Some("source".into());
+        dirty.current_result.grid.changeset.set_cell(
+            0,
+            1,
+            Some(b"before".to_vec()),
+            Some("staged".into()),
+        );
+        let clean = TabState::table(2, "main", "items", Theme::dark(), cache);
+        let mut tabs = vec![clean, dirty];
+        let actions = [
+            AfterSave::Close(vec![1]),
+            AfterSave::Quit,
+            AfterSave::Restart,
+            AfterSave::Disconnect("source".into()),
+            AfterSave::DeleteConnection("source".into()),
+        ];
+        for action in &actions {
+            assert_eq!(
+                pending_grid_edit(&tabs, &[1], action),
+                Some((1, "Save or Cancel row edits before continuing")),
+            );
+        }
+        assert_eq!(
+            pending_grid_edit(&tabs, &[2], &AfterSave::Close(vec![2])),
+            None
+        );
+        assert_eq!(
+            pending_grid_edit(&tabs, &[2], &AfterSave::Disconnect("other".into())),
+            None,
+        );
+        for action in &actions[1..] {
+            assert_eq!(
+                pending_grid_edit(&tabs, &[2], action),
+                Some((1, "Save or Cancel row edits before continuing")),
+                "departure includes newly opened tabs in its current scope",
+            );
+        }
+        assert_eq!(pending_grid_edit(&tabs, &[1], &AfterSave::None), None);
+        assert_eq!(pending_grid_edit(&tabs, &[1], &AfterSave::Run(1)), None);
+        assert_eq!(
+            tabs[1]
+                .current_result
+                .grid
+                .changeset
+                .get_modified_value(0, 1),
+            Some("staged")
+        );
+        tabs[1].current_result.grid.changeset.clear();
+        assert_eq!(pending_grid_edit(&tabs, &[1], &actions[0]), None);
+        // Start a cell edit with no staged changes and require the same guard.
+        tabs[1].current_result.grid.editing_cell = Some(ui_grid::grid_element::CellEdit {
+            row: 0,
+            col: 1,
+            text: "editing".into(),
+            caret: 7,
+            anchor: None,
+        });
+        assert_eq!(
+            pending_grid_edit(&tabs, &[1], &actions[0]),
+            Some((1, "Save or Cancel row edits before continuing")),
+        );
+    }
+
     #[test]
     fn snapshots_are_serialized_and_errors_allow_retry() {
         let recorded = Arc::new(Mutex::new(Vec::new()));

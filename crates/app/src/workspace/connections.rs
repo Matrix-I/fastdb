@@ -244,6 +244,14 @@ impl Workspace {
                         });
 
                         if this.connections.sessions.contains_key(&conn_id) {
+                            let disconnect = AfterSave::Disconnect(conn_id.clone());
+                            if this.block_pending_grid_edit(&[], &disconnect, cx) {
+                                this.form.test_result = Some(Err(
+                                    "Save or Cancel pending row edits before reconnecting".into(),
+                                ));
+                                cx.notify();
+                                return;
+                            }
                             this.disconnect_by_id_now(&conn_id);
                         }
                         this.connections.active_connection_id = Some(conn_id.clone());
