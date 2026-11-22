@@ -1,5 +1,7 @@
 # Not built yet
 
+- **Software update acceptance.** Desktop verification of signed package installation and manual installer actions is pending on Linux and macOS. See [Software updates](updates.md).
+
 - **Navigator bulk actions.** Shift+click range selection and Escape clearing are implemented; the user accepted the selection behavior. Context-menu actions still apply only to the clicked target; bulk context-menu actions are not implemented.
 
 - **Transaction log acceptance.** The split transaction toolbar selector (`T`/arrow for the mode menu, `Auto`/`Manual` label for the session-only Transaction log) and bounded disk-backed log modal have automated coverage; manual GUI acceptance is pending.
