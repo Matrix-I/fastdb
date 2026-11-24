@@ -136,7 +136,7 @@ ordinary and generated column metadata were exercised on the disposable server.
 | C03 / C04 · Connection profiles | B connected and the profile kept group, color, timeout and application name. Timeout 121 was rejected. A seeded older disabled MariaDB profile retained its values and could not start a driver. | Pass for these subcases |
 | R03 · PostgreSQL read-only profile | SELECT returned the original row. UPDATE and Rename were refused, editing and Save remained disabled, and the transfer wizard had no writable destination. Independent PostgreSQL reads confirmed unchanged data and catalog. | Pass for these subcases |
 | R02 · Quit with a pending transaction | The SQL tab saw the pending value while independent PostgreSQL still read the original. Quit released the database sessions and persisted the second, unexecuted INSERT script byte for byte. Relaunch restored both tabs and the script without a result. The saved profile reconnected, the original row remained, and the INSERT's ID was absent. | Pass |
-| L01 · Connection ownership | Same-name table tabs showed distinct database-specific values, verified by independent PostgreSQL reads. Switching tabs and reopening A retained the draft without writing it or changing B's grid. Concurrent Save and metadata refresh remain unverified. | Pass for these subcases |
+| L01 · Connection ownership | Same-name table tabs showed distinct database-specific values, verified by independent PostgreSQL reads. Switching tabs and reopening A retained the draft without writing it or changing B's grid. | Pass for these subcases |
 | L02 · Asynchronous disconnect and close | Disconnecting A during a server-confirmed sleep left zero A sessions while B continued on the same script backend. Closing and reopening a second busy A tab restored the script with an empty result area. PostgreSQL confirmed the sleep ended. | Pass for these subcases |
 
 `cargo test --locked --offline -p xtask -- --nocapture` passed 17 unit tests
@@ -164,6 +164,18 @@ This was a startup probe. Interactive Ubuntu 24.04 desktop acceptance remains op
 
 The PR's hosted checks passed for live engine and drivers, Linux build
 and macOS build/test at `4d2fc89`. The manual macOS matrix remains deferred.
+
+### L01 overlap retest after push
+
+The debug build of `227a16d` ran against disposable PostgreSQL A/B fixtures on
+private X11. Independent PostgreSQL reads confirmed that each A operation was
+waiting on a test lock while B was active.
+
+| Operation | Observed result | Status |
+| --- | --- | --- |
+| Save | After the lock was released, only A's intended ID 4 changed. B kept its database-specific value. | Pass |
+| Refresh | Only A received the refreshed row and new result column. B kept its original rows and columns. PostgreSQL confirmed the new column existed only in A. | Pass |
+| Failing Save | A displayed the check-constraint error and retained the staged value. B showed no error or row change. Independent PostgreSQL reads confirmed that both stored amounts remained 0.00. | Pass |
 
 ## Open acceptance cases
 
