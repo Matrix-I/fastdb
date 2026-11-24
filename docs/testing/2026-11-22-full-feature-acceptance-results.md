@@ -91,7 +91,7 @@ the grid copied both multiline values byte for byte via the Wayland clipboard.
   The package dependency list lacks Fontconfig, which GPUI loads dynamically.
   Installing `fontconfig` enabled packaged GUI startup and exact script
   persistence across standalone restart. The host package requires
-  `libc6 >= 2.43`. Ubuntu 24.04 CI build and install remain unverified.
+  `libc6 >= 2.43`. The separate Ubuntu 24.04 build and install are recorded below.
 - Updater tests passed 21 cases. The public v0.3.0 Minisign manifest and Debian
   payload verified against the production public key. A live upgrade remains
   blocked because the newest signed public release is the same version.
@@ -135,9 +135,35 @@ ordinary and generated column metadata were exercised on the disposable server.
 | C02 · PostgreSQL connection feedback | Invalid credentials and a closed loopback port produced distinct actionable errors. The credentials stayed masked and out of the error. Valid credentials passed ping and connected to A. | Pass |
 | C03 / C04 · Connection profiles | B connected and the profile kept group, color, timeout and application name. Timeout 121 was rejected. A seeded older disabled MariaDB profile retained its values and could not start a driver. | Pass for these subcases |
 | R03 · PostgreSQL read-only profile | SELECT returned the original row. UPDATE and Rename were refused, editing and Save remained disabled, and the transfer wizard had no writable destination. Independent PostgreSQL reads confirmed unchanged data and catalog. | Pass for these subcases |
+| R02 · Quit with a pending transaction | The SQL tab saw the pending value while independent PostgreSQL still read the original. Quit released the database sessions and persisted the second, unexecuted INSERT script byte for byte. Relaunch restored both tabs and the script without a result. The saved profile reconnected, the original row remained, and the INSERT's ID was absent. | Pass |
+| L01 · Connection ownership | Same-name table tabs showed distinct database-specific values, verified by independent PostgreSQL reads. Switching tabs and reopening A retained the draft without writing it or changing B's grid. Concurrent Save and metadata refresh remain unverified. | Pass for these subcases |
+| L02 · Asynchronous disconnect and close | Disconnecting A during a server-confirmed sleep left zero A sessions while B continued on the same script backend. Closing and reopening a second busy A tab restored the script with an empty result area. PostgreSQL confirmed the sleep ended. | Pass for these subcases |
 
 `cargo test --locked --offline -p xtask -- --nocapture` passed 17 unit tests
 and one CLI integration test.
+
+After draft PR #30 opened at `4d2fc89`, a repeat of `bash ci/test-tls.sh`
+with Podman passed all six live TLS cases and both SSH-over-TLS cases on
+disposable PostgreSQL and MySQL fixtures.
+
+The `7c248df` release artifact was built inside Ubuntu 24.04 from the same
+product source as the signed PR head. Its Debian package declared
+`libc6 >= 2.39`. In a second clean Ubuntu 24.04 container, apt install
+and remove passed, the installed binary matched the release artifact,
+the desktop launcher existed, and `ldd` found every linked library.
+Package SHA-256 was
+`23e7a07a81a58dd45f638ec0bbe57dfc5bb384ffbe69cfec6a0829a207823a77`.
+The packaging assertions passed with the release workflow's build libraries.
+The initial check on a tools-only image failed because `dpkg-shlibdeps`
+could not find the build libraries.
+
+The installed package reproduced the Fontconfig startup failure on Ubuntu 24.04
+under Xvfb, exiting 134 at GPUI fallback font resolution. After installing
+`fontconfig`, it remained running until the ten-second deadline with no panic.
+This was a startup probe. Interactive Ubuntu 24.04 desktop acceptance remains open.
+
+The PR's hosted checks passed for live engine and drivers, Linux build
+and macOS build/test at `4d2fc89`. The manual macOS matrix remains deferred.
 
 ## Open acceptance cases
 
@@ -146,6 +172,6 @@ and one CLI integration test.
 | 1–2 | Vendor ODBC clients and disposable Oracle, SQL Server and Db2 servers are unavailable. MariaDB-specific transport and tab-session coverage requires a driver-specific probe. |
 | 3–6 | Linux connection and preference matrix, broader metadata and schema mutations, record/text/transaction grid cases, and remaining editor actions. |
 | 7–8 | Broader import cancellation and batch policies, transfer and native tools GUI matrix, and the Administration transaction and privilege cases outside the observed subcases. |
-| 9 | Ubuntu 24.04 CI artifact parity and a newer production-signed update. Fontconfig omission remains open for minimal installs. |
+| 9 | Ubuntu 24.04 interactive desktop acceptance and a newer production-signed update. Fontconfig omission remains open for minimal installs. |
 | 10 | Approved-display benchmark, compatible baseline comparison, and cold startup after a coordinated reboot. |
 | 11 | Final case-by-case reconciliation after the open runs. P0-05 remains open. |
