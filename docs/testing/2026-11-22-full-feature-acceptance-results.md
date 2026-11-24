@@ -176,6 +176,7 @@ waiting on a test lock while B was active.
 | Save | After the lock was released, only A's intended ID 4 changed. B kept its database-specific value. | Pass |
 | Refresh | Only A received the refreshed row and new result column. B kept its original rows and columns. PostgreSQL confirmed the new column existed only in A. | Pass |
 | Failing Save | A displayed the check-constraint error and retained the staged value. B showed no error or row change. Independent PostgreSQL reads confirmed that both stored amounts remained 0.00. | Pass |
+| Navigator catalog Refresh | On `23014e4`, PostgreSQL confirmed A's catalog backend was waiting on a lock while B's selected grid fetched a newly committed value. After release, the new table appeared only in A's expanded Navigator and B remained selected. Independent reads confirmed that the table existed only in A. | Pass |
 
 ## Open acceptance cases
 
