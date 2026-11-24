@@ -121,6 +121,24 @@ also verified window-manager close, Refresh and Criteria with a staged change,
 and reconnect after Cancel. The stale Save or Cancel banner remained visible
 after the successful reconnect, with clean grid state and unchanged database values.
 
+## Signed-checkpoint retest (2026-11-24)
+
+The retest uses the product tree from signed commit `4197887`, with checkpoint
+`7c248df` recording the earlier run. With `FASTDB_REQUIRE_MARIADB_TESTS=1`,
+`cargo test --locked --offline -p db-wire --test query_plan_test mariadb -- --nocapture`
+passed both MariaDB 11.4.13 cases. Native estimated and actual plan metrics and
+ordinary and generated column metadata were exercised on the disposable server.
+
+| Case | Observed result | Status |
+| --- | --- | --- |
+| C01 / W07 · Connection picker and form | PostgreSQL, MySQL and SQLite were enabled. Db2, MariaDB, Oracle and SQL Server showed `Feature is coming` without switching the selected provider. Back/Next and Main/SSH/TLS navigation retained the connection draft. | Pass for these subcases |
+| C02 · PostgreSQL connection feedback | Invalid credentials and a closed loopback port produced distinct actionable errors. The credentials stayed masked and out of the error. Valid credentials passed ping and connected to A. | Pass |
+| C03 / C04 · Connection profiles | B connected and the profile kept group, color, timeout and application name. Timeout 121 was rejected. A seeded older disabled MariaDB profile retained its values and could not start a driver. | Pass for these subcases |
+| R03 · PostgreSQL read-only profile | SELECT returned the original row. UPDATE and Rename were refused, editing and Save remained disabled, and the transfer wizard had no writable destination. Independent PostgreSQL reads confirmed unchanged data and catalog. | Pass for these subcases |
+
+`cargo test --locked --offline -p xtask -- --nocapture` passed 17 unit tests
+and one CLI integration test.
+
 ## Open acceptance cases
 
 | Plan tasks | Remaining coverage |
