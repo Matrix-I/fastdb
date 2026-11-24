@@ -178,11 +178,50 @@ waiting on a test lock while B was active.
 | Failing Save | A displayed the check-constraint error and retained the staged value. B showed no error or row change. Independent PostgreSQL reads confirmed that both stored amounts remained 0.00. | Pass |
 | Navigator catalog Refresh | On `23014e4`, PostgreSQL confirmed A's catalog backend was waiting on a lock while B's selected grid fetched a newly committed value. After release, the new table appeared only in A's expanded Navigator and B remained selected. Independent reads confirmed that the table existed only in A. | Pass |
 
+## MariaDB session compatibility retest
+
+On `17ad68a`, a fresh MariaDB 11.4.13 loopback fixture passed both
+`query_plan_test` MariaDB cases with fixture enforcement enabled. The cases
+verified estimated and actual plan metrics, temporary table visibility across
+plan requests, stable physical session identity, and ordinary and generated
+column metadata.
+
+The same server passed six `mysql_session_test` cases with the MySQL
+provider configured. They covered savepoints, cancellation and rollback,
+read-only behavior, implicit commit and connection loss, caller runtime
+lifetime, and closing the tab's server session. The MySQL-specific Explain
+case was excluded from this compatibility run. MariaDB-configured tab
+lifecycle beyond the plan cases, TLS and SSH remain unverified.
+
+## Linux definition search, SSH and credential store retest
+
+The required live workspace run after the grid fix passed all five target
+cases across PostgreSQL, MySQL and SQLite. The tests covered literal
+wildcards, PostgreSQL overload identity, scoped SQLite source, and
+read-only file and private-memory SQLite URIs. The driver and storage
+sources are unchanged from that run through `17ad68a`.
+
+On `17ad68a`, fresh PostgreSQL 16.16 and MySQL 8.4.13 loopback fixtures and
+SQLite test databases also passed all five definition search cases.
+An earlier SQLite attempt failed at spill-file creation under a read-only
+`/var/tmp/fastdb` mount. The successful retry used the normal writable spill
+directory.
+
+The same PostgreSQL and MySQL fixtures passed SSH session routing tests with
+the database fixtures required. A separate SSH loopback test verified
+authentication and closure of owned connections. Five offline cases verified
+pinned host keys, MySQL TLS host naming, profile and credential references,
+and stale connection test rejection. The native Linux credential round trip
+passed on an isolated D-Bus session with a private keyring.
+
+The four vendor script directive parser cases passed. Live Oracle, SQL
+Server and Db2 coverage remains blocked on the vendor drivers and servers.
+
 ## Open acceptance cases
 
 | Plan tasks | Remaining coverage |
 | --- | --- |
-| 1–2 | Vendor ODBC clients and disposable Oracle, SQL Server and Db2 servers are unavailable. MariaDB-specific transport and tab-session coverage requires a driver-specific probe. |
+| 1–2 | Vendor ODBC clients and disposable Oracle, SQL Server and Db2 servers are unavailable. MariaDB-configured transport and tab lifecycle beyond the native plan cases require provider-specific probes. |
 | 3–6 | Linux connection and preference matrix, broader metadata and schema mutations, record/text/transaction grid cases, and remaining editor actions. |
 | 7–8 | Broader import cancellation and batch policies, transfer and native tools GUI matrix, and the Administration transaction and privilege cases outside the observed subcases. |
 | 9 | Ubuntu 24.04 interactive desktop acceptance and a newer production-signed update. Fontconfig omission remains open for minimal installs. |
