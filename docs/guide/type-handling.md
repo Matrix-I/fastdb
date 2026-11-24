@@ -5,6 +5,9 @@
 
 ## Value viewer and editor
 
+Grid column auto-fit measures the first line of multiline text. The full value
+remains available for copying, viewing and editing.
+
 Select a loaded grid cell and click **Value editor**. Text, JSON and XML use a
 multiline source editor; binary columns use a `\x`-prefixed hex editor. The side
 viewer reads and formats values on one background worker. Both surfaces reject

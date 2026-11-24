@@ -34,12 +34,18 @@ fn data_cell_width(text_w: f32) -> f32 {
     text_w + 2.0 * CELL_PADDING_X + 2.0
 }
 
-/// Leading part of a cell's text that is measured for the column width
+/// Grid text is clipped to a row. The font shaper needs a single line to measure that row.
+fn width_measure_line(text: &str) -> &str {
+    text.split(['\r', '\n']).next().unwrap_or_default()
+}
+
+/// Bounded first line of a cell's text for column width measurement
 fn cell_measure_sample(text: &str) -> &str {
-    match text.char_indices().nth(CELL_MEASURE_CHARS) {
+    let sample = match text.char_indices().nth(CELL_MEASURE_CHARS) {
         Some((i, _)) => &text[..i],
         None => text,
-    }
+    };
+    width_measure_line(sample)
 }
 
 /// Called with (row, col) when a data cell is pressed with the left or right button
