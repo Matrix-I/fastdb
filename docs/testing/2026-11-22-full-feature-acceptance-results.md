@@ -901,6 +901,22 @@ five-row result with both sort keys. Forward restored the Criteria
 expression and its two rows. PostgreSQL ordering, literal filters
 and history are covered in B02 and B03.
 
+### Linux TSV paste limits and empty-value actions
+
+PostgreSQL 16, MySQL 8.4 and SQLite used the same 36-row table with
+33 nullable text columns and a primary key on Debian 13 private Xvfb.
+Each accepted a 32×32 TSV block and removed the staged block with one
+Undo. A second block at exactly 262,144 bytes also staged on each
+provider and was undone. The 1,056-cell block and 262,145-byte input
+were rejected with the respective cell and byte limit messages.
+
+Pasting four bytes of literal `NULL` and saving stored text on each
+provider. An explicit **Set SQL NULL** saved a database NULL. In a
+new row with ID 101, **Use database default** changed the previously
+pasted text to DEFAULT, and Save stored `native_default`. Independent
+reads confirmed the distinct text, NULL and default states and found
+no persisted rows from the staged boundary block.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
