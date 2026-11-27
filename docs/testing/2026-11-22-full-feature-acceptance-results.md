@@ -236,6 +236,21 @@ also verified window-manager close, Refresh and Criteria with a staged change,
 and reconnect after Cancel. The stale Save or Cancel banner remained visible
 after the successful reconnect, with clean grid state and unchanged database values.
 
+### Linux Wayland benchmark smoke
+
+The retained Ubuntu 24.04 candidate DEB ran on a private KWin 6.6.7
+virtual Wayland output (1600 × 900) using Lavapipe and disposable
+configuration and spill paths. No X11 display was available to the
+process. A startup trace showed FastDB receiving its toplevel configure
+and submitting buffers that the compositor released.
+
+`fastdb --benchmark` exited 0. The 1,000,000 × 20 workload streamed in
+10.37 seconds, with 2.14 ms to the first batch. The app emitted all
+300 scroll intervals. Nearest-rank p95 was 91.89 ms, the largest
+interval was 171.79 ms, and seven intervals exceeded 100 ms. The
+scroll watchdog did not trigger. This was one software-rendered
+Wayland smoke run. Raw evidence is in `.sdd/wayland-perf-evidence/`.
+
 ## Signed-checkpoint retest (2026-11-24)
 
 The retest uses the product tree from signed commit `4197887`, with checkpoint

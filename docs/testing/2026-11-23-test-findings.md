@@ -227,3 +227,4 @@ records seven required failures.
 | UPD-05 | PASS | With the API returning 403, the release binary followed the latest-release redirect and displayed v0.9.0 without an installer. [Evidence](2026-11-22-full-feature-acceptance-results.md#linux-updater-api-fallback) |
 | PERF-01 | SKIPPED | This benchmark requires macOS on a fixed display. The current acceptance scope is Linux. |
 | PERF-02 | BLOCKED | Xvfb and the current Wayland session do not match the recorded X11 display configuration. [Performance evidence](2026-11-22-full-feature-acceptance-results.md#linux-release-performance) |
+| PERF-03 | PASS | One private native Wayland run completed the million-row workload and all 300 scroll intervals. Seven exceeded 100 ms, with a 171.79 ms maximum. The scroll watchdog did not trigger. [Wayland evidence](2026-11-22-full-feature-acceptance-results.md#linux-wayland-benchmark-smoke) |
