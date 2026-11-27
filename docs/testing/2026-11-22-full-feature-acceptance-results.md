@@ -1236,6 +1236,23 @@ a routing error. FastDB displayed `MySQL connection timed out` at
 dispatch and paint. The earlier stalled-handshake run measured
 peer closure independently at 1,001.1 and 2,001.4 ms.
 
+### Linux Unix socket discovery and TLS override
+
+In private Xvfb, the candidate discovered PostgreSQL's socket at
+`/var/run/postgresql/.s.PGSQL.5432` but returned `Not a directory`
+when connecting. An independent psql session through that directory
+confirmed Unix transport and no TLS. The candidate passes the full
+socket filename to tokio-postgres, which appends its own
+`.s.PGSQL.<port>` component.
+
+MySQL connected through `/var/run/mysqld/mysqld.sock` and its
+server-side session reported `Socket`. Both fixture sockets passed
+the native-client checks. After enabling TLS in the connection
+dialogs with the fixture CA, both FastDB profiles kept socket
+discovery enabled in saved settings and connected over TLS instead.
+PostgreSQL reported a non-NULL client address and `ssl=true`.
+MySQL reported `SSL/TLS`. Both sessions returned an active cipher.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
