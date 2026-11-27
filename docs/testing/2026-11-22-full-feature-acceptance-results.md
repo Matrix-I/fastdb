@@ -1189,6 +1189,23 @@ authenticated to the original server without re-entry. The local
 file still contained the original fixture credential and neither
 value was present in the connection metadata.
 
+### Linux legacy plaintext credential migration
+
+Two independent fixture profiles contained a plaintext PostgreSQL
+password. One used the managed `connections.json` format and the
+other used a working-directory `.fastdb_config.json`. With native
+storage selected in a private D-Bus session without Secret Service,
+FastDB logged the migration failure and kept both original source
+files byte-identical. It did not create a managed config for the
+working-directory case.
+
+After relaunch with an available isolated local store, both cases
+created a credential file matching the fixture and left only the
+reference in the managed config. The obsolete working-directory
+file was removed. Both migrated profiles authenticated over TCP to
+the disposable PostgreSQL server from the Navigator without
+password re-entry.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
