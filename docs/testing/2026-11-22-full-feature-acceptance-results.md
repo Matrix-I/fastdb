@@ -965,6 +965,31 @@ previous SQL payload remained in the clipboard and pasted into the editor
 again unchanged. At 1800 pixels, the error was readable after hiding the
 Navigator, and the footer still clipped the trailing guidance.
 
+### Linux native file dialogs with the portal stopped
+
+The Ubuntu 24.04 candidate DEB ran as a native Wayland client under
+Sway nested inside private Xvfb. The SQLite profile, downloads directory,
+D-Bus session, GTK portal and data were disposable.
+
+| Control | Portal running and chooser canceled | Portal stopped |
+| --- | --- | --- |
+| Export CSV and Export SVG | Native Save File opened. Cancel left the downloads directory empty. | Both displayed an export-dialog error. |
+| Open, Save and Compare plan snapshots | Native choosers opened. Cancel wrote no file and left the current plan result intact. | All three displayed an error opening the chooser. |
+| Import CSV Browse | Native Open File opened. Cancel returned to the wizard with no CSV selected. | No chooser opened. The wizard stayed responsive and left the source empty without displaying any error. |
+
+The test stopped both portal processes and confirmed that
+`org.freedesktop.portal.Desktop` had no owner on the private bus. A
+subsequent FastDB query returned the SQLite fixture value `recovery`.
+Independent SQLite read-back matched both original rows, and the
+downloads directory remained empty. Relaunching FastDB with the portal
+restored allowed the plan chooser to open again.
+
+The native backup output and client-directory chooser paths were
+exercised with a running portal in the PostgreSQL run. Their
+stopped-portal branches remain unverified. The candidate still has
+no reachable SQL copy and Value Editor file controls. Raw evidence
+is in `.sdd/native-portal-failure-evidence/`.
+
 ### Linux shortcut matrix on private GNOME
 
 GNOME Shell and Mutter 50.1 ran headless with a private D-Bus, native
