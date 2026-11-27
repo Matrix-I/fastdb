@@ -1130,6 +1130,22 @@ two tables and one foreign-key arrow from `child.parent_id` to
 `parent.id` at both scales. Card headings and fields stayed within
 their borders.
 
+### Linux plain-text font fallback
+
+With the default DejaVu Sans Mono on Debian 13, all five `END` markers
+in the SQLite plain-text result began at the same device-pixel column.
+The preceding cells included equal-length strings with different glyph
+widths, accented Vietnamese and SQL NULL.
+
+After removing `fonts-dejavu-core` and `fonts-dejavu-mono` in the
+disposable container, Fontconfig reported Nimbus Mono PS as the
+generic monospace match. FastDB exited at startup because GPUI could
+not resolve a UI font. Adding Noto Sans let the same binary open and
+render the result while the DejaVu packages remained absent. The first
+visible pixel of `END` ranged from column 455 to 487 across the five
+rows, confirming that FastDB rendered the result with proportional
+spacing despite the available monospace family.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
