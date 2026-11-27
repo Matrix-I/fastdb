@@ -1294,6 +1294,19 @@ The simulation offered `FastDB-0.9.0-arm64.dmg` (40.5 MB) and
 enabled Upgrade on Linux. This reflects the override's test asset.
 The test stopped at the modal without downloading or installing it.
 
+### Linux updater API fallback
+
+The packaged FastDB ran without the release override on private
+Xvfb in a network-isolated container. A trusted HTTPS fixture on
+loopback returned HTTP 403 to the releases API request. The fixture
+log recorded the next request as HEAD on the latest release page,
+followed by HEAD on its v0.9.0 tag after the HTTP 302 redirect.
+
+FastDB displayed v0.9.0 with a notice that the API did not supply
+release details. The modal offered **View on GitHub** and **Close**,
+and reported no matching prebuilt installer. No request left the
+isolated fixture.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
