@@ -1100,6 +1100,22 @@ Navigator was visible at 160 px with the same profile, even though
 the saved width was still 0. The startup restore path clamps the
 stored width to the 160–800 px resize range.
 
+### Linux title bar and tab clicks
+
+In private Openbox X11, double-clicking the in-app title and the empty
+part of the same bar alternated between 1280×800 and the maximized
+2000×981 client area. Selecting Script-1 and closing Script-2 kept the
+window maximized and left Script-1 open.
+
+In private Sway 1.10.1 nested inside Xvfb, Xwayland was disabled and
+Sway reported FastDB as an `xdg_shell` client. On a floating 800×550
+FastDB window, double-clicking the in-app title or the blank area
+left both the dimensions and position unchanged. Single clicks
+selected the correct tab and closed Script-2 without affecting
+geometry, and a Navigator double-click opened the SQLite connection.
+The update badge was absent in this offline fixture, so its click
+remains unverified.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
