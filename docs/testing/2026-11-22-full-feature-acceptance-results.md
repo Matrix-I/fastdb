@@ -998,6 +998,33 @@ GUI reported the error on PostgreSQL Export All CSV, MySQL Export All
 SQL and SQLite loaded CSV. All three original files matched byte for
 byte, with no temporary outputs left in the destination directory.
 
+### Linux CSV import formats, commit policies and cancellation
+
+On private Xvfb with the GTK file chooser, PostgreSQL 16, MySQL 8.4
+and SQLite imported UTF-16 BE with semicolon delimiters, UTF-16 LE
+with tabs, UTF-8 with pipes, and headerless UTF-8 with commas. The
+headerless file required manually mapping Col 1 and Col 2. Independent
+reads matched the exact Unicode, quoted punctuation, embedded LF, SQL
+NULL and quoted empty text. Existing PostgreSQL X01 and X06 also cover
+UTF-8 with headers, a cleared NULL token and the default for a skipped
+column.
+
+On each provider, explicit Integer conversion rejected the invalid ID
+with Skip off. With Skip on, the wizard reported two processed, one
+rejected and one committed. A duplicate ID in the second batch left
+zero newly committed rows under Atomic Commit and exactly IDs
+1001–1256 under Per-Batch Commit. The read-back matched the accepted
+conversion row, the surviving batch and the original fixture rows.
+
+Escape cancelled an Atomic import waiting on a separate database lock
+on each provider. The wizard reported zero committed and independent
+clients confirmed zero new rows. This covers lock-wait cancellation.
+The PostgreSQL X02 run still records a cleanup timeout for both
+policies when cancellation occurs during a delayed insert in batch
+two, with the Per-Batch statement still running after the GUI outcome.
+Per-Batch cancellation during an active insert on MySQL and SQLite
+remains unverified.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
