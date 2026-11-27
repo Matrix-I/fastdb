@@ -1064,6 +1064,17 @@ launched the same binary with its own profile and runtime directory.
 FastDB exited before opening a window, reporting permission denied
 while creating `fastdb-sql-session-*.jsonl` in the shared spill directory.
 
+### Linux crash restart and temporary file recovery
+
+With an autosaved SQLite script showing a million-row result in
+private Xvfb, the test sent SIGKILL to FastDB only. The terminated
+process left a 4,930-byte transaction log and a 29,058,172-byte
+spill file, both unchanged from before the kill. Relaunching with
+the same profile removed both abandoned files and created a fresh
+transaction log. All script hashes matched and the original SQL
+reappeared in the restored Script-1 tab. A normal Quit removed
+the new log.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
