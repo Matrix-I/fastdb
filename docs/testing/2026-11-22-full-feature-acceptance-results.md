@@ -1146,6 +1146,30 @@ visible pixel of `END` ranged from column 455 to 487 across the five
 rows, confirming that FastDB rendered the result with proportional
 spacing despite the available monospace family.
 
+### Linux Quit guards and save recovery
+
+On private Openbox Xvfb, Ctrl+Q and the window manager's Close both
+kept FastDB open with a staged SQLite grid edit and displayed the
+Save or Cancel message. A separate SQLite connection still read
+`original`. Grid Cancel cleared the edit. The earlier L03 result
+also records that the guard banner can remain after Cancel.
+
+A fixture directory at the expected `connections.json` path forced
+a connection name save to fail. The error and **Retry saving
+connections** were visible, and both departure routes kept FastDB
+open. Restoring the original file and clicking Retry saved the new
+name, cleared the save error and let the window close.
+
+For a dirty PostgreSQL column rename, both departure routes showed
+Save, Discard and Cancel. Cancel kept the draft, then Discard allowed
+the window to close. Independent psql confirmed the original column
+name and value. In a separate run, closing the window immediately
+after typing a script preserved its exact SQL for relaunch, matching
+the shortcut behavior recorded in L04.
+
+The tested Linux window exposed no application menu for Quit.
+F10 did not open an application menu, consistent with APP-04.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
