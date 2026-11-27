@@ -536,7 +536,7 @@ and in-memory databases. CLI reads inspected the stored data independently.
 | CON-02 | The existing SQLite file opened and displayed its seeded row. Connect created a new file and a write from its SQL tab stored marker 751, verified by sqlite3. A missing read-only file returned an open failure and was not created. Memory A stored its marker and Memory B independently returned zero matches for the table name. |
 | CON-07 | Read-only MySQL and SQLite profiles showed their mode, allowed reading and rejected SQL UPDATE. Double-click and F2 left the selected cells outside edit mode. Both providers opened a schema preview, then refused Add Column on Execute. Native reads confirmed unchanged rows and columns. Transfer listed only the writable MySQL and SQLite tables, omitting both live read-only profiles. Earlier R03 supplies PostgreSQL coverage. |
 | CON-08 | Save rejected the non-hex color. The valid MySQL profile displayed a green color marker under group QA after app restart. The saved settings held `#37a768` and group QA. |
-| CON-09 | Test rejected 0 and 121 seconds, and a live Test accepted 120. On a local socket that accepted but sent no MySQL greeting, FastDB reported a connection timeout. The independent listener measured peer closure at 1,001.1 and 2,001.4 ms for the configured 1 and 2 seconds. The unroutable-host subcase remains pending. |
+| CON-09 | Test rejected 0 and 121 seconds, and a live Test accepted 120. On a local socket that accepted but sent no MySQL greeting, FastDB reported a connection timeout. The independent listener measured peer closure at 1,001.1 and 2,001.4 ms for the configured 1 and 2 seconds. The network-path retest below covers the unroutable host. |
 | CON-14 | SQLite Main Tab and Shift+Tab moved between visible name and database fields. Advanced Tab moved from group to color. Switching back retained the draft. The 860 × 620 window exposed the body and footer. MySQL Copy details returned the complete clipped error without the supplied substitute password. |
 
 ### Cancel and scalar transfer across providers
@@ -1219,6 +1219,22 @@ profile's credential and position file matched their pre-delete bytes.
 After relaunch, only the surviving profile appeared. It authenticated
 without password re-entry and restored its moved card and foreign-key
 arrow. The deletion test used database credentials in local mode.
+
+### Linux MySQL connection deadlines without a responsive peer
+
+The GUI tested MySQL at the reserved address `192.0.2.250` in two
+isolated network namespaces. With no route, an independent socket
+returned `ENETUNREACH` immediately and FastDB displayed the same
+error within 440 ms of clicking Test Connection. The kernel error
+ended the attempt before the configured 2-second deadline.
+
+On an internal network with an on-link route and no neighbor at the
+target address, an independent socket waited rather than returning
+a routing error. FastDB displayed `MySQL connection timed out` at
+1,469 ms and 2,374 ms from the X11 click for the configured 1- and
+2-second deadlines, respectively. Those observations include GUI
+dispatch and paint. The earlier stalled-handshake run measured
+peer closure independently at 1,001.1 and 2,001.4 ms.
 
 ## Linux Administration and Session Monitor retest
 
