@@ -1253,6 +1253,22 @@ discovery enabled in saved settings and connected over TLS instead.
 PostgreSQL reported a non-NULL client address and `ssl=true`.
 MySQL reported `SSL/TLS`. Both sessions returned an active cipher.
 
+### Linux TLS trust and refusal matrix
+
+The release candidate's Test Connection action ran against PostgreSQL
+16 and MySQL 8.4 on private Xvfb. Both accepted the same fixture CA
+as an explicit PEM file and as an explicit DER file. With the CA
+field empty, both rejected the private issuer until the CA was
+installed in the disposable Debian system trust store. After a fresh
+launch, the same profiles with empty CA fields passed.
+
+A separate hostname resolved to the same loopback address. With an
+explicit trusted CA, both drivers rejected that name because it was
+outside the server certificate's SANs. Both drivers also refused their
+plaintext-only fixture ports when TLS was enabled. Independent clients
+connected to those ports with TLS disabled and confirmed there was no
+active cipher. CON-03 records the active TLS ciphers through the GUI.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
