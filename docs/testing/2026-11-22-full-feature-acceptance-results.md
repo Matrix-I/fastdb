@@ -976,6 +976,7 @@ D-Bus session, GTK portal and data were disposable.
 | Export CSV and Export SVG | Native Save File opened. Cancel left the downloads directory empty. | Both displayed an export-dialog error. |
 | Open, Save and Compare plan snapshots | Native choosers opened. Cancel wrote no file and left the current plan result intact. | All three displayed an error opening the chooser. |
 | Import CSV Browse | Native Open File opened. Cancel returned to the wizard with no CSV selected. | No chooser opened. The wizard stayed responsive and left the source empty without displaying any error. |
+| PostgreSQL Client Directory and Save Backup As | Both native choosers opened. Cancel preserved executable auto-detection, left the output unset and produced no file. | Both displayed a portal request error in the backup dialog. Run stayed disabled, and Close dismissed it. |
 
 The test stopped both portal processes and confirmed that
 `org.freedesktop.portal.Desktop` had no owner on the private bus. A
@@ -984,11 +985,10 @@ Independent SQLite read-back matched both original rows, and the
 downloads directory remained empty. Relaunching FastDB with the portal
 restored allowed the plan chooser to open again.
 
-The native backup output and client-directory chooser paths were
-exercised with a running portal in the PostgreSQL run. Their
-stopped-portal branches remain unverified. The candidate still has
-no reachable SQL copy and Value Editor file controls. Raw evidence
-is in `.sdd/native-portal-failure-evidence/`.
+A separate PostgreSQL 16 fixture confirmed that both backup chooser
+attempts left the test row intact. The candidate still has no reachable
+SQL copy or Value Editor file controls. Raw evidence is in
+`.sdd/native-portal-failure-evidence/`.
 
 ### Linux shortcut matrix on private GNOME
 
