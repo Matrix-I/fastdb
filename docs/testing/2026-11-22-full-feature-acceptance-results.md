@@ -1307,6 +1307,15 @@ release details. The modal offered **View on GitHub** and **Close**,
 and reported no matching prebuilt installer. No request left the
 isolated fixture.
 
+### Linux manual update check entry
+
+The private HTTPS release fixture identified v0.3.0 as current,
+matching the candidate. Startup reached the v0.3.0 endpoint and
+left the workspace without a badge or modal. No Check for Updates
+menu item was reachable in the Linux window. F10 and F1 left the
+workspace and fixture request log unchanged. The manual up-to-date
+confirmation remains unverified because the entry point is absent.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
