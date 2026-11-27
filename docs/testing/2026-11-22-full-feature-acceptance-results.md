@@ -933,6 +933,23 @@ original keys. A separate MySQL numeric FK with value 9 showed
 `MySQL lookup requires text keys to avoid implicit numeric coercion`
 when opening its referenced row. The source tab remained active.
 
+### Linux clipboard formats and output limit
+
+PostgreSQL 16, MySQL 8.4 and SQLite each copied a three-row, two-column
+selection as TSV, CSV and SQL INSERT on Debian 13 private Xvfb. All nine
+pastes were saved from GNOME Text Editor. An independent X11 clipboard
+read matched each file after accounting for the editor's final LF.
+TSV matched the expected bytes, and parsed CSV retained Unicode, quotes
+and embedded LF, with NULL and empty text both represented as empty
+fields. Replaying each saved SQL file in a scratch table restored the
+three rows, including distinct SQL NULL and empty text.
+
+Each provider also supplied 18 cells with 1,048,576 bytes each. Copy TSV
+reported that the selection exceeded the clipboard size limit. The
+previous SQL payload remained in the clipboard and pasted into the editor
+again unchanged. At 1800 pixels, the error was readable after hiding the
+Navigator, and the footer still clipped the trailing guidance.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
