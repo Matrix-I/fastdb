@@ -965,6 +965,21 @@ previous SQL payload remained in the clipboard and pasted into the editor
 again unchanged. At 1800 pixels, the error was readable after hiding the
 Navigator, and the footer still clipped the trailing guidance.
 
+### Linux IBus composition on private Wayland
+
+IBus 1.5.34-rc2 with the Unikey engine ran in a private D-Bus session on
+Sway nested in Xvfb. Typing Telex into native GNOME Text Editor produced
+`Tiếng Việt ` with exact UTF-8 clipboard bytes. In the FastDB candidate,
+the SQL editor and table filter stayed blank, and the staged cell editor
+and connection-name field retained their original text. The FastDB client
+trace received `zwp_text_input_v3.commit_string` for all four inputs,
+including `Tiếng ` and `Việt `. Independent SQLite and the saved
+connection metadata retained their initial values.
+
+The separate clipboard run verified Vietnamese, CJK and emoji paste in
+SQL and grid text. CJK and emoji composition remain unverified. Screenshots
+and commit-event excerpts are in `.sdd/wayland-ime-evidence/`.
+
 ### Linux clipboard round trips on private Wayland
 
 FastDB and GNOME Text Editor ran as native Wayland clients on a private
