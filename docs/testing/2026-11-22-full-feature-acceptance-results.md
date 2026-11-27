@@ -1170,6 +1170,25 @@ the shortcut behavior recorded in L04.
 The tested Linux window exposed no application menu for Quit.
 F10 did not open an application menu, consistent with APP-04.
 
+### Linux local and native credential isolation
+
+The release candidate connected to a disposable PostgreSQL 16 server
+requiring SCRAM over TCP. With `FASTDB_LOCAL_CREDENTIALS=1`, FastDB
+stored one credential under the profile's `local-credentials` tree.
+Both directory levels had mode 0700, the file had mode 0600, and
+`connections.json` retained only the credential reference. After
+Quit and relaunch, the saved profile reconnected without re-entry
+and returned the fixture user over TCP.
+
+With the same profile opened in native mode, the password field was
+empty and an independent D-Bus search found no FastDB item in the
+isolated GNOME Keyring. Saving a different fixture credential
+explicitly in native mode created one Secret Service entry and kept
+the local file byte-identical. Returning to local mode again
+authenticated to the original server without re-entry. The local
+file still contained the original fixture credential and neither
+value was present in the connection metadata.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
