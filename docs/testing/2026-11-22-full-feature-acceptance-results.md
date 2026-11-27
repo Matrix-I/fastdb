@@ -1393,6 +1393,22 @@ then displayed Permission denied. Independent psql under the same
 role confirmed SQLSTATE `42501` from `pg_policy`. Disconnect
 replaced that prior error with the Disconnected state.
 
+### Linux value viewer and editor entry
+
+The PostgreSQL V01 replay on the retained candidate showed SQL NULL, exact
+JSON including duplicate keys and a large integer, unchanged XML, and hex
+output distinguishing nonempty bytes, empty bytes and SQL NULL. Two source
+timestamp offsets represented the same instant in PostgreSQL and in the viewer.
+
+V02 reached a grid message directing binary edits to Value Editor. The grid
+context menu, footer and Value panel exposed no way to open it. A call-site
+search on the acceptance branch found only the shared `open_value_editor`
+definition. This is a failed GUI entry for the provider-independent editor.
+The 256 KiB editor boundary, UTF and binary file round trips, invalid encoding,
+UTC toggle and stale Apply remain unverified through the editor. This pass
+uses the existing PostgreSQL V01–V03 replay. The viewer was not replayed on
+MySQL or SQLite for this case.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
