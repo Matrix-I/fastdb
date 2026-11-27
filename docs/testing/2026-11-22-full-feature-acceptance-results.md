@@ -1221,6 +1221,27 @@ the shortcut behavior recorded in L04.
 The tested Linux window exposed no application menu for Quit.
 F10 did not open an application menu, consistent with APP-04.
 
+### Linux Secret Service restart, lock and save retry
+
+FastDB ran on private Sway nested in Xvfb, with its own D-Bus and
+GNOME Keyring data. The disposable PostgreSQL server required SCRAM
+over TCP. With no Secret Service owner and activation disabled, saving
+a password displayed the credential-storage error and Retry control.
+Ctrl+Q left the window open and the connection metadata stayed
+byte-identical. Starting GNOME Keyring on that bus and clicking Retry
+cleared the banner and allowed Quit. D-Bus reported one FastDB item.
+The connection file recorded the keyring reference and no password.
+
+After a FastDB restart, opening the saved profile connected without
+re-entry. An independent PostgreSQL session verified the fixture user,
+database and TCP connection. After another Quit, the private bus
+confirmed that the login collection and item were locked. On relaunch,
+FastDB logged that the unlock prompt was dismissed. Opening the profile
+showed an empty password field, PostgreSQL reported zero matching TCP
+sessions, and the locked item and its reference remained. Unlocking
+through a desktop prompt was not exercised in the isolated session.
+Evidence is in `.sdd/native-credential-evidence/`.
+
 ### Linux local and native credential isolation
 
 The release candidate connected to a disposable PostgreSQL 16 server
