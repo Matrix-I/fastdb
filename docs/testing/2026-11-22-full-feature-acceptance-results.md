@@ -1053,6 +1053,17 @@ its spill file. Quitting SQLite with its million-row tab open removed
 that spill file. This check measures the stated grid workloads under
 Xvfb.
 
+### Linux spill directory permissions for a second user
+
+The GRID-01 run observed nonempty files under `/var/tmp/fastdb` during
+million-row results and verified their removal on tab close and Quit.
+In a separate Debian 13 container with private Xvfb and no pre-existing
+spill directory, FastDB running as UID 1000 created it with owner and
+group 1000 and mode 0755. That FastDB process then quit. UID 1001
+launched the same binary with its own profile and runtime directory.
+FastDB exited before opening a window, reporting permission denied
+while creating `fastdb-sql-session-*.jsonl` in the shared spill directory.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
