@@ -950,6 +950,29 @@ previous SQL payload remained in the clipboard and pasted into the editor
 again unchanged. At 1800 pixels, the error was readable after hiding the
 Navigator, and the footer still clipped the trailing guidance.
 
+### Linux table transactions and failed-batch recovery
+
+MySQL 8.4 and SQLite used a three-row fixture with a nonnegative value
+constraint on Debian 13 private Xvfb. Independent clients read values
+in primary-key order. Auto Save changed `(10,20,30)` to `(11,20,30)`
+immediately. Manual Save displayed `(12,20,30)` in the table while the
+independent client still read `(11,20,30)`. A later batch staged
+`(12,21,-1)` and hit the constraint. Both failed drafts were still
+visible. Cancel and Commit persisted only the earlier Manual Save
+as `(12,20,30)`.
+
+In Manual mode, Rollback removed a saved update and a separate draft,
+restoring `(12,20,30)`. Commit also applied an edit that had only been
+staged, yielding `(12,23,30)`. Auto rejected a two-row batch with an
+invalid value and preserved `(12,23,30)`. After Cancel, a valid Auto
+Save committed `(19,23,30)` independently on each provider.
+
+On MySQL, choosing Auto-Commit after a successful toolbar Rollback
+twice showed `Commit or Rollback before enabling autocommit` and left
+the table in Manual mode. Closing and reopening the table returned it
+to Auto. SQLite switched to Auto in the same tab. PostgreSQL is covered
+by W03.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
