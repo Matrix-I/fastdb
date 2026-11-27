@@ -965,6 +965,27 @@ previous SQL payload remained in the clipboard and pasted into the editor
 again unchanged. At 1800 pixels, the error was readable after hiding the
 Navigator, and the footer still clipped the trailing guidance.
 
+### Linux clipboard round trips on private Wayland
+
+FastDB and GNOME Text Editor ran as native Wayland clients on a private
+Sway compositor nested in Xvfb, with Xwayland disabled. SQL text and a
+SQLite grid cell pasted into the external editor and copied back with
+identical UTF-8 bytes, including decomposed Vietnamese marks, CJK and
+emoji. Independent SQLite supplied the cell's expected bytes.
+
+Two pointer-only clicks on Copy DDL left the previous grid text on the
+clipboard. Copy record likewise left the preceding DDL text. The Wayland
+trace showed both click handlers submitting the latest keyboard serial
+instead of the newer pointer serial. Pressing Right in FastDB before
+clicking allowed both actions to update the clipboard. The DDL pasted
+into the editor and replayed into a scratch SQLite database with identical
+schema. The record pasted with the expected headers, ID and Unicode label.
+Raw evidence is in `.sdd/wayland-clipboard-evidence/`.
+
+The prior X11 run covered nine grid pastes into GNOME Text Editor plus
+separate FastDB clipboard reads for SQL, DDL and Record. External-editor
+round trips for those three actions were verified in the Wayland run.
+
 ### Linux table transactions and failed-batch recovery
 
 MySQL 8.4 and SQLite used a three-row fixture with a nonnegative value
