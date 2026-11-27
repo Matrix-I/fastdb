@@ -1353,6 +1353,27 @@ had only the localhost DNS SAN. Restoring the database hostname
 allowed Connect and a SQL query. PostgreSQL reported TLS 1.3 and
 both providers reported the `TLS_AES_256_GCM_SHA384` session cipher.
 
+### Linux editable PostgreSQL results and atomic conflict
+
+On private Xvfb, **Load editable** accepted a direct SELECT of a
+permanent PostgreSQL 16 table with a primary key. The grid allowed
+edits to integer, text, varchar, Boolean and UUID fields. A single
+Save committed all five changes and psql read the exact values.
+The primary-key and numeric columns independently showed the
+read-only message when opened for editing.
+
+After staging edits to IDs 1 and 2, a separate psql session changed
+ID 1. Save reported that no edits were saved and retained both
+drafts. Independent psql still read the external value on ID 1 and
+the original value on ID 2. Cancel and Load editable displayed that
+same database state. The script status still showed the previous
+successful Save while the current result showed the conflict banner.
+
+The editor rejected a view, join, expression projection, WHERE
+clause, RLS table, partitioned table, keyless table and table with
+a user trigger. The direct-query restrictions and table eligibility
+restrictions appeared as distinct error messages.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
