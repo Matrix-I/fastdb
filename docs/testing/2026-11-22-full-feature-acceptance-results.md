@@ -1116,6 +1116,20 @@ geometry, and a Navigator double-click opened the SQLite connection.
 The update badge was absent in this offline fixture, so its click
 remains unverified.
 
+### Linux HiDPI grid and diagram
+
+The release candidate ran on a private 3000×1800 Xvfb with the GPUI
+X11 scale set to 1 and then 2. The same nominal window measured
+1280×800 and 2560×1600 device pixels, respectively. Text, including
+Vietnamese accents, was readable in both captures. The grid's 26-pixel
+row spacing became 52 pixels and the column lines stayed aligned.
+
+The PostgreSQL, MySQL and SQLite provider logos rendered in their
+picker cards at both scales. The SQLite diagram displayed the same
+two tables and one foreign-key arrow from `child.parent_id` to
+`parent.id` at both scales. Card headings and fields stayed within
+their borders.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
