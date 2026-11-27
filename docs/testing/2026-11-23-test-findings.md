@@ -224,4 +224,5 @@ records seven required failures.
 | UPD-03 | PASS | The v0.9.0 badge reopened the release notes without resizing the window. The Linux override offered the simulated arm64 DMG and enabled Upgrade. [Evidence](2026-11-22-full-feature-acceptance-results.md#linux-simulated-update-badge-and-notes) |
 | UPD-04 | BLOCKED | The latest published release remains v0.3.0. A compatible newer production-signed target is required. [Package evidence](2026-11-22-full-feature-acceptance-results.md#published-debian-package-upgrade-from-rc-to-final) |
 | UPD-05 | PASS | With the API returning 403, the release binary followed the latest-release redirect and displayed v0.9.0 without an installer. [Evidence](2026-11-22-full-feature-acceptance-results.md#linux-updater-api-fallback) |
+| PERF-01 | SKIPPED | This benchmark requires macOS on a fixed display. The current acceptance scope is Linux. |
 | PERF-02 | BLOCKED | Xvfb and the current Wayland session do not match the recorded X11 display configuration. [Performance evidence](2026-11-22-full-feature-acceptance-results.md#linux-release-performance) |
