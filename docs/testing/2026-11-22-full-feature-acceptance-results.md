@@ -1374,6 +1374,25 @@ clause, RLS table, partitioned table, keyless table and table with
 a user trigger. The direct-query restrictions and table eligibility
 restrictions appeared as distinct error messages.
 
+### Linux table Properties capability states
+
+Private Xvfb opened table Properties on PostgreSQL 16, MySQL 8.4
+and SQLite. All three showed the fixture's two columns while
+connected and a separate Disconnected message when the owner
+session was absent. MySQL and SQLite showed a Not implemented
+message for Triggers and an Unsupported message for Policies.
+SQLite also marked Partitions unsupported. The Virtual category
+remained marked pending.
+
+A PostgreSQL role with schema USAGE and no table privileges initially
+had no visible schema in Navigator. A temporary SELECT grant exposed
+the table and its Policies section showed that the reader had loaded
+zero objects. With the tab still open, the test revoked table SELECT
+and access to the policy catalog in the disposable database. Reload
+then displayed Permission denied. Independent psql under the same
+role confirmed SQLSTATE `42501` from `pg_policy`. Disconnect
+replaced that prior error with the Disconnected state.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
