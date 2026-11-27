@@ -917,6 +917,22 @@ pasted text to DEFAULT, and Save stored `native_default`. Independent
 reads confirmed the distinct text, NULL and default states and found
 no persisted rows from the staged boundary block.
 
+### Linux composite key navigation and picker
+
+PostgreSQL G06 covered both directions, staged both key columns and
+verified Cancel with independent read-back. On Debian 13 private Xvfb,
+MySQL 8.4 and SQLite used child rows `1 → (A,01)`, `2 → (B,01)` and
+`3 → (A,02)`. **Open referenced row** applied both predicates and
+returned only `(A,01,A-one)`. **Open referencing rows** applied both
+predicates and returned only child ID 1.
+
+**Choose key** opened the parent picker on each provider. Selecting
+`(B,02)` staged both columns on child ID 1. Cancel restored `(A,01)`,
+and independent reads confirmed all three child rows still had their
+original keys. A separate MySQL numeric FK with value 9 showed
+`MySQL lookup requires text keys to avoid implicit numeric coercion`
+when opening its referenced row. The source tab remained active.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
