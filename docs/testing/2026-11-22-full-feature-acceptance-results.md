@@ -1316,6 +1316,25 @@ menu item was reachable in the Linux window. F10 and F1 left the
 workspace and fixture request log unchanged. The manual up-to-date
 confirmation remains unverified because the entry point is absent.
 
+### Linux PKCS#12 client identity
+
+On private Xvfb, PostgreSQL 16 required a valid client certificate
+for the fixture role and MySQL 8.4 required X509 for the fixture account.
+Both rejected a connection without a client identity. Both accepted
+a password-protected `.p12` archive and an empty-password `.pfx`
+archive. A wrong archive password and a certificate-only archive
+produced the same local error asking to check the PKCS#12 archive,
+private key and password.
+
+After saving the protected archive and relaunching, both profiles
+reconnected without re-entry. PostgreSQL returned SSL enabled and
+`/CN=fastdb_tls_client` as the session client DN. MySQL returned a
+nonempty session cipher on its X509-required account. In both
+profiles, clearing the archive path and password made Test Connection
+fail again. Save removed the identity metadata and the corresponding
+local credential file. The plaintext archive password never appeared
+in the saved connection metadata.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
