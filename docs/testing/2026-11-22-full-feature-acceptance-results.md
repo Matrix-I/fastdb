@@ -973,6 +973,31 @@ the table in Manual mode. Closing and reopening the table returned it
 to Auto. SQLite switched to Auto in the same tab. PostgreSQL is covered
 by W03.
 
+### Linux export formats, cancellation and write failure
+
+On private Xvfb with a GTK file portal, PostgreSQL 16, MySQL 8.4 and
+SQLite each exported the same three rows through loaded CSV, SQL,
+JSON, HTML and Markdown and through Export All CSV and SQL. Independent
+parsers validated the 21 files, including Unicode and quotes in the
+fixture. Loaded CSV represented SQL NULL and empty text with an empty
+field. Full-source CSV used the unquoted `\N` marker for SQL NULL.
+Replaying each of the six SQL files with its native engine restored the
+three rows and preserved the distinction between NULL and empty text.
+
+Escape dismissed the GTK Export All chooser on each provider. With a
+pre-existing destination accepted in GTK, **Cancel export** stopped
+MySQL Export All SQL while a separate session held a table write lock
+and SQLite Export All CSV while a separate client held an exclusive
+database lock. Both footers reported that the destination was unchanged.
+The destination bytes matched, and neither run left a temporary output.
+PostgreSQL's running Cancel and byte comparison are recorded in X05.
+
+A temporary 64 KiB per-process file limit provoked `File too large
+(os error 27)` after accepting replacement of an existing file. The
+GUI reported the error on PostgreSQL Export All CSV, MySQL Export All
+SQL and SQLite loaded CSV. All three original files matched byte for
+byte, with no temporary outputs left in the destination directory.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
