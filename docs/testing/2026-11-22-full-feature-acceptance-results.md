@@ -615,7 +615,7 @@ Ubuntu mirror package prevented setting up the new Ubuntu fixture.
 | Case | Observed |
 | --- | --- |
 | SQL-01 | `+ SQL` created a script per profile. The PostgreSQL and SQLite autosave files under `scripts/qa-pg` and `scripts/qa-sq` matched the input byte for byte (635 and 67,113 bytes). The SQL rail has no Rename or Delete action. See the MySQL and SQLite chooser retest below. |
-| SQL-08 | In a fresh workspace, SQLite returned 951 and the Transaction log search for `qa_clean_quit` returned its single successful entry. Closing the modal restored the result. The matching mode-0600 log file disappeared after GUI Quit terminated FastDB, while the container and log bind mount stayed live. The previous app session was absent from the new process's modal. Earlier W04 covers PostgreSQL paging. Release of modal resources remains unverified. |
+| SQL-08 | In a fresh workspace, SQLite returned 951 and the Transaction log search for `qa_clean_quit` returned its single successful entry. Closing the modal restored the result. The matching mode-0600 log file disappeared after GUI Quit terminated FastDB, while the container and log bind mount stayed live. The previous app session was absent from the new process's modal. Earlier W04 covers PostgreSQL paging. The controlled close retest below verified release of the pending snapshot descriptor. |
 | SQL-12 | PostgreSQL and SQLite returned length 67,067 from statements of 67,109 and 67,113 bytes. Their separate history files retained the short queries and omitted the oversized statements. Together with the preceding MySQL run, file-level omission is verified for all three providers. The visible editor rails lacked History, and the history handler has no registered invocation. Recall into the editor therefore fails the documented GUI workflow. |
 | SQL-14 | PostgreSQL joined MySQL and SQLite in retaining the newest 20 results. After submitting markers 1–23, the newest result was 23, the first retained result was 4, and closing that result selected 5. The SQLite splitter attempt after the large statement yielded no reliable bound measurement. The short-statement split retest below covers both providers. |
 
@@ -708,6 +708,23 @@ reported a closed session, and the next query in the same tab returned
 the independently seeded row 42. PostgreSQL `pg_sleep` and cancellation
 are covered in S06. These runs exercise long statements and recovery.
 The documented preset configuration and firing remain unverified.
+
+### Linux Transaction log resource release on close
+
+The packaged candidate ran with a SQLite fixture on private Xvfb.
+A test-only interposer delayed a positional read of the disposable SQL
+session log. It did not change the bytes returned by the read. The
+transaction log opened with an empty page while the writer and pending
+snapshot each held a descriptor for the same file. Escape dismissed the
+modal before the delay was released. After release, the snapshot
+descriptor disappeared and only the session writer remained.
+
+The same script tab returned 953 on its next query. Reopening the modal
+and searching for the query marker displayed exactly one result, matching
+the independent JSONL read. Ctrl+Q removed the mode-0600 session log while
+the fixture container stayed live. Relaunch without the interposer created
+a different session file, and the old marker was absent in both the modal
+and that file. Evidence is in `.sdd/transaction-log-close-evidence/`.
 
 ## Linux Navigator search cap and layout retest
 
@@ -1801,7 +1818,7 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 | W01 | Fail (workspace title drag) | The native Openbox frame moved, but dragging the documented FastDB title row did not move the window. Double-click zoom, divider resize, separate rows and the narrow scrollable toolbar worked. |
 | W02 | Fail (empty Tables query) | All mode searches, expanded tree restore and file open passed. Empty Tables search did not offer Browse catalog objects. |
 | W03 | Pass | Verified immediate Auto-Commit, Manual visibility and durability, failed-batch rollback, close/disconnect and selector placement with independent psql. |
-| W04 | Fail (parameter redaction) | A synthetic bound value appeared verbatim in Transaction log and matched a search. Paging and retention across tab close and disconnect passed. A later SQLite process opened with an empty session log. Modal resource release remains unverified. |
+| W04 | Fail (parameter redaction) | A synthetic bound value appeared verbatim in Transaction log and matched a search. Paging and retention across tab close and disconnect passed. A later SQLite process opened with an empty session log. The controlled SQLite follow-up verified that closing the modal releases the pending snapshot descriptor. |
 | W05 | Pass | Verified zero-row, command and error results, split bounds, independent tab layouts, the rail at normal height and full editor after the last result closed. |
 | W06 | Pass | Private Xvfb verified Navigator autoload, read-only Record navigation, mode switches and copy, Text alignment, SQL NULL, horizontal scrolling and the 2,000-row / 255-character caps. |
 | W07 | Pass | Setup retained values across tabs and deferred providers were unavailable. |
@@ -1852,7 +1869,7 @@ tracks the release workflow. Each case ID appears once in its matrix.
 | --- | --- |
 | Linux P0-05 | Retest B01, S05, S06, T02, X02, X04 and L03 on a fixed candidate. The crash fix is already present in this package. B01 still clips the second line, and X04 still records BLOB fidelity and cleanup failures. |
 | Other desktop failures | See each Fail entry in the findings matrix for the provider, missing route or observed behavior. V03 stale Apply and the Value Editor file and UTC actions require a reachable Value Editor. MySQL and SQLite native backup and restore require reachable menu entries. |
-| Remaining subcases | The runbook and case evidence identify remaining preference restart checks, metadata and schema mutations, transaction-log modal resource release, and additional PostgreSQL native-tool variants. Provider-specific outcomes are recorded alongside the completed subcases. |
+| Remaining subcases | The runbook and case evidence identify remaining preference restart checks, metadata and schema mutations, and additional PostgreSQL native-tool variants. Provider-specific outcomes are recorded alongside the completed subcases. |
 | Production updater | UPD-04 requires a compatible newer release signed with the production trust key. The package upgrade and synthetic updater cases have separate evidence. |
 | Linux performance | PERF-02 requires the approved X11 display configuration and a comparable baseline. Dedicated-host cold-start acceptance remains open. The private native Wayland benchmark completed and recorded its frame intervals. |
 | Platform and provider scope | macOS is deferred for this Linux run. Live vendor ODBC is Blocked. |
