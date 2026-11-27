@@ -1113,8 +1113,8 @@ FastDB window, double-clicking the in-app title or the blank area
 left both the dimensions and position unchanged. Single clicks
 selected the correct tab and closed Script-2 without affecting
 geometry, and a Navigator double-click opened the SQLite connection.
-The update badge was absent in this offline fixture, so its click
-remains unverified.
+UPD-03 later verified the update badge click under X11 with the
+release override. The Wayland badge remains unverified.
 
 ### Linux HiDPI grid and diagram
 
@@ -1281,6 +1281,18 @@ The same suppression held when the saved timestamp was seeded at
 With the saved timestamp seeded 24 hours and 5 seconds in the past,
 startup replaced it and displayed simulated v0.8.0. Each comparison
 used the same isolated profile across normal Quit and relaunch.
+
+### Linux simulated update badge and notes
+
+With `FASTDB_OVERRIDE_LATEST_VERSION=0.9.0` in a fresh private Xvfb
+profile, FastDB 0.3.0 displayed the v0.9.0 update modal and release
+notes. Closing the modal left the **Update (v0.9.0)** badge in the
+tab row. Clicking the badge reopened the same notes, and the Openbox
+window retained its maximized state and 2000×881 client area.
+
+The simulation offered `FastDB-0.9.0-arm64.dmg` (40.5 MB) and
+enabled Upgrade on Linux. This reflects the override's test asset.
+The test stopped at the modal without downloading or installing it.
 
 ## Linux Administration and Session Monitor retest
 
