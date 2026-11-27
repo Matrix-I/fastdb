@@ -1075,6 +1075,19 @@ transaction log. All script hashes matched and the original SQL
 reappeared in the restored Script-1 tab. A normal Quit removed
 the new log.
 
+### Linux empty-profile startup
+
+The retained 0.3.0 candidate launched with an empty profile on Debian 13
+in private 2000×1000 Xvfb. The Openbox frame was centered and FastDB's
+client area measured exactly 1280×800. The workspace had no tabs or
+connections, showed Add Connection and displayed no error banner.
+
+The first launch in this disposable environment mapped the client after
+410 ms. A pixel in the workspace first became nonblack after 2,874 ms,
+above the 2,000 ms budget. The probe used a monotonic clock and polled
+the mapped window from the same container. This is a software-rendered
+Xvfb observation. The physical-display cold-start gate remains open.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
