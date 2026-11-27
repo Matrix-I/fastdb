@@ -1269,6 +1269,19 @@ plaintext-only fixture ports when TLS was enabled. Independent clients
 connected to those ports with TLS disabled and confirmed there was no
 active cipher. CON-03 records the active TLS ciphers through the GUI.
 
+### Linux startup update check interval
+
+On private Xvfb with no network, the release candidate's first
+start showed simulated v0.9.0 and persisted the check timestamp.
+A second start with a different simulated version left the
+timestamp unchanged and showed neither an update dialog nor a badge.
+The same suppression held when the saved timestamp was seeded at
+23 hours and 58 minutes 50 seconds before the probe.
+
+With the saved timestamp seeded 24 hours and 5 seconds in the past,
+startup replaced it and displayed simulated v0.8.0. Each comparison
+used the same isolated profile across normal Quit and relaunch.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
