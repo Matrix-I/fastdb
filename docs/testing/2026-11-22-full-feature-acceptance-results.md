@@ -1025,7 +1025,7 @@ The separate clipboard run verified Vietnamese, CJK and emoji paste in
 SQL and grid text. CJK and emoji composition remain unverified. Screenshots
 and commit-event excerpts are in `.sdd/wayland-ime-evidence/`.
 
-### Linux clipboard round trips on private Wayland
+### Linux clipboard round trips on private X11 and Wayland
 
 FastDB and GNOME Text Editor ran as native Wayland clients on a private
 Sway compositor nested in Xvfb, with Xwayland disabled. SQL text and a
@@ -1042,9 +1042,15 @@ into the editor and replayed into a scratch SQLite database with identical
 schema. The record pasted with the expected headers, ID and Unicode label.
 Raw evidence is in `.sdd/wayland-clipboard-evidence/`.
 
-The prior X11 run covered nine grid pastes into GNOME Text Editor plus
-separate FastDB clipboard reads for SQL, DDL and Record. External-editor
-round trips for those three actions were verified in the Wayland run.
+On a separate Openbox/Xvfb display, the 49-byte SQL statement with
+decomposed Vietnamese marks, CJK and emoji went from GNOME Text Editor
+to FastDB and back unchanged. Pointer-only Copy DDL and Copy record
+both updated the clipboard. GNOME Text Editor pasted and copied back
+the exact 66-byte DDL and 118-byte record. An independent SQLite session
+ran the copied SQL, matched the replayed DDL against the original schema
+and read the ID and Unicode label shown in the record. The prior X11
+run covered nine additional grid-format pastes. Raw X11 evidence is
+in `.sdd/x11-clipboard-roundtrip-evidence/`.
 
 ### Linux table transactions and failed-batch recovery
 
