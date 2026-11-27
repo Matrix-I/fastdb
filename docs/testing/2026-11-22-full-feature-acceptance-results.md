@@ -1021,9 +1021,18 @@ trace received `zwp_text_input_v3.commit_string` for all four inputs,
 including `Tiếng ` and `Việt `. Independent SQLite and the saved
 connection metadata retained their initial values.
 
-The separate clipboard run verified Vietnamese, CJK and emoji paste in
-SQL and grid text. CJK and emoji composition remain unverified. Screenshots
-and commit-event excerpts are in `.sdd/wayland-ime-evidence/`.
+The CJK and emoji follow-up used the same candidate on a fresh private
+Sway display. IBus CangJie 5 composed `日` from A then Space. IBus Unicode
+input composed `🎉` from U+1F389. Both committed to native GNOME Text Editor
+and its clipboard matched the expected UTF-8 bytes. FastDB received
+Wayland commit events for both characters in the SQL editor, table filter,
+grid cell editor and connection-name field. SQL and filter stayed empty.
+The cell and connection name retained their original text, also confirmed
+with independent SQLite and connection-file reads. The separate clipboard
+run verified Vietnamese, CJK and emoji paste in SQL and grid text.
+
+Screenshots and commit-event excerpts are in `.sdd/wayland-ime-evidence/`
+and `.sdd/wayland-ime-cjk-emoji-evidence/`.
 
 ### Linux clipboard round trips on private X11 and Wayland
 
