@@ -1252,8 +1252,12 @@ FastDB window, double-clicking the in-app title or the blank area
 left both the dimensions and position unchanged. Single clicks
 selected the correct tab and closed Script-2 without affecting
 geometry, and a Navigator double-click opened the SQLite connection.
-UPD-03 later verified the update badge click under X11 with the
-release override. The Wayland badge remains unverified.
+UPD-03 verified the update badge under X11 with the release override.
+A follow-up with the same simulated v0.9.0 on native Wayland dismissed
+the initial release notes, clicked the badge twice with Escape between
+clicks, and reopened the notes both times. The private Sway tree reported
+the same `xdg_shell` rectangle at every step, position (360, 100) and
+size 1280 × 800. Evidence is in `.sdd/wayland-updater-badge-evidence/`.
 
 ### Linux HiDPI grid and diagram
 
