@@ -965,6 +965,26 @@ previous SQL payload remained in the clipboard and pasted into the editor
 again unchanged. At 1800 pixels, the error was readable after hiding the
 Navigator, and the footer still clipped the trailing guidance.
 
+### Linux shortcut matrix on private GNOME
+
+GNOME Shell and Mutter 50.1 ran headless with a private D-Bus, native
+Wayland and a 1700 × 1000 virtual output. Mutter's test-session remote
+input sent the Linux key chords to the packaged FastDB candidate. The
+settings backend used defaults and did not access the desktop user's
+settings. No GNOME intercept was observed for the exercised chords,
+and the installed default window-manager, Shell and media-key lists
+had no exact conflicting binding for the documented matrix.
+
+| Shortcut group | Observed |
+| --- | --- |
+| Run and format | Ctrl+Enter ran the caret statement and later only the selection. The latter displayed 733 while 734 remained unexecuted. Ctrl+Shift+Enter appended both script statements. Ctrl+Shift+F split FROM and WHERE onto separate lines. |
+| Movement and selection | Arrows, Home/End and the word, line and script modifiers moved the caret in the two-line fixture. Inserted markers confirmed Alt+Left/Right and Ctrl+arrows in the saved bytes. Shift+Left and Shift+click highlighted text. Select all, Copy, Cut and Paste restored the complete script text. |
+| Completion and filter | Tab and Enter accepted the SQLite table completion in separate trials. Escape dismissed the list and retained the typed prefix. Filter Enter reduced IDs 731 and 732 to 731. Escape removed filter focus and preserved its contents and result. |
+| Workspace | Ctrl+B hid and restored Navigator. Ctrl+Shift+T changed the theme. Ctrl+=, Ctrl++, Ctrl+- and Ctrl+0 changed editor size and restored its default. Ctrl+W closed the active script and Ctrl+] reopened it with the saved text. Ctrl+Q destroyed the Wayland toplevel and the FastDB process exited 0. |
+
+Screenshots, saved navigation bytes and the default-binding export are
+in `.sdd/gnome-shortcuts-evidence/`.
+
 ### Linux IBus composition on private Wayland
 
 IBus 1.5.34-rc2 with the Unikey engine ran in a private D-Bus session on
