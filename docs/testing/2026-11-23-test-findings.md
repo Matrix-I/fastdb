@@ -115,3 +115,82 @@ Defects found during the pass are recorded here and were not fixed during it.
   `FASTDB_TEST_PG_PORT` is unset. It does not check `FASTDB_REQUIRE_DB_TESTS`,
   unlike the other live tests. Required runs can therefore pass without
   exercising it. It did run in C3.
+
+## Linux continuation — 2026-11-26
+
+The run at `359502a` above is the original evidence. The continuation
+uses the Ubuntu 24.04 x86_64 DEB built at `7c248df` on isolated Xvfb,
+with disposable provider fixtures. macOS is deferred by scope. The
+[full acceptance report](2026-11-22-full-feature-acceptance-results.md)
+records the environment, reproduction and independent read-back.
+
+### E0 failed or blocked cases
+
+The [runbook index](2026-11-22-full-feature-acceptance-results.md#linux-desktop-runbook-coverage)
+lists all 61 cases, with 43 Pass, 16 Fail, 1 Blocked and 1 Deferred.
+The [P0-05 release decision](2026-11-22-full-feature-acceptance-results.md#linux-p0-05-release-decision)
+records seven required failures.
+
+| Case | Result | Observation and prerequisite |
+| --- | --- | --- |
+| E0 B01 | FAIL | Paging, scroll to ID 1000, resize/autofit and Grid/Text passed. At 1280 pixels and scale 1, the lines of an LF-containing note were cut by the fixed row bounds. Its clipboard bytes matched PostgreSQL exactly. |
+| E0 M01 | FAIL | Properties, full clipboard, native DDL replay and estimate labeling passed. The narrowed scale-2 Columns view wrapped and clipped the comment row. |
+| E0 S02 | FAIL | Format, Undo/Redo, selection and Unicode clipboard passed. Required line-edit and Find/Replace controls were absent and the long-paste caret remained clipped. |
+| E0 S03 | FAIL | FROM and alias completion passed. Diagnostics appeared only on Execute. Snippets and SQL copy actions had no reachable rail controls. |
+| E0 S05 | FAIL | Script boundaries, native errors, counts and timing passed. The documented Execution log was absent and the PostgreSQL notice was not displayed separately. |
+| E0 S06 | FAIL | Cancel, alternate-tab busy refusal and recovery passed. The documented Timeout control was absent. Retest setting it to five seconds, cancellation and reset when the control is available. |
+| E0 T02 | FAIL | Manual mode began implicitly and its toolbar Rollback and Commit passed independent read-back. No explicit toolbar Begin was available. |
+| E0 D03 | FAIL | Verified table and column actions, view create/alter/drop, and index and constraint drop with independent PostgreSQL. The separate index and constraint creation controls were unavailable. |
+| E0 V02 | FAIL | Binary grid edit refers to Value Editor, but the candidate has no entry point. Typed edits and file round trips remain unverified. |
+| E0 V03 | BLOCKED | Stale Apply requires a reachable Value Editor. |
+| E0 X02 | FAIL | Duplicate and cancel durability matched the expected counts for both policies. Both cancel attempts reported cleanup timeout, and the Per-Batch SQL was still running after the GUI outcome. |
+| E0 X04 | FAIL | SQL result scope, write-result refusal and duplicate/cancel durability matched native read-back. Cleanup timed out on both policies, and the BLOB runner changed or rejected valid bytes. |
+| E0 L03 | FAIL | Dirty guards and durability checks passed. The obsolete Save or Cancel banner survived Cancel and reconnect with no active draft. |
+| E0 R01 | FAIL | Theme and zoom restored. The saved hidden Navigator reopened visible. Remaining layout, tabs, logs and timeouts need verification. |
+| E0 W01 | FAIL | The native Openbox frame moved, but dragging the documented FastDB title row did not move the window. Double-click zoom, divider resize, separate rows and the narrow scrollable toolbar worked. |
+| E0 W02 | FAIL | All mode searches, expanded tree restore and file open passed. Empty Tables search did not offer Browse catalog objects. |
+| E0 W04 | FAIL | A synthetic bound value appeared verbatim in Transaction log and matched a search. Paging and retention across tab close and disconnect passed. The later SQLite run verified a fresh session and file removal after normal Quit. Modal resource release remains unverified. |
+
+### Supplemental observations
+
+| Case | Status | Observation |
+| --- | --- | --- |
+| D4 | PASS | Ubuntu 24.04.5 with Fontconfig. `gtk-launch fastdb` executed the packaged binary. Quit and apt removal preserved the seeded profile file. [Launcher evidence](2026-11-22-full-feature-acceptance-results.md#ubuntu-2404-desktop-launcher-and-removal) |
+| D5 | FAIL | The package version matched the workspace. The required About dialog entry was absent on Linux. [Launcher evidence](2026-11-22-full-feature-acceptance-results.md#ubuntu-2404-desktop-launcher-and-removal) |
+| APP-04 | FAIL | Linux GUI follow-up to F-02 found no About or manual Check for Updates entry. F10 and F1 left the workspace unchanged. [Launcher evidence](2026-11-22-full-feature-acceptance-results.md#ubuntu-2404-desktop-launcher-and-removal) |
+| CON-01 | PASS | Invalid password, closed port, Test, Connect, restart and saved MySQL reconnect each exercised. [Connection evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-connection-profiles) |
+| CON-02 | PASS | Existing and new files, missing read-only refusal and two isolated memory profiles verified. [Connection evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-connection-profiles) |
+| CON-07 | PASS | SQL and schema writes were refused, normal grid editing stayed disabled, and read-only tables were omitted from Transfer destinations on all enabled providers. [Connection evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-connection-profiles) |
+| CON-08 | PASS | Invalid RGB was rejected. Group and color persisted across restart. [Connection evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-connection-profiles) |
+| CON-09 | PENDING | Range bounds and 1- and 2-second stalled-handshake deadlines verified. The unroutable-host subcase remains. [Connection evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-connection-profiles) |
+| CON-14 | PASS | Two-step picker, draft retention, visible-field keyboard order, small window footer and Copy details verified. [Connection evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-connection-profiles) |
+| NAV-01 | PASS | All three providers grouped fixture relations correctly and displayed the expected columns, constraints, foreign keys and indexes. PostgreSQL also grouped its materialized view and foreign table. [Navigator metadata evidence](2026-11-22-full-feature-acceptance-results.md#linux-navigator-folder-and-key-metadata) |
+| NAV-02 | FAIL | Connections, Files and Tables stopped at 100 in over-limit fixtures. PostgreSQL Catalogs and schemas returned 101 when the active database and 100 schemas shared the search prefix. Exact searches still found item 120 in all four modes. [Navigator search evidence](2026-11-22-full-feature-acceptance-results.md#linux-navigator-caps-in-connections-files-and-catalogs) |
+| NAV-03 | FAIL | The documented Catalog Browser row is absent. Enter in the empty search opened the browser, PostgreSQL showed the renamed favorite's missing-object feedback, and MySQL and SQLite reported unsupported discovery. [Catalog Browser evidence](2026-11-22-full-feature-acceptance-results.md#linux-catalog-browser-keyboard-route) |
+| NAV-04 | FAIL | With no conflicting filter, Reveal selected the correct owning table or view on MySQL and SQLite, including from column tabs and across connections. A filter that excluded the target remained active after Reveal, so the target stayed hidden. PostgreSQL table and column variants remain unverified. [Reveal evidence](2026-11-22-full-feature-acceptance-results.md#linux-reveal-active-object-across-connections) |
+| NAV-05 | FAIL | Table and view creation worked on all three providers, with independent catalog and data checks. SQLite refreshed the seven supported node types and MySQL refreshed the schema. Refresh is missing from the Views folder and SQLite view menus. Remaining MySQL and PostgreSQL branch-level reloads are unverified. [Creation and refresh evidence](2026-11-22-full-feature-acceptance-results.md#linux-navigator-creation-and-refresh) |
+| NAV-06 | PASS | Dragging the shared divider changed the Navigator from 280 to 390 pixels. The saved width and the settled window after a normal restart agreed. [Navigator layout evidence](2026-11-22-full-feature-acceptance-results.md#linux-navigator-search-cap-and-layout-retest) |
+| NAV-07 | PASS | Blocking chain, both prompts, read-only and restricted visibility passed. A long list label crossed into the details pane. [Monitor evidence](2026-11-22-full-feature-acceptance-results.md#session-monitor-advisory-lock-chain) |
+| NAV-08 | PASS | Eight families and denial against a restricted account exercised. Syntax and permission errors share the cleanup prefix `Cancellation request sent`. Task 8 also records the missing object filter. [Administration evidence](2026-11-22-full-feature-acceptance-results.md#administration-catalog-reviewed-changes-and-rollback) |
+| NAV-09 | FAIL | PostgreSQL detected the native client and accepted a directory override. MySQL and SQLite omitted the native-tool actions, despite passing native-client integration tests. [Native-tool evidence](2026-11-22-full-feature-acceptance-results.md#postgresql-native-tool-dialogs) |
+| GRID-02 | PASS | PostgreSQL cancellation was verified in L01/L02. This continuation canceled active MySQL and SQLite reads and verified a fresh read on each same tab. [Provider evidence](2026-11-22-full-feature-acceptance-results.md#cancel-and-scalar-transfer-across-providers) |
+| GRID-08 | PASS | PostgreSQL, MySQL and SQLite verified the compact Tab toggle, 64-field paging, Grid/Text continuity and Escape on 66-column fixtures with native read-back. [Record evidence](2026-11-22-full-feature-acceptance-results.md#linux-record-view-on-wide-tables) |
+| GRID-13 | FAIL | The GUI verified scalar rows in all three planned directions, duplicate and FK outcomes, cancellation under both commit policies, and self-transfer refusal. MySQL → SQLite reproduced both BLOB rejection and silent byte changes. [Provider evidence](2026-11-22-full-feature-acceptance-results.md#cross-provider-transfer-in-the-packaged-gui) |
+| GRID-15 | FAIL | All three exports opened in Firefox with the expected four directed links. Two MySQL SVG headings overran their card borders. The prior restart retest verified position restoration. [Diagram evidence](2026-11-22-full-feature-acceptance-results.md#linux-svg-export-and-postgresql-search-cap) |
+| GRID-17 | PASS | PostgreSQL W06 and the MySQL and SQLite retest verified the 2,000-row and 255-character limits and `[NULL]` in the Text clipboard for 2,001 loaded rows. [Plain-text evidence](2026-11-22-full-feature-acceptance-results.md#linux-plain-text-result-limits) |
+| GRID-03 | PENDING | Three providers returned fixture matches. PostgreSQL rejected a stale hit and canceled a server-confirmed wait. MySQL and SQLite showed captured values. The footer control was clipped at 1280 pixels with Navigator open. [Search evidence](2026-11-22-full-feature-acceptance-results.md#linux-table-data-search-on-the-packaged-gui) |
+| GRID-04 | PENDING | SQLite verified both wrap directions, case sensitivity, staged values with unchanged native data, the 4,096-byte boundary, and Cancel with recovery on 150,000 loaded rows. PostgreSQL and MySQL equivalents remain open. [Loaded-result evidence](2026-11-22-full-feature-acceptance-results.md#linux-find-in-loaded-sqlite-results) |
+| SQL-01 | FAIL | Autosave, the cross-connection chooser and Navigator Files reopened the correct provider's script. Rename and Delete have no visible SQL menu or rail entry, so collision handling and moving a file to trash remain unverified. [Script reopening evidence](2026-11-22-full-feature-acceptance-results.md#mysql-and-sqlite-split-bounds-and-script-reopening) |
+| SQL-02 | PASS | MySQL and SQLite selection, caret, full script, CTE, UNION, INSERT … SELECT and adjacent SELECTs verified. PostgreSQL is covered by S01/S05. [SQL editor evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-sql-editor) |
+| SQL-03 | PASS | GUI batch syntax covered MySQL DELIMITER, SQLite trigger bodies and the earlier PostgreSQL dollar-quoted block. [SQL editor evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-sql-editor) |
+| SQL-04 | PASS | MySQL session identity, variables, TEMP and implicit DDL commit verified. SQLite TEMP isolation, rollback and per-preset in-memory isolation verified. [SQL editor evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-sql-editor) |
+| SQL-05 | FAIL | Database and Schema behavior and native read-back were exercised across the supported Linux fixtures. The transaction menu applied isolation and Auto/Manual directly. The documented preview dialogs are missing. [Session control evidence](2026-11-22-full-feature-acceptance-results.md#linux-sql-session-control-read-back) |
+| SQL-06 | FAIL | The documented Timeout selector is missing. PostgreSQL and SQLite long statements could be cancelled and recovered. MySQL `SLEEP(6)` completed in 6,000 ms with the default settings. Configuring and firing an explicit preset remains unverified. [Timeout evidence](2026-11-22-full-feature-acceptance-results.md#linux-transaction-log-pagination-and-timeout-controls) |
+| SQL-07 | FAIL | MySQL warning appeared through native SHOW WARNINGS, and SQLite reported the expected row count. The separate Execution log control remains absent. [SQL editor evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-sql-editor) |
+| SQL-08 | FAIL | All three providers paged to 130 matches. With a 67,113-byte SQLite script, the modal did not respond and FastDB processed Quit about 50 seconds after the keypress. The log file was removed when the process eventually exited. The exact trigger remains unconfirmed. [Session log evidence](2026-11-22-full-feature-acceptance-results.md#linux-transaction-log-pagination-and-timeout-controls) |
+| SQL-09 | PASS | MySQL and SQLite native plan, JSON save/open/compare and capability distinction verified. Earlier PostgreSQL coverage includes malformed snapshots. [SQL editor evidence](2026-11-22-full-feature-acceptance-results.md#linux-mysql-and-sqlite-sql-editor) |
+| SQL-10 | PASS | All seven parameter types executed in PostgreSQL, MySQL and SQLite. SQLite rejected an invalid Integer and accepted the corrected value. The MySQL preview and result preserved native `@name` and `@@name`. [Parameter prompt evidence](2026-11-22-full-feature-acceptance-results.md#linux-sql-parameter-prompts) |
+| SQL-12 | FAIL | All three providers ran and omitted oversized statements. Short SQL was present in the per-profile history files. The documented History action has no reachable GUI entry, so persisted entries cannot be recalled. [SQL history evidence](2026-11-22-full-feature-acceptance-results.md#linux-sql-history-and-result-retention-retest) |
+| SQL-14 | PASS | All three providers kept the latest 20 results and selected the adjacent result on close. PostgreSQL W05 and the short-query MySQL and SQLite retest verified the 15–85% split limits. [Result retention evidence](2026-11-22-full-feature-acceptance-results.md#linux-sql-history-and-result-retention-retest) |
+| UPD-04 | BLOCKED | The latest published release remains v0.3.0. A compatible newer production-signed target is required. [Package evidence](2026-11-22-full-feature-acceptance-results.md#published-debian-package-upgrade-from-rc-to-final) |
+| PERF-02 | BLOCKED | Xvfb and the current Wayland session do not match the recorded X11 display configuration. [Performance evidence](2026-11-22-full-feature-acceptance-results.md#linux-release-performance) |

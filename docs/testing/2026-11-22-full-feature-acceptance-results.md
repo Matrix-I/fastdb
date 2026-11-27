@@ -125,6 +125,23 @@ the grid copied both multiline values byte for byte via the Wayland clipboard.
   only when `appimagetool` is available, and this test shell does not have it.
   The conditional AppImage launch was not run.
 
+### Ubuntu 24.04 desktop launcher and removal
+
+The retained amd64 0.3.0 DEB installed in disposable Ubuntu 24.04.5.
+`desktop-file-validate` accepted its desktop entry, and the scalable
+`fastdb.svg` application icon was installed. With Fontconfig explicitly
+installed, `gtk-launch fastdb` resolved that entry and started
+`/usr/bin/fastdb`. Private Xvfb showed an empty workspace at 1280 × 800
+with no startup banner. Ctrl+Q closed the window. Apt removal removed
+the binary, launcher and icon and preserved a seeded profile file
+byte-for-byte.
+
+The packaged Linux workspace exposed no About or manual Check for Updates
+entry. F10 and F1 left the workspace unchanged. The package manager and
+workspace version both read 0.3.0. The plan's About version check still
+fails at the missing entry. This launcher run used a fresh app profile
+on a warm host. The earlier minimal-install Fontconfig failure stands.
+
 ### Published Debian package upgrade from RC to final
 
 On `9d224ed`, a fresh Ubuntu 24.04 amd64 Podman container installed the
@@ -156,10 +173,16 @@ Both tags predate the P3-05 verification commit `c8768a4`. This result covers
 apt, startup with an empty probe profile, and preservation of the on-disk
 test file. Interactive restart and saved-workspace read-back, verified updater
 download and installer handoff remain pending.
-The GitHub release list still identifies v0.3.0 as the latest published
-release. The candidate has no newer published target for this upgrade gate.
+On 2026-11-26, `gh release list --repo Matrix-I/fastdb` identified v0.3.0
+as the latest published release. All other listed releases were older
+or prerelease. The real signed-update gate is **Blocked** until a newer
+compatible production-signed target is published.
 
 ## Linux release performance
+
+`cargo test --locked -p xtask` passed all 18 checks on the current
+worktree, including environment mismatch, policy budgets, incomplete
+workloads and subprocess cleanup.
 
 The release example ran on disposable PostgreSQL 18.7 and completed five
 measured samples. Median catalog loading for 2,000 tables was 2,213 ms,
@@ -188,6 +211,20 @@ The current session is Wayland, its X11 display is inaccessible from the
 test shell, and its kernel is `7.0.0-44-generic` instead of `7.0.0-43-generic`.
 The comparison verifies that the historical reports are usable. The current
 release binary requires a new comparable capture and cold-start observation.
+On 2026-11-26 the same release build completed with
+`cargo build --locked --release -p fastdb-app` using the retained target
+directory. A new isolated Xvfb 1440 × 900 run under Lavapipe used a
+separate diagnostic envelope. The first measured process streamed
+1,000,000 × 20 in 8.47 seconds, reached the first batch in 2.46 ms and
+emitted all 300 frame intervals. Its scroll p95 was 95.99 ms. Process
+two reached the scroll stage and timed out before emitting frame
+intervals. The runner exited 2 and produced no aggregate report. A retry
+with four Lavapipe threads and an isolated cache timed out during warmup
+scrolling with the same phase deadline. The diagnostic envelope SHA-256
+is `c169ccd271783e48dedaa4bfe646b0c050012fae06282fa09efea2433f837ec9`.
+Raw logs are retained in `.sdd/benchmark-xvfb-diagnostic/`. An approved
+physical-display comparison still requires the matching X11 host.
+
 The local `xtask benchmark-check` also rejected disposable copies of the
 archived baseline when one field at a time was changed to an alternate
 display ID or the current kernel release. Both runs returned
@@ -404,7 +441,24 @@ valid BLOBs and silently changes others. The acceptance run records both
 failures. A retest needs to verify exact bytes and committed counts for
 empty, ASCII, valid UTF-8 and non-UTF-8 BLOBs
 across each applicable direction. The probe exercised the transfer runner.
-The desktop X04 controls remain pending.
+
+### Cross-provider transfer in the packaged GUI
+
+The Ubuntu 24.04.5 DEB ran on private Xvfb against PostgreSQL 16.16,
+MySQL 8.4.13 and file-based SQLite.
+
+| Source → destination | Observed with independent native read-back |
+| --- | --- |
+| PostgreSQL → MySQL, scalar rows | Atomic Commit reported three committed and zero rejected. All row IDs, signed integers, UTF-8 bytes, empty strings and NULLs matched the source. The existing destination row was unchanged. |
+| PostgreSQL → MySQL, duplicate 257 | Atomic Commit reported zero commits. The destination contained only its original ID 257 row. Retrying with Per-Batch Commit reported 256 committed. All IDs 1–256 matched the source, the seed stayed unchanged, and IDs 258–260 were absent. |
+| SQLite → PostgreSQL, scalar rows | Atomic Commit reported three committed and zero rejected. The separate SQLite and PostgreSQL reads matched Unicode bytes, empty text, NULLs and integers. The existing seed row stayed unchanged. |
+| SQLite → PostgreSQL, FK error | The second row had no matching code in the parent relation. The dialog showed PostgreSQL's constraint error and zero commits. The destination contained only its original seed row. |
+| SQLite → PostgreSQL, Cancel in batch two | A disposable trigger blocked ID 257 on an advisory lock. Independent PostgreSQL confirmed both waits before Escape. The GUI reported zero commits under Atomic and 256 under Per-Batch. Both waiters exited before the fixture lock was released. Ordered source and destination reads verified the exact committed prefixes and the unchanged seed. |
+| MySQL → SQLite, BLOB rejection | A raw BLOB with bytes `414243` was rejected as requiring a hex prefix. SQLite showed zero committed rows. |
+| MySQL → SQLite, silent BLOB change | A raw BLOB with bytes `5c7834313432` produced a success message and one committed row. Independent SQLite read-back showed two-byte BLOB `4142` in place of the six source bytes. |
+
+Screenshots and native reads are retained in
+`.sdd/cross-provider-transfer-gui/`.
 
 ## PostgreSQL catalog drop retest
 
@@ -415,6 +469,414 @@ CASCADE. The database drop refused an active session and succeeded after its
 release. An independent native client confirmed the target database was
 absent and a marker in a sibling database still read `42`. Desktop preview,
 Cancel and confirmed-action controls remain pending.
+
+### PostgreSQL native-tool dialogs
+
+Private Xvfb, Ubuntu 24.04 DEB, PostgreSQL 16.16 server and Ubuntu 16.15
+clients. The first Save Backup As attempt surfaced a missing desktop
+portal service. Installing the GTK portal in the isolated image and
+reloading its private session D-Bus enabled the chooser.
+
+- Backup Database produced a custom archive with a `PGDMP` header. Native
+  `pg_restore -l` listed the items and leaf-partition data entries. Repeating
+  Run refused the existing file and preserved its SHA-256
+  `b9cfcd7f21476ff6c91a402d93dad3a7dbefdfaf235b2d56eb489d7d953608a2`.
+- Restore Database chose that file and restored successfully into the
+  independently created empty database. Native psql returned 1,000 items
+  and zero rows in the initially empty partition in both databases.
+  Ordered full items rows matched byte-for-byte, and the view definition
+  matched. Reconfirming against the now populated target was refused.
+- Backup Table wrote an archive whose table and table-data entries
+  named only `release_check.items`. Backup View wrote an archive with the
+  `release_check.items_view` entry and its native SELECT definition.
+- Client Directory selected a controlled wait-only stand-in for `pg_dump`.
+  Cancel Job showed Canceled, reaped the observed child before its
+  45-second deadline, and left no destination or staging file. The
+  standalone run used the real client for the full and scoped backups.
+- Database Maintenance completed Analyze, Vacuum and Reindex.
+  Independent PostgreSQL saw both counters increase from 0 to 1,
+  timestamps set for both, and the valid items primary-key index move
+  from filenode 16403 to 16624.
+
+## Linux table-data search on the packaged GUI
+
+Retained Ubuntu 24.04 candidate DEB on private Xvfb, scale 1. At the default
+1280-pixel window width with Navigator open, the footer ended partway
+through Import CSV. **Search table data…** was visible after widening the
+window to 1700 pixels. The provider runs used that width.
+
+| Provider | Observed on a disposable fixture |
+| --- | --- |
+| SQLite 3.45.1 CLI for independent read-back | The literal `%_` matched only ID 1. After an independent update, opening that hit showed the original captured label and numeric value. ASCII case folding matched `alpha plain`. BLOB-only and NUL-containing text probes each returned zero. The 55 matching rows produced 50 hits. A token after character 600 was searchable, while the row preview was labeled at most 512 characters and showed a truncated value. |
+| PostgreSQL 16.16 | The quoted name returned the one exact result that independent psql found. A subsequent native UPDATE caused the old hit to report that the row changed or was no longer visible. With a fixture lock active, psql showed dedicated waiter 94 blocked by 93 on the relation. Cancel reported cancellation, removed waiter 94 and left the original lock holder asleep. |
+| MySQL 8.4 | The literal `%_` and a lowercase search for an uppercase JSON value each returned one row. The BLOB-only token returned zero. The 56 native matches for the repeated term yielded 50 hits. Opening the JSON hit after an independent update preserved the original captured row. |
+
+The SQLite and MySQL menu entry checks on the same DEB failed. The
+connected, writable, file-backed SQLite profile showed its full path
+and loaded its table. Its menu omitted Backup Database, Restore Database
+and Database Maintenance. The connected MySQL profile also loaded its
+table but omitted Backup Database and Restore Database. Both table menus
+omitted Backup Table and the MySQL menu omitted Table Maintenance.
+PostgreSQL exposed the applicable entries in the same app instance.
+The connection success path stores a session configuration only for
+PostgreSQL, while the native-tool menu requires that configuration for
+each provider. This blocks the corresponding MySQL and SQLite desktop
+operations. The separate native-client tests above cover those
+operations below the GUI.
+
+## Linux MySQL and SQLite connection profiles
+
+The Ubuntu 24.04.5 candidate DEB ran on private Xvfb at scale 1.
+The server was MySQL 8.4.13 and the SQLite profiles used isolated files
+and in-memory databases. CLI reads inspected the stored data independently.
+
+| Case | Observed |
+| --- | --- |
+| CON-01 | The MySQL connection dialog returned native access denied (28000/1045) for a wrong password and connection refused (111) on the closed TCP port. The valid profile passed Test and Connect. After Ctrl+Q, the old app process exited. A new process reopened the table tab and the saved profile reconnected without re-entering the password. Native MySQL and the reopened grid agreed on both fixture rows. |
+| CON-02 | The existing SQLite file opened and displayed its seeded row. Connect created a new file and a write from its SQL tab stored marker 751, verified by sqlite3. A missing read-only file returned an open failure and was not created. Memory A stored its marker and Memory B independently returned zero matches for the table name. |
+| CON-07 | Read-only MySQL and SQLite profiles showed their mode, allowed reading and rejected SQL UPDATE. Double-click and F2 left the selected cells outside edit mode. Both providers opened a schema preview, then refused Add Column on Execute. Native reads confirmed unchanged rows and columns. Transfer listed only the writable MySQL and SQLite tables, omitting both live read-only profiles. Earlier R03 supplies PostgreSQL coverage. |
+| CON-08 | Save rejected the non-hex color. The valid MySQL profile displayed a green color marker under group QA after app restart. The saved settings held `#37a768` and group QA. |
+| CON-09 | Test rejected 0 and 121 seconds, and a live Test accepted 120. On a local socket that accepted but sent no MySQL greeting, FastDB reported a connection timeout. The independent listener measured peer closure at 1,001.1 and 2,001.4 ms for the configured 1 and 2 seconds. The unroutable-host subcase remains pending. |
+| CON-14 | SQLite Main Tab and Shift+Tab moved between visible name and database fields. Advanced Tab moved from group to color. Switching back retained the draft. The 860 × 620 window exposed the body and footer. MySQL Copy details returned the complete clipped error without the supplied substitute password. |
+
+### Cancel and scalar transfer across providers
+
+- On the writable MySQL profile, the independent process list saw backend
+  41 executing the 25-second read before the GUI Cancel click. The query
+  disappeared from the server before its deadline. The same editor tab
+  then returned `mysql-a-only`, matching the native read.
+- SQLite began a recursive 100-million-step read. Cancel closed its
+  executing session before the aggregate returned. A fresh read in the
+  same editor tab returned `sqlite-a-only`, matching sqlite3.
+- The GUI refused the original MySQL table as its own transfer target.
+  A transfer to the SQLite file's new `transfer_items` table mapped the
+  integer ID and text note. Atomic Commit reported two processed, two
+  committed and zero rejected, matching native read-back in ID order.
+  Repeating the transfer hit SQLite primary-key error 1555, reported
+  zero committed rows and preserved both destination rows.
+
+Screenshots and listener read-back are in `.sdd/connection-gui-evidence/`.
+
+## Linux MySQL and SQLite SQL editor
+
+Capture used the Ubuntu 24.04 candidate DEB on private Xvfb with MySQL
+8.4.13 and SQLite. Native reads used a separate client or database handle.
+
+| Case | Observed |
+| --- | --- |
+| SQL-02 | Execute on MySQL and SQLite ran the selected second statement (202) and, separately, the first statement at the caret (101). Run script appended both results. CTE returned 311, UNION ALL returned 312 and 313, and INSERT … SELECT wrote ID 4, confirmed through native reads. Separate caret executions of adjacent SELECT lines without semicolons returned 404 and 405. |
+| SQL-03 | MySQL Run script accepted `DELIMITER $$`, created a procedure with two internal statements and returned 701 from its CALL. Independent MySQL returned the same value. SQLite Run script created a trigger with two internal INSERTs and executed the outer INSERT once. SQLite read-back showed exactly two audit rows for ID 2. PostgreSQL's dollar-quoted DO block is covered in S05. |
+| SQL-04 | MySQL tab A returned its temporary table marker and variable 617 on backend 18 across separate executions. Tab B used backend 24, returned SQL NULL for the variable and received native error 1146 for the temporary table. A retained both values after switching back. A pending UPDATE was invisible to the native client. DDL changed the tab from In transaction to Idle and made the exact change visible. A later ROLLBACK left the committed value and new table intact. |
+| SQL-04 · SQLite | Tab A retained its TEMP table across separate actions. Tab B found zero matching TEMP tables and received a missing-table error on SELECT. Returning to A read the same marker. A separate `BEGIN IMMEDIATE` change was invisible to the independent reader, and ROLLBACK restored the original value. The per-preset in-memory isolation was exercised in CON-02. |
+| SQL-07 | MySQL `SHOW WARNINGS` on the same tab returned code 1292 for the synthetic invalid integer. SQLite INSERT … SELECT reported a single affected row, confirmed independently. The separate Execution log route still fails as recorded under S05. |
+| SQL-09 | MySQL Explain showed the estimated plan and the expensive-node action selected its query-block node. Analyze showed one row and loop with actual timing, matching the native CLI count. SQLite Explain matched the native primary-key lookup and marked expensive-node navigation unavailable without metrics. With the GTK portal in the private session, both providers saved v1 JSON with the expected provider and native rows. Comparing showed estimated versus actual on MySQL and scan versus lookup on SQLite. Opening both files restored their plan results without executing SQL. The PostgreSQL snapshot and invalid-file checks were covered earlier. |
+| SQL-12 | MySQL returned length 67,283 from a 67,327-byte statement. After Quit, its history file retained the short marker 934 and omitted the oversized statement. SQLite's history file retained marker 933 after Quit. See the retest below for the SQLite oversized result and missing History action. |
+| SQL-14 | MySQL and SQLite each ran 23 statements returning markers 1–23. The newest retained result returned 23 and the first retained result returned 4. Closing the first selected its adjacent result, which returned 5. PostgreSQL split bounds are covered in W05. See the retest below for PostgreSQL retention. |
+| APP-10 · unavailable portal | Saving the SQLite plan when the desktop portal was absent produced a visible service error and left the active plan visible. |
+
+## Linux SQL history and result retention retest
+
+The Ubuntu 24.04 candidate package (SHA-256
+`23e7a07a81a58dd45f638ec0bbe57dfc5bb384ffbe69cfec6a0829a207823a77`)
+ran on Debian 13 with private Xvfb and the Openbox window manager. A missing
+Ubuntu mirror package prevented setting up the new Ubuntu fixture.
+
+| Case | Observed |
+| --- | --- |
+| SQL-01 | `+ SQL` created a script per profile. The PostgreSQL and SQLite autosave files under `scripts/qa-pg` and `scripts/qa-sq` matched the input byte for byte (635 and 67,113 bytes). The SQL rail has no Rename or Delete action. See the MySQL and SQLite chooser retest below. |
+| SQL-08 | In a fresh workspace, SQLite returned 951 and the Transaction log search for `qa_clean_quit` returned its single successful entry. Closing the modal restored the result. The matching mode-0600 log file disappeared after GUI Quit terminated FastDB, while the container and log bind mount stayed live. The previous app session was absent from the new process's modal. Earlier W04 covers PostgreSQL paging. Release of modal resources remains unverified. |
+| SQL-12 | PostgreSQL and SQLite returned length 67,067 from statements of 67,109 and 67,113 bytes. Their separate history files retained the short queries and omitted the oversized statements. Together with the preceding MySQL run, file-level omission is verified for all three providers. The visible editor rails lacked History, and the history handler has no registered invocation. Recall into the editor therefore fails the documented GUI workflow. |
+| SQL-14 | PostgreSQL joined MySQL and SQLite in retaining the newest 20 results. After submitting markers 1–23, the newest result was 23, the first retained result was 4, and closing that result selected 5. The SQLite splitter attempt after the large statement yielded no reliable bound measurement. The short-statement split retest below covers both providers. |
+
+In the initial session, after running the 67,113-byte SQLite statement and
+attempting to drag its result splitter, the Transaction log opened but
+search and dismissal did not respond during the test. FastDB logged a
+Quit action and the process and log file still existed after the bounded
+wait. The retest used the same binary in a fresh workspace with a short
+statement and completed successfully. The cause of the first session's
+failure to quit is unconfirmed.
+
+### MySQL and SQLite split bounds and script reopening
+
+The same Debian 13 Xvfb fixture and candidate package were used with a
+disposable MySQL 8.4 server and SQLite file. Both editors clamped the
+divider to the same screenshot-relative offsets, 201 and 693 pixels,
+after dragging past the upper and lower limits of the split area.
+The split starts 96 pixels below the window top and spans about 704 pixels,
+so these offsets verify the 15% and 85% bounds at scale 1. The MySQL query
+returned 351 and the SQLite fixture query returned 352.
+
+The SQLite chooser initially listed only its own `Script-1`. Turning on
+**Show scripts for all connections** showed both identically named scripts
+with their connection names. Choosing the closed MySQL script reopened it
+on MySQL, and Execute returned 351. Navigator **Files** search for
+`Script-1` also returned both qualified entries and reopened the closed
+MySQL tab with the correct SQL. The MySQL and SQLite autosave files held
+the exact short statements (30 and 44 bytes). The SQL tab context menu
+offered only tab close actions. Rename collision and Delete to `.trash`
+cannot be exercised through the candidate GUI.
+
+The Transaction log search for `qa_mysql_split` returned exactly three
+rows, one syntax error and two successful one-row results. Normal GUI Quit
+removed its mode-0600 log file while the container stayed live.
+
+### Linux SQL session control read-back
+
+The same candidate ran on Debian 13 private Xvfb with MySQL 8.4.13 and
+file-backed SQLite. The PostgreSQL Database, Schema and mode paths are
+recorded in T04.
+
+| Provider | Observed |
+| --- | --- |
+| MySQL | The Database prompt opened `fastdb_alt` in a temporary tab. Its first query returned database `fastdb_alt`, backend 20 and value 703. The native client confirmed 703. Returning to the original tab still reported `fastdb_qa` and backend 18. The transaction menu applied Read committed and Manual directly. Native read-back on backend 18 reported `READ-COMMITTED` and `@@session.autocommit = 0`. Schema returned the provider's unsupported message and preserved the result. |
+| SQLite | The Database and Schema buttons both returned the provider's unsupported message and preserved the result of 701. The transaction menu offered Serializable and read back `PRAGMA read_uncommitted = 0`. Manual mode left the row update pending. The tab read 711, while an independent SQLite reader still read 701. Toolbar Rollback restored Idle and left the independent value at 701. Choosing Auto and running a fresh query returned 701 on the same tab. |
+
+The transaction menu applies Isolation and Auto/Manual selections directly.
+The separate documented preview dialogs have no reachable GUI entry on
+this build.
+
+### Linux SQL parameter prompts
+
+- PostgreSQL prompted for the named Integer and returned 812.
+- MySQL prompted only for `:qa_parameter`. The SQL preview preserved
+  `@qa_native` and `@@session.autocommit`. The result returned native
+  values 813 and 0 alongside the bound Integer 814.
+- SQLite prompted for positional `?`, doubled the apostrophe in the
+  String preview, and returned `O'Brien` as one value. A separate prompt
+  returned Float 1.25, Boolean 1, Date/Time `2026-11-26`, SQL NULL and
+  Raw SQL expression result 815. The Integer field blocked Execute for
+  `nope` with a validation error. Correcting it returned 816.
+- PostgreSQL and MySQL independently returned the same String, Float,
+  Date/Time, NULL and Raw SQL values. PostgreSQL rendered Boolean as
+  `true` and MySQL rendered it as 1.
+
+### Linux Transaction log pagination and timeout controls
+
+The same candidate ran on Debian 13 with private Xvfb. A saved script
+executed 130 distinct one-row statements each on MySQL 8.4.13 and SQLite.
+The Transaction log filter and scroll reached marker 130 for both.
+An independent read of the session JSONL confirmed exactly 130 matching
+one-row successes in order per provider, with no duplicates. PostgreSQL
+paging is covered in W04.
+
+The large SQLite script from the previous retest returned 67,067 again.
+After a pointer drag near the editor/result divider, the Transaction log
+opened, but the search field and Close button did not respond during the
+capture. A subsequent Ctrl+Q left the process and its mode-0600 session
+file present after a 25-second wait. The app logged the Quit action
+about 50 seconds after it was sent, and the process and exact log file
+were later absent while the container remained live. This confirms a
+responsiveness failure after the large script interaction and eventual
+log cleanup. The trigger and cause remain unconfirmed. Normal
+short-statement exits removed the file in the preceding runs.
+
+The candidate has no GUI Timeout preset selector. MySQL
+`SELECT SLEEP(6)` ran with the default settings, returned 0, and logged
+6,000 ms. The SQLite recursive CTE was active before Cancel. Cancel
+reported a closed session, and the next query in the same tab returned
+the independently seeded row 42. PostgreSQL `pg_sleep` and cancellation
+are covered in S06. These runs exercise long statements and recovery.
+The documented preset configuration and firing remain unverified.
+
+## Linux Navigator search cap and layout retest
+
+The Debian 13 private Xvfb fixture used the same FastDB candidate with
+MySQL 8.4.13 and SQLite. Each native catalog contained 120 tables named
+`qa_find_001` through `qa_find_120`. The Tables and objects filter
+`qa_find_` started at 001 and stopped at 100 on each provider after
+scrolling through the tree. Searching for the full name `qa_find_120`
+returned that table. Clearing the query restored the expanded Tables
+folder and the other tables. A search for `child` retained separate
+Tables and Views folders and displayed the matching table and view.
+
+Both child diagrams displayed three qualified tables and four column
+links, consistent with independent MySQL catalog and SQLite PRAGMA
+reads. Clicking the composite edge highlighted both source and target
+column pairs. Dragging each parent card redrew the links and saved distinct
+positions under the corresponding connection and table. SQLite Ctrl+wheel
+changed zoom from 100% to 200%. After a normal Quit, both diagram tabs
+reopened and restored their moved cards after reconnecting. MySQL Export
+SVG showed a portal service error with the graph still visible when the
+portal was absent. The enabled-portal retest follows below.
+
+The Connections divider moved from 280 to 390 pixels at scale 1.
+`workspace-state.json` saved a width of 390.00168. After FastDB exited
+and restarted with the same profile, the settled window again showed a
+390-pixel Navigator with both provider tabs restored.
+
+### Linux SVG export and PostgreSQL search cap
+
+The Debian 13 fixture used GTK portal 1.15.3 over xdg-desktop-portal
+1.20.3 in the application's private D-Bus session. Canceling an SVG save
+left the isolated destination directory empty. Saving exported 2,629
+bytes for MySQL, 2,585 for SQLite and 2,486 for PostgreSQL. XML checking
+identified all three qualified tables and mapped each of the four
+arrowed polylines back to its exact source and target column. The
+exported MySQL and SQLite parent-card positions agreed with their saved
+layout coordinates.
+
+Firefox ESR 153.8.0 opened and rendered each local SVG at 900×500.
+In the MySQL export, solid heading pixels for `fastdb_qa.incoming` and
+`fastdb_qa.parent` extended two pixels beyond their right card borders.
+The shorter PostgreSQL and SQLite headings were inside their cards.
+The MySQL export's text fit therefore fails even though the file and
+all its routes render.
+
+PostgreSQL completed the Tables and objects cap check. Its native
+catalog contained 120 numbered tables. The filtered tree stopped at
+100, the exact query for table 120 found it, and clearing the query
+restored the expanded tree. The three-provider table cap is verified.
+
+### Linux Navigator caps in Connections, Files and Catalogs
+
+In the Debian 13 private Xvfb fixture, the active PostgreSQL database
+`qa_cap_database` contained 120 schemas named `qa_cap_001` through
+`qa_cap_120`. The config contained 120 disposable profiles and 120
+SQL files. The native catalog and on-disk config and SQL bytes were
+checked independently.
+
+| Mode | Observed |
+| --- | --- |
+| Connections | The shared prefix `qa_profile_` stopped at profile 100. The exact query found profile 120. Clicking it updated the saved active connection ID to `qa-profile-120` while the open script retained its PostgreSQL connection. |
+| Catalogs and schemas | The shared prefix `qa_cap_` displayed the database row and schema rows 001–100, totaling 101 against the expected maximum of 100. Searching for `qa_cap_120` returned only that schema. |
+| Files | The shared prefix `qa_file_` stopped at file 100 when scrolled to the end. The exact query located file 120. Clicking it opened the PostgreSQL script, whose execution returned the fixture value 120. |
+
+The Catalogs and schemas renderer adds the active database independently
+of its 100-schema bound. The result cap therefore fails when both the
+database and at least 100 schemas match. The Tables and objects cap
+passed on all three providers in the preceding runs.
+
+### Linux Navigator creation and refresh
+
+The Debian 13 private Xvfb fixture ran the packaged candidate against
+MySQL 8.4.13 and file-backed SQLite. Earlier PostgreSQL D03 verified
+creation of a table and a view, and the A/B retest verified connection
+ownership during catalog Refresh.
+
+- MySQL Create Table previewed a qualified identifier, a non-null
+  `bigint` primary key and a nullable `varchar(255)`. The native catalog
+  confirmed both columns. Canceling a separately named table left that
+  name absent. Create View produced a view that independently returned
+  601. Schema Refresh discovered a table created by a native client.
+- SQLite Create Table previewed an `INTEGER` primary key and nullable
+  `TEXT` column. The native schema matched both. Create View put the view
+  in the Views folder, and a separate SQLite reader returned 601.
+- On SQLite, Refresh from the connection, Databases folder, database,
+  Schemas folder, schema, Tables folder and table each discovered a new
+  marker table created independently. Refresh was absent from the Views
+  folder and view menus. The MySQL Views folder likewise offered Create
+  View only. The action coverage falls short of NAV-05's per-node check.
+  Individual MySQL and PostgreSQL branch-level reloads remain unverified.
+
+### Linux Reveal active object across connections
+
+The packaged candidate ran on Debian 13 private Xvfb with MySQL 8.4.13
+and two separate SQLite files. Each contained a `qa_items` table and
+`qa_view` view with the same identifiers and a different row value.
+
+| Target | Observed |
+| --- | --- |
+| MySQL table and view | Reveal reopened the collapsed branch and selected the correct Tables or Views row. The grids both showed 703. With the view active and SQLite A selected in Navigator, Reveal switched Navigator back to MySQL and selected its view. |
+| MySQL column tab | Reveal selected the owning `qa_items` row from the `qa_items.value` tab. The column tab showed its PostgreSQL-only editing message. |
+| SQLite table and view | Reveal selected SQLite A's table and SQLite B's view in their respective branches. The grids showed 701 and 702, matching independent SQLite reads. |
+| SQLite column tab | With the SQLite A column tab active and SQLite B connected, Reveal selected the owning table in SQLite A. |
+| Target hidden by filter | With the MySQL `qa_items.value` tab active, searching for `qa_view` hid the owning table. Clicking Reveal left the filter and visible tree unchanged, so the target remained hidden. |
+
+PostgreSQL view evidence is recorded under M04. PostgreSQL table and
+column reveal were not rerun in this batch.
+
+### Linux Catalog Browser keyboard route
+
+On the packaged candidate in Debian 13 private Xvfb, focusing the
+empty Tables and objects search field and pressing Enter opened
+Catalog objects. The documented **Browse catalog objects…** row was
+absent from the empty search on a connected PostgreSQL profile.
+
+PostgreSQL listed `public.qa_catalog_seq` and showed its native start
+value 739. Toggle favorite persisted the sequence identity with owner
+`qa-pg`. After an independent psql session renamed it, Refresh listed
+`public.qa_catalog_renamed`. Selecting the old favorite displayed
+`Favorite no longer exists; refresh the catalog`. Native psql confirmed
+only the new name with the same start value. M04 previously verified
+favorite persistence across a complete restart.
+
+The keyboard route on connected MySQL and SQLite opened Catalog objects
+and displayed `Object discovery is not supported by this provider`.
+Neither profile displayed the PostgreSQL favorite.
+
+### Linux Navigator folder and key metadata
+
+On the packaged candidate under Debian 13 private Xvfb, each fixture
+contained `qa_child`, `qa_parent`, and `qa_view`. The tree showed both
+tables under Tables and the view under Views. PostgreSQL also showed
+`qa_mat` under Materialized Views and the foreign table `qa_other`
+under Other Relations, matching `pg_class`. MySQL and SQLite showed
+empty states in those last two folders.
+
+| Provider | Expanded `qa_child` tree and independent catalog comparison |
+| --- | --- |
+| PostgreSQL | Three columns with the expected nullability. Constraints listed the primary key, unique key, foreign key and the two generated NOT NULL checks in `information_schema`. Foreign Keys listed `qa_parent_fk`. Indexes listed the PK, unique index and `qa_parent_idx`. |
+| MySQL | Three columns with the expected nullability. Constraints listed PRIMARY, `qa_label_unique` and `qa_parent_fk`, with the FK also in Foreign Keys. Indexes listed PRIMARY, the unique index and `qa_parent_idx`. Native metadata linked `parent_id` to `qa_parent.id`. |
+| SQLite | Three columns with the expected nullability, with the `VARCHAR(32)` column displayed as text. Constraints listed the primary key, `fk_0` and the unique autoindex. Foreign Keys listed `fk_0`. Both indexes matched `PRAGMA index_list`, and `PRAGMA foreign_key_list` confirmed the same target column. |
+
+### Linux plain-text result limits
+
+The packaged candidate ran on Debian 13 private Xvfb with MySQL 8.4.13
+and SQLite. Independent reads confirmed 2,001 rows, IDs 1 through
+2,001, and one SQL NULL. Row 1 contained 266 characters, including
+a marker after character 255. Each saved SQL tab executed an ordered
+query with an explicit limit of 2,001. The Text header reported all
+2,001 loaded rows.
+
+Copy in each Text view produced 524,523 bytes. Reading the Xvfb
+clipboard showed exactly IDs 1–2,000 in order, the first 255
+characters of row 1 without the trailing marker, and `[NULL]` for row
+2. The two clipboard files were byte-identical. The SQLite retest
+replaced the clipboard with a sentinel before Copy to verify that the
+data came from the active SQLite tab. PostgreSQL W06 previously
+verified the same limits.
+
+### Linux Record view on wide tables
+
+The packaged candidate ran on Debian 13 private Xvfb with a file-backed
+SQLite table containing 66 columns and two rows. A native SQLite read
+returned `101|164|165|166` and `201|264|265|266` for columns 1, 64,
+65 and 66.
+
+- From the selected Grid cell on row 2, Tab opened the compact record.
+  Scrolling reached field `c66` with value 266. A second Tab restored
+  the Grid and the selected row 2 cell.
+- The Record button opened the read-only Grid at row 2, fields 1–64.
+  Next fields showed exactly `c65=265` and `c66=266`. Switching to
+  Text retained both row and field page. Previous fields restored
+  fields 1–64, and Previous row showed row 1 with `c01=101`. Escape
+  restored the two-row Text presentation.
+
+PostgreSQL and MySQL repeated the same 66-column fixture. Native
+read-back returned exactly the same boundary values. Tab opened row 2
+in compact Record and a second Tab restored the selected cell. The
+Record button showed fields 1–64, then 65–66 with values 265 and 266.
+Switching to Text kept the same row and field page. Escape restored
+the two-row Text presentation on both providers. PostgreSQL W06 also
+covers ordinary Record navigation.
+
+### Linux Find in loaded SQLite results
+
+The packaged candidate ran in private Debian 13 Xvfb. The table footer
+exposed Find at 1,600 pixels with the Navigator hidden. The search
+`needle` matched rows 1 and 3 in order. Next wrapped to 1, Previous
+wrapped back to 3, and the upper-case value in row 4 was skipped.
+
+Editing row 2 staged `staged_probe`. Find selected it at row 2,
+column 2 without saving. An independent SQLite read still returned
+`original`, and Grid Cancel restored the displayed value. The dialog
+accepted a 4,096-byte paste and ran the search. It refused 4,097 bytes
+with the UTF-8 limit message.
+
+A separate SQL result loaded 150,000 rows. Cancel search kept the
+dialog open and reported that pending matches were discarded. A
+subsequent search selected row 1, column 2 from the same result.
+PostgreSQL and MySQL equivalents remain open.
 
 ## Linux Administration and Session Monitor retest
 
@@ -427,7 +889,70 @@ app-level checks also exercised review, owner replacement, departure,
 target identity, bounded blocking edges and refresh selection. The app
 logging case initially skipped its live part. It passed in a separate run
 with PostgreSQL required, verifying that Administration query text stayed
-out of debug output. The remaining desktop controls are pending.
+out of debug output.
+
+On the Ubuntu 24.04 DEB under private Xvfb, both Session Monitor review
+panels were dismissed with Go back. Independent PostgreSQL still reported
+`PgSleep` for PID 229 after dismissing Cancel and for PID 231 after
+dismissing Terminate. Confirming Cancel sent a signal to PID 229 and the
+one-shot client exited. The monitor refreshed automatically, and PID 231
+continued its original statement. Confirming Terminate sent the signal
+to PID 231 and the refreshed view dropped that row. Independent PostgreSQL
+confirmed the backend was gone and retained `2|second`, the committed value
+before the terminated session's pending update. The read-only B profile
+inspected PID 260 and its running statement. Cancel and Terminate were
+disabled, attempts to click them opened no confirmation, and independent
+PostgreSQL still reported the same PID in `PgSleep`.
+
+### Administration catalog, reviewed changes and rollback
+
+The Ubuntu 24.04 DEB on private Xvfb used PostgreSQL 16.16 and the
+disposable `qa_admin` schema. A second native client supplied the read-back.
+
+| Catalog family | Reviewed GUI operation and independent result |
+| --- | --- |
+| Routines | Read `alpha()` source and reviewed Rename. Go back left the original function returning 7. Confirm changed the catalog name to `alpha_renamed()`, which returned the same value. Run with arguments generated `NULL::text` for `echo`. The edited invocation returned `qa-admin-typed`, matching native psql. |
+| Sequences | Page 1 began with the fixture sequence and `counter`. With 66 total sequences, page 2 began at `zpage_049`. Refresh returned to page 1. Native details showed the start value of 7. Reviewed Restart with 87 produced `87\|f`. |
+| Triggers | Inspected the owning table and trigger source. Reviewed Disable changed `qa_alpha` to `tgenabled = D`. |
+| Rules | Inspected rule source. Reviewed Disable changed `qa_alpha_rule` to `ev_enabled = D`. |
+| Policies | Inspected the policy expression. Reviewed Alter changed the native predicate to `(id >= 0)`. |
+| Partitions | Inspected the parent and initial bound. Reviewed Detach cleared `relispartition`. Attach restored the bound `[0,10)`. Create added a second partition at `[10,20)`. |
+| Roles | Browsed role characteristics and membership. Reviewed Grant changed `pg_has_role` for the disposable member and role from false to true. |
+| Privileges | Inspected the relation owner and explicit ACL. Reviewed Grant changed the fixture role's INSERT privilege from false to true. |
+
+The catalog supplied family selection, paging and Refresh. The plan's
+catalog filtering step failed because the dialog had no object filter.
+An invalid statement surfaced PostgreSQL's syntax error and disabled
+Review until Refresh. After refreshing, reviewed SQL returned 902.
+A restricted account received `must be owner of table small`, and psql
+confirmed the trigger remained disabled. Both errors displayed
+`Cancellation request sent` from failure cleanup even though the user
+did not click Cancel. The read-only profile browsed the catalog without
+a Review action and the sequence value remained 87.
+
+For active cancellation, independent PostgreSQL showed backend 134
+holding a granted RowExclusiveLock on the target while the reviewed
+routine slept after INSERT. Cancel operation closed that backend and
+the inserted row remained absent. Reopening Administration after
+connecting profile B to a separate database returned `fastdb_admin_b|2206`
+and matched native read-back. The A fixture independently returned
+`fastdb_accept_a|2205`. The existing application test separately exercises
+the requirement to reject review execution after the driver is replaced.
+
+### Session Monitor advisory-lock chain
+
+On the same packaged candidate, Escape closed the monitor opened with
+Navigator search focused. After reopen and Refresh, selecting C showed
+193 → 188 → 183, its active lock SQL and the advisory wait, matching
+independent PostgreSQL. Go back preserved B's original wait and C's
+dependency. Confirm Cancel returned SQLSTATE `57014` to B, while backend
+188 remained connected and C still waited for it. Go back from Terminate
+also preserved B. Confirm Terminate returned `57P01` to B, removed only
+188 from the refreshed snapshot, and let C acquire the lock. Backend
+183 stayed connected. The read-only monitor refreshed and disabled
+both actions. The restricted profile showed `Details unavailable` for
+a selected session owned by a different role. At scale 1 the restricted
+profile's longest row label crossed into the wait detail column.
 
 ## PostgreSQL browse, editor and preferences on private Xvfb
 
@@ -441,15 +966,31 @@ isolated displays and a separate preferences fixture.
 
 | Case | Observed |
 | --- | --- |
+| C01 | At Xvfb scales 1 and 2, PostgreSQL, MySQL and SQLite were selectable. Db2, MariaDB, Oracle and SQL Server displayed `Feature is coming` and left the selected provider unchanged. The PostgreSQL connection name `c01-restart-proof` remained after Back and Next on scale 2. |
+| C03 | In the connection dialog, timeout 0 and 121 produced the 1–120 validation error. Nonnumeric keystrokes were ignored, with the empty field displaying the default 10. A saved and reconnected profile retained its edited name, 17-second timeout and application name. The A script and independent `pg_stat_activity` reported `fastdb-c03-app-a` on `fastdb_accept_a`. |
+| C04 | After Ctrl+Q and relaunch with the same settings directory, both PostgreSQL profiles and their script tabs reappeared. The scripts returned `fastdb_accept_a` on backend 159 and `fastdb_accept_b` on backend 162, and independent `pg_stat_activity` confirmed both. The isolated run used `FASTDB_LOCAL_CREDENTIALS=1` and showed no credential prompts. The legacy disabled MariaDB profile was exercised in the earlier run. |
+| L01 | While A's script was sleeping on backend 79, the B script retained its existing result and connection. Cancel from B produced an error on A alone. B ran a later query on the same backend 82 with its own database and result marker. A ran again on backend 88 with its own database and marker. |
+| L02 | PostgreSQL confirmed A was sleeping before explicit Cancel. The old A backend closed, and B kept backend 82. A second query was independently observed waiting before Disconnect from B. A had zero sessions immediately after disconnect and beyond the original 35-second deadline. B still owned backend 82. Previous runs covered close and reopen of a loading tab. |
+| L03 | Disconnect with a staged grid edit showed Save or Cancel on A. Cancel removed the draft, and the retry disconnected and reconnected to A. The old guard banner stayed visible with a clean grid after reconnect until Refresh cleared it. PostgreSQL still showed IDs 1 and 2 with their original values. |
+| M04 | Navigator grouped `items`, `items_view` and `items_materialized` into their respective folders. Native DDL was opened for the table, view and materialized view. The catalog browser showed sequence settings, native function and trigger definitions, and enum labels. The sequence favorite survived a clean quit and opened its settings after relaunch. An external rename was verified by PostgreSQL. Refresh listed the new name and opening the old favorite displayed `Favorite no longer exists; refresh the catalog`. Search found the table, six `note` columns and the qualified view. With the unrelated `note` filter cleared, Reveal selected `items_view` in the owning PostgreSQL A tree. |
+| R03 | After the read-only profile checks, the normal A profile accepted an UPDATE and returned its new value. Independent PostgreSQL confirmed the write. |
 | B02 | Criteria generated `id ASC`. The ordered, NULL, empty, quote, AND and OR cases displayed IDs `1,2,3`, `1`, `2`, `3`, `3` and `1,3` respectively. Independent psql returned the same ID lists. |
-| B01 | With explicit `ORDER BY id`, fetch size 20 showed IDs 1–20. Fetch Next loaded 40 and scrolling loaded 60. A subsequent 1,000-row fetch scrolled to ID 1000 and cleared the more-rows indicator. Drag changed the Name column width and double-click fit it again. Grid → Text → Grid worked. The multiline clipping noted earlier was still visible. Independent psql read 1,000 rows with IDs 1–1000. |
+| B01 | With explicit `ORDER BY id`, fetch size 20 showed IDs 1–20. Fetch Next loaded 40 and scrolling loaded 60. A subsequent 1,000-row fetch scrolled to ID 1000 and cleared the more-rows indicator. Drag changed the Name column width and double-click fit it again. Grid → Text → Grid worked. At 1280 pixels and scale 1, the multiline note for ID 3 was cut at the row bounds. The entire LF-containing cell copied correctly, with UTF-8 hex `636f6d6d612c2071756f7465202220616e640a6e6577206c696e65` in both clipboard and PostgreSQL. Independent psql read 1,000 rows with IDs 1–1000. |
 | B03 | Back and Forward restored SQL, order and rows. A follow-up at fetch sizes 10 and 20 restored IDs `1,2,3` ascending and `10,9,8` descending, respectively, with matching footer sizes and independent psql results. Changing size had created an intermediate history entry, so the two saved endpoints were two steps apart. Criteria Cancel preserved the active filter. Branching to `id = 2` left Forward disabled. |
-| B04 | Expand hid the Navigator on the items tab and Escape restored its prior width and active filter. The value-panel and second-tab variants remain unverified. |
+| B04 | Expand hid Navigator and Value on both items and editable. Escape restored both panels and the active `id = 3` filter on items. Restore workspace restored both panel widths and the selected value on editable. The items filter was cleared before the editable check. |
+| M01 | At scale 2, Columns, Constraints, Foreign Keys, Indexes, Statistics and native DDL showed the fixture types, defaults, nullability and key definitions. Statistics explicitly labeled the 1,000 rows as estimated. Copy column details preserved the exact Unicode and LF in the comment. Copy DDL omitted line numbers and replayed through the last owner statement in a disposable schema. PostgreSQL compared all 12 catalog columns exactly and reported five constraints including two FKs and three indexes. Horizontal scroll exposed the comment field at 860 logical pixels, where the note row used two lines and its first line was clipped. The full comment was available through Copy. |
+| M02 | Enter and double-click both opened `items.note`. Data for `empty_items` had zero rows, with psql count 0. Virtual explained that keys and relationships were unimplemented. A disposable table's identity and generated-expression editors showed read-only status with no Save action. PostgreSQL retained `id` as identity and `doubled` as generated after an edit attempt. The generated column's Refresh reported a dropped-column or identity error after the fixture table was dropped in psql. |
+| M03 | Items showed the composite parent dependency and incoming reference. Open relation opened `release_other.incoming` and displayed ID 1 linked to item 1. The view showed its dependency on items and its internal rewrite rule as a reference. Reload preserved the selected view. The parent and child partition panels showed both directions and the exact 2026 bound. Guarded showed the fixture trigger, rule, policy and owner permissions. Empty items reported triggers loaded with no objects. Psql confirmed the bound, trigger, rule, policy and empty trigger list. |
+| M05 | The composite connector highlighted both mapped column pairs and the arrows pointed toward the referenced columns. The self and incoming links remained distinct. Cards displayed names without type or PK/FK badges. Middle drag panned the enlarged graph, zoom reached 184%, Reset returned to 100%, and Focus and Fit repositioned it. The earlier SVG export verified the same graph. |
+| M06 | Dragging the parents header and an items column row moved both cards. The adjusted offsets survived closing and reopening the items tab and a zoom round trip back to 100%. The independent B database retained default positions. Double-click opened different parents tabs on A and B with the respective labels `Parent one` and `B-only`. The narrow window retained horizontal scrolling. In the scale-2 Xvfb session, all four connectors remained distinct at full size and after Fit in an 860-logical-pixel window. |
 | S01 | Caret execution returned only `fastdb_accept_a, 271`. Selection returned only `314`. Whole script appended `314` then `fastdb_accept_a, 271` in separate results and the toolbar showed connection A. |
+| S02 | Format via Ctrl+Shift+F split the input at FROM and WHERE and preserved the Unicode literal. One Undo and Redo restored byte-identical input and formatted output. Select-all, cut, paste and clipboard round-tripped identical bytes. Shift-click selected `pha\nbeta` from two lines as expected. A 150-line paste scrolled down and right, but the last line's `END_S02` marker and caret were outside the viewport, including after Ctrl+End. Comment, Indent, Outdent and Find/Replace controls were absent from the SQL rail. |
+| S03 | Typing `it` after FROM suggested `items`, `items_materialized` and `items_view`. Typing a period after alias `i` suggested columns from `items`. An unterminated string showed syntax coloring only while typing. Execute displayed `Unterminated SQL literal or identifier`, and the corrected script returned `corrected`. Snippets, Import SQL copy and Save SQL copy had no entry point on the SQL rail. |
 | S04 | `SELECT :value AS value;` preview escaped the apostrophe by doubling it. Copying the result returned the exact UTF-8 `O'Reilly 日本語` despite missing Japanese glyphs in the test image. Integer `-42`, Boolean `true` and SQL NULL returned their expected values. Integer `42x` left Execute disabled and displayed a validation error. Cancel closed a binding with a distinctive value without adding a result, and the script backend's last query remained `SELECT NULL AS value;`. |
-| S05 | The exact three-statement script retained `11`, displayed the native missing-table error and produced no result for the third statement. A separate run showed zero affected rows for UPDATE and one result row for SELECT, with matching counts and elapsed times in the transaction log. The DO block succeeded. Delivery of its server NOTICE was not observed. Earlier invalid attempts contained leftover editor text. |
+| S05 | The exact three-statement script retained `11`, displayed the native missing-table error and produced no result for the third statement. A separate run showed zero affected rows for UPDATE and one result row for SELECT, with matching counts and elapsed times in the transaction log. The DO block succeeded. A clean repeat raised `s05-gui-notice`. The visible result showed zero affected rows, and Transaction log recorded the original SQL once. The separate Execution log control was absent, so the emitted server notice was never shown as a separate message. |
 | S06 | PostgreSQL independently confirmed `pg_sleep(30)` was active before Cancel and no longer active after it. Tab 2's Execute showed a busy refusal and produced no result after cleanup. The same tab that ran the sleep then returned `1`. The log marked the sleep cancelled after about four seconds. The documented five-second Timeout control was absent from the script rail; the candidate source initializes the tab timeout to off and has no action that changes it. |
 | T01 | Separate Create, Insert and Select runs in Script-1 returned ID `7` on backend 69. Script-2 used backend 71, reported the table invisible, and got a native missing-relation error when selecting it. Closing Script-1 removed backend 69. Reopening the saved script still returned missing-relation on its fresh session. Script-2 kept backend 71. |
+| T02 | The transaction toolbar showed Commit, Rollback and a mode/isolation menu, with no explicit Begin action. Selecting Manual Commit left backend 76 idle. The first UPDATE began a transaction implicitly. The tab saw its pending change while independent psql read the original. A later toolbar Rollback left backend 76 idle with ROLLBACK as its last command. Toolbar Commit made a separate update visible to psql, and a final committed update restored `original`. |
 | T03 | SQL `BEGIN` and `SAVEPOINT accept_sp` preceded a division-by-zero result with failed-transaction feedback. `ROLLBACK TO SAVEPOINT` recovered the tab and its next SELECT returned `1` on backend 76. The toolbar Rollback click in Auto mode left the backend in its transaction. Executing `ROLLBACK` in the editor returned the same backend to idle, confirmed independently by `pg_stat_activity`. |
 | T04 | Manual Commit left the scratch UPDATE pending. Enabling Auto-Commit was refused with `Commit or Rollback before enabling autocommit`. After toolbar Rollback, Auto-Commit took effect and psql still read `second`. Repeatable read was selected while idle and `SHOW transaction_isolation` returned `repeatable read`. Selecting the database opened a new temporary PostgreSQL tab that returned `postgres`. Script-1 retained `fastdb_accept_a`, and choosing `release_other` there changed its `SHOW search_path` to `release_other`. |
 | T05 | Load editable on a direct SELECT enabled scalar edits. Save on ID 1 persisted `t05-first`, confirmed in psql. An unsorted reload changed the row order, so the stale-write attempt was repeated after checking the ID shown in Grid. After a separate psql session wrote `t05-external-final` to ID 1, Save reported a conflict, retained the staged `t05-stale` value, and psql confirmed the external value survived. A fresh fixture reproduced the conflict. Cancel cleared the draft, the next query showed `t05-external-final`, and Load editable refused both the view and the join. |
@@ -462,8 +1003,21 @@ isolated displays and a separate preferences fixture.
 | G06 | In the PostgreSQL fixture, item 1001 pointed to parent `(2,1)`. Forward navigation applied both predicates and displayed only `(2,1,Other tenant)`. Reverse navigation applied `tenant_id=2 AND parent_id=1` and returned only ID 1001, excluding fixture rows that shared one key component. The picker staged both fields as `(1,2)`. Cancel restored `(2,1)`, and independent psql confirmed that ID 1001 and sibling ID 1002 kept their original keys. The picker action was clipped at a 1280-pixel window width and became visible at 1800 pixels. |
 | D01 | The quoted preview showed type, default, NOT NULL, multiline comment and rename. Cancel preview left PostgreSQL with nullable `note text` and no default. Persist changed it to `details varchar(80) NOT NULL` with the exact SQL default and two-line comment. The open Properties tab reflected the catalog change and Revert removed a later draft name. |
 | D02 | After an independent psql session changed the comment, Persist reported a concurrent change and kept the draft. Refresh and Discard read the external comment. A second preview dropped the default, changed the type to varchar(81), and set an invalid default function. PostgreSQL rejected the function and an independent catalog read showed varchar(80), the original default, NOT NULL and the external comment. |
-| D03 | Created `release_check.ddl_scratch` from the schema menu with an ID primary key and `note text`. The quoted preview matched independent catalog read-back and the table appeared in the Navigator. Added `scratch_col text` and renamed it in the Navigator. Dropped a disposable index seeded through psql and verified its absence with `to_regclass`. D01 also exercised column type change. |
+| D03 | Created `release_check.ddl_scratch` from the schema menu with an ID primary key and `note text`. The quoted preview matched independent catalog read-back and the table appeared in the Navigator. Added `scratch_col text` and renamed it in the Navigator. Dropped a disposable index seeded through psql and verified its absence with `to_regclass`. D01 also exercised column type change. A separate fixture dropped the scratch column and a check constraint through their quoted previews and confirmed both were absent. Create View returned 34, ALTER VIEW renamed it with the same result, and Drop View removed it. Rename Table changed the catalog name and refreshed the Navigator. The desktop had drop actions for indexes and constraints but no separate creation controls. Those fixtures were seeded in psql. |
 | D04 | The Truncate and Drop previews identified the disposable `release_check.ddl_scratch` table. Independent psql read 1 row after Truncate Cancel and 0 after confirmation. Drop Cancel kept the table and confirmation removed it. Rename to an empty identifier disabled Execute. Rename to the existing `items` table returned the native duplicate-relation error and left both tables present. |
+| V01 | Value showed SQL NULL for the first note, JSON with the exact large integer and both duplicate keys, and unchanged mixed XML. The binary viewer distinguished `00 01 7f ff`, zero bytes and SQL NULL. IDs 1 and 2 displayed the same UTC instant. Independent psql matched the stored JSON and XML, byte values and both epochs. |
+| V02–V03 | Double-clicking the binary cell reported that editing requires Value Editor. The grid context menu, footer and Value panel had no action that opened it. The candidate defines `open_value_editor` but has no call site. The typed edit/file workflow fails at entry and stale Apply is blocked by that missing entry. |
+| X02 | A duplicate key in the second batch rolled back that batch. The GUI reported 256 committed rows. Independent psql counted all 256 expected IDs, neither second-batch probe row, and the original seed. On separate fresh tables, Escape and the window close control requested cancellation during a server-confirmed delayed insert in batch two. The wizard stayed open while cancelling. The final reported and independently read counts were 0 for Atomic and 256 for Per-Batch. Both attempts displayed an import-session cleanup timeout. PostgreSQL was still executing the Per-Batch insert after that outcome and later became idle with no additional committed rows. |
+| X04 | Transfer from the active SQL result committed exactly IDs 2 and 3 with exact notes. UPDATE RETURNING and a DELETE CTE each executed once in the editor and left Transfer disabled. A duplicate in batch two left the target's two seed rows in Atomic mode and committed only IDs 1001–1256 in Per-Batch mode. Cancelling a server-confirmed delayed second batch reported 0 or 256 newly committed rows, matching independent PostgreSQL. Both cancellation outcomes also showed a transfer-session cleanup timeout. The Per-Batch insert remained active after the outcome. The separate cross-provider BLOB failure still applies. |
+| X06 | Selecting UTF-8 on a UTF-16 LE file produced a preview error. Selecting UTF-16 LE imported the exact three fixture notes, confirmed by independent hexadecimal UTF-8 read-back. Clearing the default NULL token stored a literal backslash-N at ID 4. Turning Has Header off exposed Col 1 and Col 2, and Start Import showed a mapping error before a destination was mapped. Mapping Col 1 and Col 2 imported the exact ID 5 row. Omitting the note mapping on ID 7 stored the PostgreSQL column default. An invalid Integer conversion committed zero rows with Skip off, then reported one processed and one rejected with Skip on. Independent psql confirmed ID 6 stayed absent. Escape and the close button kept the wizard open until it displayed the outcome in X02. |
+| X03 | With the same items filter `id <= 25 ORDER BY id` and fetch size 10, the native Save File dialog produced loaded and full CSV and SQL files. CSV parsing verified headers, ordered IDs 1–10 or 1–25, the Unicode name and the quoted LF. Loaded CSV represented NULL and empty as empty; full CSV represented NULL as `\N`. Both SQL files replayed into a temporary table with zero differing rows, including exact JSON, XML, binary, numeric and UTC values. The original table still had 1,000 rows. |
+| X05 | The native replacement prompt overwrote a test file with the exact loaded CSV. In a two-statement SQL script, Export All on Result 2 produced only the header `active_statement` and value `520`. A separate 6,000-row full export reported 895 rows written before Cancel. FastDB reported the destination unchanged, the existing bytes matched, and no matching temporary file remained. Attempting to save to the container's read-only filesystem displayed the native error and created no file. Earlier native dialog Cancel left no destination. |
+| R04 | The PostgreSQL connection dialog accepted the test CA and localhost and rejected an unrelated CA and the IP hostname mismatch. The client-certificate account rejected no identity and a cert-only PKCS#12 archive. The full archive passed. With SSH enabled, the wrong fingerprint failed and the correct fingerprint passed. Connect Database then opened a live session and independent `pg_stat_ssl` read TLS 1.3 and the expected client DN. |
+| W03 | Auto-Commit Save was visible immediately in independent PostgreSQL. The Manual selector opened below the toolbar and within the window. An earlier pending update remained visible in the table after a later duplicate-ID Save failed, with feedback that only that batch rolled back. Independent psql still read the committed rows. Disconnect ended all fixture app sessions and left the earlier pending write uncommitted. Prior runs verified Manual commit, rollback and close. |
+| W04 | The dialog displayed UTC, SQL type, duration, rows and result. Filtering by the synthetic bound value `qa_hidden_binding_w04` located the expanded SQL and its literal. Searching by the statement alias returned the same expanded text. The guide requires bound values to be omitted, so the redaction subcase fails. A second run produced 130 matching statements. Scrolling reached records past 100, and the same filter found the records again after closing both script tabs and disconnecting. |
+| W05 | The first run revealed a zero-row result, and command and error runs also created result tabs. Dragging the divider to both extremes stopped near 15% and 85%. Script-1 retained the tall split and Script-2 its default split after switching. Closing the last result restored the full editor. The Grid, Text, Record and Panels rails were visible at the normal split. |
+| W01 | Native and workspace title rows showed the connection and active script. Openbox moved the native window from `82,77` to `154,115`, while dragging the in-app title left the window at `82,77`. Double-click on the in-app title set and cleared both EWMH maximize flags. Dragging the divider widened Connections by about 82 pixels. At 570 pixels, horizontal wheel scrolling revealed the right side of the toolbar without overlapping window controls. |
+| W02 | The four filter modes and active tooltip appeared. Connections refused the table-only term `items` and matched the saved connection. Catalog mode matched `release_other` as a schema. Tables kept `incoming` under its original Tables folder with `Filtered by search`. Clearing restored the expanded `release_check` tree. Files reopened Script-1 with bytes identical to the saved SQL. Clearing Tables did not offer Browse catalog objects. The Navigator only calls its search-results renderer when the query is nonempty. |
 | W06 | Double-clicking a Navigator table loaded its two rows without a separate data action. Record opened at row 2 in Grid and retained it in Text. Copy record returned the formatted header and values. Double-click and F2 did not open an editor from the Record button view. Previous/Next, Escape and All rows returned the expected row and full presentation. Text scrolled horizontally to the final column. PostgreSQL and the fetch footer showed 2,001 rows, while the Text clipboard contained only IDs 1–2,000 with aligned columns and `[NULL]`. The 266-character note preview stopped at 255 characters. The Text header showed the loaded count of 2,001. |
 
 The R01 sidebar restoration subcase fails. The restore code clamps a saved
@@ -480,26 +1034,26 @@ This index covers the IDs in the [PostgreSQL runbook](0.2.0-postgres-manual-acce
 Partial results credit only the observed substeps in this report or the
 [lifecycle smoke record](../WORKFLOW_ACCEPTANCE.md#postgresql-desktop-smoke-follow-up-2026-11-23).
 Pending rows name an unverified desktop route. R05 is the Finder gate
-deferred with macOS. Linux packaging has its own results above. Remaining GUI checks require manual verification.
-Of the 61 indexed IDs, twenty-two pass as written, L04 passes for the planned
-Linux contexts, 26 are partial, 9 are pending, two fail a subcase, and one
-is deferred.
+deferred with macOS. Linux packaging has its own results above. The current continuation runs the remaining GUI checks on isolated Xvfb displays.
+Of the 61 indexed IDs, forty-two pass as written, L04 passes for the planned
+Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 
 | Case | Status | Evidence or remaining check |
 | --- | --- | --- |
-| C01 | Partial | Picker, disabled-provider clicks and navigation exercised. Verify the remaining visual states at the target scales. |
+| C01 | Pass | Verified selectable and deferred providers and PostgreSQL Back/Next draft retention at scales 1 and 2. |
 | C02 | Pass | Wrong password and closed port produced distinct errors. Correct settings passed Test and connected to A. |
-| C03 | Partial | B profile state and timeout 121 observed. Verify the full A edit/reconnect, server application-name read-back and other invalid timeout inputs. |
-| C04 | Partial | Saved PostgreSQL reconnect and disabled legacy MariaDB profile observed. Verify both profiles reconnect across one restart and record credential prompts. |
-| B01 | Partial | Initial 20, manual next page, automatic fetch, scroll to ID 1000, resize/autofit and Grid/Text passed. Multiline clipping remains open. |
+| C03 | Pass | B profile settings persisted. A retained edited name, timeout and application name after reconnect. The numeric field filtered nonnumeric keystrokes and validation rejected 0 and 121. |
+| C04 | Pass | Both PostgreSQL profiles reconnected after one restart with saved credentials in Linux local credential mode. No prompts appeared. The seeded legacy MariaDB profile retained its fields and stayed disabled. |
+| B01 | Fail (multiline grid layout) | Paging, scroll to ID 1000, resize/autofit and Grid/Text passed. At 1280 pixels and scale 1, the lines of an LF-containing note were cut by the fixed row bounds. Its clipboard bytes matched PostgreSQL exactly. |
 | B02 | Pass | Generated order, NULL, empty, quoted literal, AND and OR matched native PostgreSQL read-back. |
 | B03 | Pass | Back and Forward restored filter, order, rows and fetch sizes 10 and 20. Criteria Cancel and forward-branch replacement passed. |
-| B04 | Partial | Expand and Escape restored the items layout. Verify both panes and the second-tab variant. |
-| M01 | Partial | Basic columns and primary-key DDL observed. Verify all fixture fields and sections, full copy, estimates and scale. |
-| M02–M03 | Pending | Verify column keyboard/pointer routing and empty/unsupported/error states. Check dependencies, partitions, triggers, rules, policies, permissions and refresh. |
-| M04 | Partial | Native table DDL and owner-specific catalog refresh observed. Verify remaining object kinds, favorites, search/reveal and disappearing-object feedback. |
-| M05 | Partial | Diagram rendered composite, self and incoming links. Fit and SVG export passed. Verify connector interactions and remaining display controls. |
-| M06 | Partial | Double-click opened the related A table. Verify drag and layout persistence, A/B isolation, and narrow/HiDPI layout. |
+| B04 | Pass | Confirmed both panels hide and return at their prior widths on two tabs, using Escape and Restore workspace. |
+| M01 | Fail (narrow Properties layout) | Properties, full clipboard, native DDL replay and estimate labeling passed. The narrowed scale-2 Columns view wrapped and clipped the comment row. |
+| M02 | Pass | Enter and double-click select the correct column editor. Verified zero rows, disabled Virtual, read-only identity/generated definitions and a distinct missing-column error. |
+| M03 | Pass | Verified links, partition bounds, trigger/rule/policy/permissions, loaded-empty state and view refresh. |
+| M04 | Pass | Verified all seven object kinds, native definitions, saved favorite across restart, externally renamed object feedback, search and reveal in A. |
+| M05 | Pass | Verified composite selection, self and incoming edges, referenced-column arrows, badge-free cards, pan, zoom, Fit, Reset, Focus and earlier SVG export. |
+| M06 | Pass | Header and row drag, reopen and zoom persistence, A/B layout and navigation isolation, and narrow/HiDPI layout verified. |
 | G01 | Pass | Undo, Redo and Cancel changed only the draft. Save committed ID 1 on A and B kept the original name. |
 | G02 | Pass | Insert and Duplicate saved the expected IDs, parent keys, names and default note. Undo restored a staged Delete. Saving both deletes restored the original count. |
 | G03 | Pass | The two-row Save hit the check constraint, retained both drafts, and preserved both committed rows. Cancel cleared the drafts. |
@@ -507,52 +1061,64 @@ is deferred.
 | G05 | Pass | Private Xvfb verified hide, move, two-key sort, restore, visible-order TSV, preserved drafts, Find and Record navigation. Independent psql confirmed the order and unchanged persisted values. |
 | G06 | Pass | Both directions used the composite key, the picker staged both fields and Cancel preserved the original rows. The picker footer clips its action at 1280-pixel width. |
 | S01 | Pass | Verified separate caret, selection and whole-script execution, result order and connection identity. |
-| S02–S03 | Pending | Verify editor commands and undo, diagnostics and editor assistance. |
+| S02 | Fail (editor controls and viewport) | Format, Undo/Redo, selection and Unicode clipboard passed. Required line-edit and Find/Replace controls were absent and the long-paste caret remained clipped. |
+| S03 | Fail (editor controls and diagnostics) | FROM and alias completion passed. Diagnostics appeared only on Execute. Snippets and SQL copy actions had no reachable rail controls. |
 | S04 | Pass | Typed parameter results, integer validation and Cancel passed. Clipboard read-back verified the exact UTF-8 string. |
-| S05 | Partial | Missing-table stop, prior result retention, zero affected rows, one returned row and log timing passed. Server NOTICE display remains unverified. |
+| S05 | Fail (Execution log route) | Script boundaries, native errors, counts and timing passed. The documented Execution log was absent and the PostgreSQL notice was not displayed separately. |
 | S06 | Fail (timeout control) | Cancel, alternate-tab busy refusal and recovery passed. The documented Timeout control was absent. Retest setting it to five seconds, cancellation and reset when the control is available. |
 | S07 | Pass | Explain and read-only Analyze displayed the tree and raw output, including actual rows, loops, timings and buffers. |
 | T01 | Pass | Separate runs retained the temporary table on its owning SQL tab only. Closing and reopening that script removed the temporary table and left its sibling backend running. |
-| T02 | Partial | Manual mode rollback and commit passed independent read-back. Verify explicit toolbar Begin. |
+| T02 | Fail (toolbar Begin) | Manual mode began implicitly and its toolbar Rollback and Commit passed independent read-back. No explicit toolbar Begin was available. |
 | T03 | Pass | SQL savepoint recovery returned 1 and explicit SQL Rollback ended the transaction, confirmed on the same backend by PostgreSQL. |
 | T04 | Pass | Verified refusal with pending work, rollback before Auto-Commit, isolation read-back, and separate database and in-place schema contexts. |
 | T05 | Pass | Verified Save, stale-write conflict and retained draft, Cancel/reload, and read-only view and join rejection. |
 | D01 | Pass | Verified quoted preview, Cancel, Persist and catalog refresh, and Revert. Earlier tests also exercised dirty Close. |
 | D02 | Pass | Verified stale snapshot refusal, Refresh and rollback when a later DDL statement failed. |
-| D03 | Partial | Table creation, column add/rename/type change and index drop passed. Manual acceptance remains for column drop, index creation, constraint and view operations, and table rename. |
+| D03 | Fail (index and constraint creation controls) | Verified table and column actions, view create/alter/drop, and index and constraint drop with independent PostgreSQL. The separate index and constraint creation controls were unavailable. |
 | D04 | Pass | Truncate and Drop Cancel/confirm, empty-name validation, and native duplicate-name failure matched independent PostgreSQL checks. |
-| V01 | Partial | Multiline copy and the large-value editor limit were observed. Verify the remaining fixture value types; clipped multiline grid rendering remains open. |
-| V02–V03 | Pending | Verify typed edits and file round trips, invalid encodings and stale Apply refusal. |
-| X01 | Partial | Alternate delimiters, pre-execution cancel, three exact UTF-8 rows and NULL versus empty observed. The GUI probe still needs the default backslash-N marker path. |
-| X02 | Partial | Atomic duplicate rolled back the preceding valid row. Verify per-batch duplicate and cancel under both policies. |
-| X03 | Partial | Full CSV and loaded SQL replay passed in separate runs. Verify loaded/full CSV and SQL side by side on the same capped query. |
-| X04 | Partial | Navigator self-transfer refusal and exact same-provider atomic transfer passed. Cross-provider BLOB fidelity failed at runner level. Verify desktop SQL-result scope, write-result refusal, duplicate policies and cancellation. |
-| X05 | Partial | Native dialog Cancel left no file. Verify unwritable destinations, successful replacement, running-export cancellation and active SQL result scope. |
-| X06 | Partial | Custom NULL token distinguished quoted and unquoted values. Verify UTF-16, cleared token, manual mapping, rejected conversions and cancellation. |
-| L01 | Partial | A/B grid identity, draft retention, overlapping Save/Refresh and error ownership, and Navigator refresh ownership passed. Verify the overlapping query substep directly. |
-| L02 | Partial | Disconnect ended A's query while B kept its backend. Closing/reopening removed the old result. Verify explicit Cancel and absence of late reconnect. |
-| L03 | Partial | Dirty grid guards, cancel, reconnect and independent Save read-back were exercised. The stale banner after reconnect needs a retest. |
+| V01 | Pass | Value viewer preserved exact JSON/XML, distinguished binary and NULL states, and displayed both matching UTC instants. Grid multiline clipping is tracked under B01. |
+| V02 | Fail (Value Editor entry) | Binary grid edit refers to Value Editor, but the candidate has no entry point. Typed edits and file round trips remain unverified. |
+| V03 | Blocked | Stale Apply requires a reachable Value Editor. |
+| X01 | Pass | Cancel left zero rows. The UTF-8 comma import preserved all three exact notes. In the semicolon import, the preview showed the default unquoted `\N` as NULL. Independent psql confirmed ID 5 was SQL NULL and ID 6 was empty text with length 0. |
+| X02 | Fail (cancel cleanup) | Duplicate and cancel durability matched the expected counts for both policies. Both cancel attempts reported cleanup timeout, and the Per-Batch SQL was still running after the GUI outcome. |
+| X03 | Pass | On one capped, ordered query, loaded CSV/SQL contained 10 rows and full CSV/SQL contained 25. CSV content and independently replayed SQL matched the fixture. |
+| X04 | Fail (BLOB fidelity and cancel cleanup) | SQL result scope, write-result refusal and duplicate/cancel durability matched native read-back. Cleanup timed out on both policies, and the BLOB runner changed or rejected valid bytes. |
+| X05 | Pass | Native dialog Cancel, replacement, visible read-only filesystem failure, running-export cancellation with preserved destination, and active SQL result scope verified. |
+| X06 | Pass | Checked UTF-16, NULL tokens, manual mapping, skipped-column default, rejected conversions and the wizard cancellation lifecycle. X02 records the underlying cleanup failure. |
+| L01 | Pass | Verified query, Save and Refresh ownership, error isolation, same-name tabs and staged edit retention. |
+| L02 | Pass | Explicit Cancel and Disconnect targeted A, B stayed usable on the same backend, and A did not reopen after the old query deadline. Earlier close/reopen discarded the old result. |
+| L03 | Fail (stale departure feedback) | Dirty guards and durability checks passed. The obsolete Save or Cancel banner survived Cancel and reconnect with no active draft. |
 | L04 | Pass for planned Linux contexts | Tab close, shortcut Quit, window close, and save failure/retry preserved the expected bytes. Native macOS menu and About paths are deferred. |
 | R01 | Fail (sidebar) | Theme and zoom restored. The saved hidden Navigator reopened visible. Remaining layout, tabs, logs and timeouts need verification. |
 | R02 | Pass | Quit released the pending transaction, preserved exact script bytes, and restart left the unexecuted INSERT absent. |
-| R03 | Partial | Read-only SELECT, rejected UPDATE/rename, disabled grid changes and lack of writable transfer target observed. Verify that the normal A profile stays writable. |
-| R04 | Pending | The automated connections passed transport assertions. The desktop SSH/TLS and client-identity dialog acceptance is pending. |
+| R03 | Pass | Read-only refused writes and writable destinations as expected. Independent PostgreSQL confirmed a normal A profile write. |
+| R04 | Pass | Connection dialog verified SSH pinning, TLS CA and hostname, and client identity. PostgreSQL confirmed the connected session used TLS 1.3 and the intended client DN. |
 | R05 | Deferred | The macOS Finder and clean-user DMG gate is outside the requested Linux run. |
-| W01–W02 | Pending | Verify title and toolbar behavior at narrow widths, then all Navigator filter modes, expansion restore and file opening. |
-| W03 | Partial | Manual commit, rollback and close were read back independently. Verify automatic commit, failed-batch recovery, disconnect and selector placement. |
-| W04–W05 | Partial | Log fields and filtering, initial full editor and result presentation observed. Verify redaction, paging, restart, split limits and closing the final result. |
+| W01 | Fail (workspace title drag) | The native Openbox frame moved, but dragging the documented FastDB title row did not move the window. Double-click zoom, divider resize, separate rows and the narrow scrollable toolbar worked. |
+| W02 | Fail (empty Tables query) | All mode searches, expanded tree restore and file open passed. Empty Tables search did not offer Browse catalog objects. |
+| W03 | Pass | Verified immediate Auto-Commit, Manual visibility and durability, failed-batch rollback, close/disconnect and selector placement with independent psql. |
+| W04 | Fail (parameter redaction) | A synthetic bound value appeared verbatim in Transaction log and matched a search. Paging and retention across tab close and disconnect passed. A later SQLite process opened with an empty session log. Modal resource release remains unverified. |
+| W05 | Pass | Verified zero-row, command and error results, split bounds, independent tab layouts, the rail at normal height and full editor after the last result closed. |
 | W06 | Pass | Private Xvfb verified Navigator autoload, read-only Record navigation, mode switches and copy, Text alignment, SQL NULL, horizontal scrolling and the 2,000-row / 255-character caps. |
 | W07 | Pass | Setup retained values across tabs and deferred providers were unavailable. |
+
+## Linux P0-05 release decision
+
+**Fail on the tested Linux candidate.** Required cases B01, S05, S06, T02,
+X02, X04 and L03 contain observed failures. The other 16 indexed gate
+cases passed in the planned Linux contexts. The runbook case rows above
+describe the exact failures and retest conditions. The macOS and supplemental
+release gates remain separately scoped.
 
 ## CI coverage and supplemental gates
 
 | Scope | Automated evidence | Remaining Linux acceptance |
 | --- | --- | --- |
 | Builds, engine, drivers and transport | [CI](../../.github/workflows/ci.yml) runs the workspace suite in the Linux app job and requires live PostgreSQL/MySQL and a separate TLS script in the integration job. This report adds live MariaDB sessions, TLS, SSH cancellation and recovery, and credential-store evidence. | Live vendor ODBC. |
-| Navigator, editor and disabled capabilities | The desktop cases above cover the observed routes. PostgreSQL plan snapshots and driver definition search have separate evidence in this report. | Remaining keyboard/focus, connection preferences, object actions, result controls, and exposed disabled states beyond the provider picker. |
-| Transfers and native jobs | CSV, same-provider transfer and native backup retests are recorded above. | Cross-provider transfer, running-job cancellation and the native-tools dialog matrix. |
-| Administration and Session Monitor | The live and app-level Task 8 retests cover mutations, native privileges and target identity. | Remaining Administration families and the complete Cancel/Terminate and read-only dialog flows. |
-| Packages and updater | The tag-triggered [release workflow](../../.github/workflows/release.yml) checks apt install/remove, binary identity, launcher presence and linked libraries on Ubuntu 24.04. It does not launch the installed app. The retained package matches the recorded SHA-256 and its `Depends` field has no Fontconfig entry. The private Xvfb GUI cases used an explicitly installed Fontconfig. | Retest startup on a minimal Ubuntu 24.04 install once the dependency changes. Verify the packaged update flow with a newer compatible signed target. |
+| Navigator, editor and disabled capabilities | The desktop cases above cover the observed routes. PostgreSQL plan snapshots and driver definition search have separate evidence in this report. | Remaining keyboard and preference routes beyond the tab-order, group, color and timeout tests above, plus object actions, result controls and disabled states. |
+| Transfers and native jobs | CSV, same-provider transfer and native backup retests are recorded above. | All three planned GUI scalar directions and the cross-provider duplicate, FK and Cancel variants have native read-back above. BLOB rejection and silent byte changes remain failures. MySQL and SQLite native-tool GUI operations are blocked by missing entries. PostgreSQL GUI evidence covers full and scoped backups, restore success and populated-target refusal, maintenance, and Cancel with a controlled wait-only child. |
+| Administration and Session Monitor | The live and app-level Task 8 retests cover mutations, native privileges and target identity. | All eight Administration families and the Session Monitor chain have packaged GUI results above. Administration catalog filtering is absent, failure cleanup wording is ambiguous, and one restricted monitor row overlaps the details pane. |
+| Packages and updater | The tag-triggered [release workflow](../../.github/workflows/release.yml) checks apt install/remove, binary identity, launcher presence and linked libraries on Ubuntu 24.04. It does not launch the installed app. The retained package matches the recorded SHA-256 and its `Depends` field has no Fontconfig entry. The private Xvfb GUI cases used an explicitly installed Fontconfig. | Retest startup on a minimal Ubuntu 24.04 install once the dependency changes. Real signed update is Blocked while v0.3.0 is the latest published release. |
 | Performance | The [desktop performance workflow](../../.github/workflows/benchmark.yml) is manually dispatched on a self-hosted macOS runner. This report records the Linux release PostgreSQL workload and private-display observations. | Approved Linux display policy run against a compatible baseline and separate dedicated-host cold start. |
 
 ## Open acceptance cases
@@ -560,11 +1126,11 @@ is deferred.
 | Plan tasks | Remaining coverage |
 | --- | --- |
 | 1–2 | Live vendor ODBC is Blocked. The remaining desktop preflight applies to the enabled providers. |
-| 3–6 | Linux connection and preference matrix, broader metadata and schema mutations, SQL-result Grid/Text/Record combinations, provider-specific table searches and transactions, and remaining editor actions. |
-| 7–8 | Cross-provider BLOB fidelity failed. Broader import cancellation and batch policies, transfer and native tools GUI matrix, and the Administration transaction and privilege cases remain open. |
-| 9 | Remaining interactive package and update actions on Ubuntu 24.04 and a newer production-signed target. Minimal-install startup failed before the explicit Fontconfig install. |
+| 3–6 | Linux connection and preference matrix, broader metadata and schema mutations, SQL-result Grid/Text/Record combinations, provider-specific table search cancellation and preview edge cases, transactions, and remaining editor actions. See the three-provider GUI search evidence above. |
+| 7–8 | Cross-provider BLOB fidelity failed. Broader import cancellation and batch policies, and remaining transfer and PostgreSQL native-tool variants remain open. Task 8 Administration and Session Monitor results are recorded above. MySQL and SQLite native-tool GUI entries fail. |
+| 9 | Remaining interactive updater actions on Ubuntu 24.04. Launcher, clean Quit and apt removal passed with Fontconfig installed. Minimal-install startup failed before the explicit Fontconfig install. The real signed update is Blocked for lack of a newer published target. |
 | 10 | Approved-display benchmark, compatible baseline comparison, and cold startup after a coordinated reboot. |
-| 11 | Final case-by-case reconciliation after the open runs. P0-05 remains open. |
+| 11 | Final case-by-case reconciliation after the open runs. The indexed Linux P0-05 gate fails. |
 
 ## Documentation audit
 
