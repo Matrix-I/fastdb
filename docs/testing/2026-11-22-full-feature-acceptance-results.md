@@ -526,6 +526,22 @@ window to 1700 pixels. The provider runs used that width.
 | PostgreSQL 16.16 | The quoted name returned the one exact result that independent psql found. A subsequent native UPDATE caused the old hit to report that the row changed or was no longer visible. With a fixture lock active, psql showed dedicated waiter 94 blocked by 93 on the relation. Cancel reported cancellation, removed waiter 94 and left the original lock holder asleep. |
 | MySQL 8.4 | The literal `%_` and a lowercase search for an uppercase JSON value each returned one row. The BLOB-only token returned zero. The 56 native matches for the repeated term yielded 50 hits. Opening the JSON hit after an independent update preserved the original captured row. |
 
+A second private Xvfb run exercised cancellation against active lock waits.
+On MySQL 8.4, an independent process list showed FastDB session 14 waiting
+for a table metadata lock while probing the table, and fixture session 26
+holding the lock. FastDB showed Cancelled with zero tables and rows.
+The next process-list read showed session 14 gone and session 26 still
+holding the lock. After release, the same dialog returned the single match.
+
+On SQLite, an independent reader confirmed the fixture's exclusive lock.
+The FastDB file descriptor count for the database rose from two to three
+during the search and returned to two after Cancel while the fixture still
+held the lock. The dialog showed Cancelled and also reported
+`database is locked` as a failed table request. After release a repeat
+returned the single match, which independently read back as ID 731
+on both providers. Raw evidence is in
+`.sdd/table-search-cancellation-evidence/`.
+
 The SQLite and MySQL menu entry checks on the same DEB failed. The
 connected, writable, file-backed SQLite profile showed its full path
 and loaded its table. Its menu omitted Backup Database, Restore Database
