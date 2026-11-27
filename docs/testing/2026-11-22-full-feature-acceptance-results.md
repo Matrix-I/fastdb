@@ -1522,9 +1522,18 @@ context menu, footer and Value panel exposed no way to open it. A call-site
 search on the acceptance branch found only the shared `open_value_editor`
 definition. This is a failed GUI entry for the provider-independent editor.
 The 256 KiB editor boundary, UTF and binary file round trips, invalid encoding,
-UTC toggle and stale Apply remain unverified through the editor. This pass
-uses the existing PostgreSQL V01–V03 replay. The viewer was not replayed on
-MySQL or SQLite for this case.
+UTC toggle and stale Apply remain unverified through the editor.
+
+The follow-up used MySQL 8.4 and SQLite on the same packaged candidate in
+private Xvfb. Both viewers showed XML source unchanged, displayed
+`00 01 7f ff`, and distinguished a blank zero-byte BLOB from `[NULL]`.
+The formatted SQLite JSON retained the exact 20-digit integer and both
+duplicate keys. MySQL exposed a distinct 16-digit integer and the one key
+retained in its native JSON value. The X11 clipboard values for JSON,
+XML and hex matched independent provider read-back. At 262,144 bytes,
+Copy Value returned the exact fixture text from both viewers. At 262,145
+bytes, both showed the 256 KiB limit. Raw evidence is in
+`.sdd/value-panel-provider-evidence/`.
 
 ## Linux Administration and Session Monitor retest
 
