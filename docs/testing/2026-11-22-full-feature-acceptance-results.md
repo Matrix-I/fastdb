@@ -1335,6 +1335,24 @@ fail again. Save removed the identity metadata and the corresponding
 local credential file. The plaintext archive password never appeared
 in the saved connection metadata.
 
+### Linux SSH authentication and database TLS
+
+On private Xvfb, PostgreSQL 16 and MySQL 8.4 each passed Test
+Connection over the dedicated OpenSSH fixture using a password and
+again using an encrypted ED25519 key with its passphrase. OpenSSH
+logged two accepted password authentications and eight accepted
+public-key authentications across the Test, Connect and SQL paths.
+The SSH listener was loopback-only, with forwarding limited to the two
+fixture databases. No host port was published.
+
+On both providers an unrelated host key fingerprint was refused
+with the explicit fingerprint message. After restoring the valid
+pin, changing only the database host from `localhost` to
+`127.0.0.1` failed certificate verification because the certificate
+had only the localhost DNS SAN. Restoring the database hostname
+allowed Connect and a SQL query. PostgreSQL reported TLS 1.3 and
+both providers reported the `TLS_AES_256_GCM_SHA384` session cipher.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
