@@ -1025,6 +1025,34 @@ two, with the Per-Batch statement still running after the GUI outcome.
 Per-Batch cancellation during an active insert on MySQL and SQLite
 remains unverified.
 
+### Linux large grid streaming and resident memory
+
+The retained 0.3.0 candidate opened a fresh FastDB process on private
+Xvfb for each workload. The PostgreSQL 250,000-row table used the
+FX2 `lab.large_results` definition and seed. A separate million-row
+table used the same seven columns and value generator. SQLite used a
+seven-column counterpart with notes up to 272 bytes. Independent
+queries matched the grid counts and confirmed IDs 1–250,000 and
+1–1,000,000, respectively. Each grid reached Idle.
+
+RSS comes from FastDB's `/proc/<pid>/status`, sampled every quarter
+second for 80 samples around each query. Figures below are KiB,
+except for spill file size in bytes.
+
+| Provider | Rows | Initial RSS | Peak sampled RSS | Increase | Spill bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| PostgreSQL | 250,000 | 175,900 | 242,904 | 67,004 | 0 |
+| PostgreSQL | 1,000,000 | 154,076 | 269,908 | 115,832 | 44,854,948 |
+| SQLite | 250,000 | 160,184 | 237,112 | 76,928 | 1,721,419 |
+| SQLite | 1,000,000 | 154,268 | 234,912 | 80,644 | 29,058,172 |
+
+Four times the rows increased query RSS growth by about 1.7× on
+PostgreSQL and 1.05× on SQLite, with cold pages spilling to disk in
+both million-row runs. Closing the PostgreSQL million-row tab removed
+its spill file. Quitting SQLite with its million-row tab open removed
+that spill file. This check measures the stated grid workloads under
+Xvfb.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
