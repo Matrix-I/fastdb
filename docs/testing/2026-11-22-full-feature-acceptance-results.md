@@ -884,6 +884,23 @@ returned all four original values. Both 150,000-row result footers
 confirmed the loaded count. Cancel left the dialog open, and a new
 search selected row 1, column 2.
 
+### Linux multi-key sorting and Criteria history
+
+MySQL 8.4.13 and SQLite ran the same five-row fixture in the packaged
+candidate under Debian 13 private Xvfb. In the column menu, Sort
+ascending on `bucket` followed by Add descending sort key on `score`
+produced IDs `4, 5, 2, 3, 1` in both grids. The primary key resolved
+the tie between IDs 4 and 5. Independent MySQL and SQLite queries
+returned the same order.
+
+In Criteria, equality on the text `O'Brien` selected IDs 2 and 3.
+The MySQL preview used `CONVERT(X'4f27427269656e' USING utf8mb4)`.
+SQLite doubled the apostrophe in the quoted literal. Native queries
+confirmed the exact result on both providers. Back restored the
+five-row result with both sort keys. Forward restored the Criteria
+expression and its two rows. PostgreSQL ordering, literal filters
+and history are covered in B02 and B03.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
