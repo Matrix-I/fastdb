@@ -1206,6 +1206,20 @@ file was removed. Both migrated profiles authenticated over TCP to
 the disposable PostgreSQL server from the Navigator without
 password re-entry.
 
+### Linux connection deletion and diagram cleanup
+
+Two saved PostgreSQL profiles connected over SCRAM in private Xvfb.
+Each had a local database credential and its own saved position for
+the same parent card. The two positions were created by dragging
+the card in each connection's diagram and verified to differ.
+
+Deleting the first profile through the Navigator removed its metadata,
+credential file and entire diagram-position directory. The other
+profile's credential and position file matched their pre-delete bytes.
+After relaunch, only the surviving profile appeared. It authenticated
+without password re-entry and restored its moved card and foreign-key
+arrow. The deletion test used database credentials in local mode.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
