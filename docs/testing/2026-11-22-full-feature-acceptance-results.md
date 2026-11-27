@@ -1149,8 +1149,20 @@ clients confirmed zero new rows. This covers lock-wait cancellation.
 The PostgreSQL X02 run still records a cleanup timeout for both
 policies when cancellation occurs during a delayed insert in batch
 two, with the Per-Batch statement still running after the GUI outcome.
-Per-Batch cancellation during an active insert on MySQL and SQLite
-remains unverified.
+The follow-up used a 350-row CSV on the packaged candidate under private
+Sway nested in Xvfb. Both destinations had an insert trigger at ID 257.
+On MySQL, independent process-list output showed the trigger sleeping
+and a separate read saw exactly the first 256 rows before Escape. FastDB
+reported 256 committed. The sleeping session disappeared, and a later
+read still found exactly IDs 1–256 and the expected labels.
+
+On SQLite, an independent WAL reader saw IDs 1–256 committed while a
+second writer probe was refused by the active writer lock. FastDB then
+received Escape and reported 256 committed. An independent write probe
+could acquire the lock after the outcome, and read-back confirmed that
+only IDs 1–256 and their exact labels survived. Neither dialog showed a
+cleanup timeout. Raw evidence is in
+`.sdd/grid-import-batch-cancellation-evidence/`.
 
 ### Linux large grid streaming and resident memory
 
