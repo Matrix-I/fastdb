@@ -1088,6 +1088,18 @@ above the 2,000 ms budget. The probe used a monotonic clock and polled
 the mapped window from the same container. This is a software-rendered
 Xvfb observation. The physical-display cold-start gate remains open.
 
+### Linux theme, editor zoom and sidebar persistence
+
+In the SQLite script editor on private Xvfb, Zoom In twice changed
+13 to 15 px, Zoom Out changed it to 14 px and Reset restored 13 px.
+The editor rendered each size change. A second Zoom In and the Light
+theme survived Quit and relaunch. Theme toggled in both directions.
+
+Ctrl+B hid the Navigator and saved its width as 0. On relaunch, the
+Navigator was visible at 160 px with the same profile, even though
+the saved width was still 0. The startup restore path clamps the
+stored width to the 160–800 px resize range.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
