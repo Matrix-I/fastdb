@@ -1825,23 +1825,42 @@ release gates remain separately scoped.
 | Packages and updater | The tag-triggered [release workflow](../../.github/workflows/release.yml) checks apt install/remove, binary identity, launcher presence and linked libraries on Ubuntu 24.04. It does not launch the installed app. The retained package matches the recorded SHA-256 and its `Depends` field has no Fontconfig entry. The private Xvfb GUI cases used an explicitly installed Fontconfig. | Retest startup on a minimal Ubuntu 24.04 install once the dependency changes. Real signed update is Blocked while v0.3.0 is the latest published release. |
 | Performance | The [desktop performance workflow](../../.github/workflows/benchmark.yml) is manually dispatched on a self-hosted macOS runner. This report records the Linux release PostgreSQL workload and private-display observations. | Approved Linux display policy run against a compatible baseline and separate dedicated-host cold start. |
 
+## Linux acceptance reconciliation
+
+The [test plan](../plans/2026-11-23-full-feature-test-plan.md) and its
+[findings matrix](2026-11-23-test-findings.md#supplemental-observations)
+track the app, connection, grid, SQL, updater and performance cases.
+The [separate PostgreSQL runbook index](#linux-desktop-runbook-coverage)
+tracks the release workflow. Each case ID appears once in its matrix.
+
+| Matrix | Pass | Fail | Blocked | Skipped or deferred | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Supplemental plan | 43 | 29 | 2 | 1 | 75 |
+| PostgreSQL runbook | 43 | 16 | 1 | 1 | 61 |
+
+| Scope | Disposition and evidence |
+| --- | --- |
+| Phase A | Formatting, Clippy with warnings denied, all-targets build and release build have passing Linux evidence. [Build evidence](#multiline-grid-regression-retest-2026-11-23) |
+| Phase B | The workspace run that includes the multiline fix passed 836 harness cases across 42 suites. The Linux attempt at the macOS bundle test reported a Minisign harness failure. macOS execution is deferred. [Bundle test finding](2026-11-23-test-findings.md#f-04--citest_bundle_macospy-cannot-fully-pass-on-linux-and-is-not-run-by-ci) |
+| Phase C | C1–C8 have passing Linux automated evidence, including the later C6 native backup retest with 22 checks. C9 vendor ODBC remains Blocked because vendor drivers and authorized server fixtures are absent. [Original results](2026-11-23-test-findings.md#results), [backup retest](#linux-native-backup-retest) |
+| Phase D | D3 and D4 Linux packaging and installed launch/removal passed. The minimal-install Fontconfig issue remains recorded. D5 failed because Linux exposes no About entry. D1 and D2 are macOS-only and deferred. [Packaging and updater](#linux-packaging-and-updater), [desktop installation](#ubuntu-2404-desktop-launcher-and-removal) |
+| Phase E | The overall Linux P0-05 gate is Fail. Test coverage includes an empty-profile launch and shortcut/window Quit. APP-01 remains Fail at 2,874 ms on Xvfb. APP-05 remains Fail because the Quit menu action has no reachable entry. [Release gate](#linux-p0-05-release-decision), [startup](#linux-empty-profile-startup), [Quit](#linux-quit-guards-and-save-recovery) |
+
 ## Open acceptance cases
 
-| Plan tasks | Remaining coverage |
+| Scope | Remaining work or prerequisite |
 | --- | --- |
-| 1–2 | Live vendor ODBC is Blocked. The remaining desktop preflight applies to the enabled providers. |
-| 3–6 | Linux connection and preference matrix, broader metadata and schema mutations, SQL-result Grid/Text/Record combinations, provider-specific table search cancellation and preview edge cases, transactions, and remaining editor actions. See the three-provider GUI search evidence above. |
-| 7–8 | Cross-provider BLOB fidelity failed. Broader import cancellation and batch policies, and remaining transfer and PostgreSQL native-tool variants remain open. Task 8 Administration and Session Monitor results are recorded above. MySQL and SQLite native-tool GUI entries fail. |
-| 9 | Remaining interactive updater actions on Ubuntu 24.04. Launcher, clean Quit and apt removal passed with Fontconfig installed. Minimal-install startup failed before the explicit Fontconfig install. The real signed update is Blocked for lack of a newer published target. |
-| 10 | Approved-display benchmark, compatible baseline comparison, and cold startup after a coordinated reboot. |
-| 11 | Final case-by-case reconciliation after the open runs. The indexed Linux P0-05 gate fails. |
+| Linux P0-05 | Retest B01, S05, S06, T02, X02, X04 and L03 on a fixed candidate. The crash fix is already present in this package. B01 still clips the second line, and X04 still records BLOB fidelity and cleanup failures. |
+| Other desktop failures | See each Fail entry in the findings matrix for the provider, missing route or observed behavior. V03 stale Apply and the Value Editor file and UTC actions require a reachable Value Editor. MySQL and SQLite native backup and restore require reachable menu entries. |
+| Remaining subcases | The runbook and case evidence identify remaining preference restart checks, metadata and schema mutations, transaction-log modal resource release, and additional PostgreSQL native-tool variants. Provider-specific outcomes are recorded alongside the completed subcases. |
+| Production updater | UPD-04 requires a compatible newer release signed with the production trust key. The package upgrade and synthetic updater cases have separate evidence. |
+| Linux performance | PERF-02 requires the approved X11 display configuration and a comparable baseline. Dedicated-host cold-start acceptance remains open. The private native Wayland benchmark completed and recorded its frame intervals. |
+| Platform and provider scope | macOS is deferred for this Linux run. Live vendor ODBC is Blocked. |
 
 ## Documentation audit
 
-All 61 PostgreSQL runbook IDs appear exactly once in the Linux index. The
-plan and this report resolve their local Markdown paths and anchors.
-`git diff --check` and `cargo fmt --all -- --check` passed. Comparing
-`7c248df` with `c27ca70` showed documentation-only changes. The audited
-Xvfb DEB has the recorded artifact hash, and the working-tree changes
-are limited to the plan and this report. The open rows above still
-require their own execution evidence.
+The candidate package SHA-256 is
+`23e7a07a81a58dd45f638ec0bbe57dfc5bb384ffbe69cfec6a0829a207823a77`.
+The branch diff from `7c248df` contains acceptance documentation only.
+The local links and anchors in the two plans and both reports were checked
+along with `git diff --check` and `cargo fmt --all -- --check`.
