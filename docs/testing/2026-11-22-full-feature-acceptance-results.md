@@ -860,7 +860,7 @@ Switching to Text kept the same row and field page. Escape restored
 the two-row Text presentation on both providers. PostgreSQL W06 also
 covers ordinary Record navigation.
 
-### Linux Find in loaded SQLite results
+### Linux Find in loaded results
 
 The packaged candidate ran in private Debian 13 Xvfb. The table footer
 exposed Find at 1,600 pixels with the Navigator hidden. The search
@@ -876,7 +876,13 @@ with the UTF-8 limit message.
 A separate SQL result loaded 150,000 rows. Cancel search kept the
 dialog open and reported that pending matches were discarded. A
 subsequent search selected row 1, column 2 from the same result.
-PostgreSQL and MySQL equivalents remain open.
+PostgreSQL 16 and MySQL 8.4 repeated the same fixtures and GUI checks.
+Both found rows 1, 3, 1 and 3 during forward and reverse wrap, found
+the uncommitted value at row 2, column 2, and accepted 4,096 bytes
+while refusing 4,097. Independent reads after discarding the edit
+returned all four original values. Both 150,000-row result footers
+confirmed the loaded count. Cancel left the dialog open, and a new
+search selected row 1, column 2.
 
 ## Linux Administration and Session Monitor retest
 
