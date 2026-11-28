@@ -933,8 +933,17 @@ ownership during catalog Refresh.
   Schemas folder, schema, Tables folder and table each discovered a new
   marker table created independently. Refresh was absent from the Views
   folder and view menus. The MySQL Views folder likewise offered Create
-  View only. The action coverage falls short of NAV-05's per-node check.
-  Individual MySQL and PostgreSQL branch-level reloads remain unverified.
+  View only.
+
+A follow-up on the same packaged candidate used PostgreSQL 16.16 and
+MySQL 8.4.13 on private Openbox/Xvfb. For each provider, a native client
+created and confirmed a distinct marker table before each of seven
+Refresh actions. The open tree lacked the marker before the click and
+showed it after Refresh from the connection, Databases folder, database,
+Schemas folder, schema, Tables folder and an existing table. All 14
+routes passed. Both providers' Views folder and individual view menus
+lacked Refresh, so NAV-05 remains Fail for the missing per-node actions.
+Screenshots and native read-back are in `.sdd/navigator-refresh-evidence/`.
 
 ### Linux MySQL and SQLite table mutations
 
