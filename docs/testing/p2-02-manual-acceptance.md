@@ -61,7 +61,8 @@ desktop input. The macOS run is deferred.
 | PostgreSQL full backup, existing output, populated target, cancellation and maintenance | See the packaged GUI observations in the acceptance report. |
 | MySQL and SQLite desktop backup and restore | FAIL. The tested candidate omitted the native-tool entries. Independent automated native-client results are recorded separately. |
 | PostgreSQL short running modal | PASS. At 1280 × 350, native output and Cancel Job remained visible. Cancel reaped the controlled child without leaving an output file. Escape closed the modal. [Evidence](2026-11-22-full-feature-acceptance-results.md#postgresql-backup-cancellation-in-a-short-window) |
-| PostgreSQL scoped view dependency restore and connected-target metadata refresh | Still open. |
+| PostgreSQL scoped view with its base table | PASS. The archive contained the view and its dependency. Restore preserved the view definition and result rows. [Evidence](2026-11-22-full-feature-acceptance-results.md#postgresql-view-restore-and-connected-target) |
+| PostgreSQL connected-target metadata refresh | BLOCKED by the restore guard. The connected target refused restore and stayed empty. After disconnect, restore succeeded and reconnect loaded the objects in Navigator. |
 
 [Linux restore retest](2026-11-22-full-feature-acceptance-results.md#postgresql-scoped-restore-and-invalid-archive-retest)
 and [native-tool evidence](2026-11-22-full-feature-acceptance-results.md#postgresql-native-tool-dialogs).

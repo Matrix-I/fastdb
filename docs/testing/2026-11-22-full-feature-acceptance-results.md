@@ -541,6 +541,24 @@ source rows, including SQL NULL, empty text, zero-byte binary and
 `00 01 7f ff`. The unrelated source table was absent from the target.
 Evidence is in `.sdd/postgresql-scoped-restore-evidence/`.
 
+### PostgreSQL view restore and connected target
+
+On the same packaged candidate in private Wayland, a native pg_dump custom
+archive included a view and its base table in `scoped_qa`. It excluded an
+unrelated source table. With a separate FastDB profile still connected to
+the empty target, Restore Database reported that other target sessions
+must disconnect. Independent psql confirmed the idle target session
+was active and no source schema had been created.
+
+After disconnecting the target profile, FastDB restored the same archive
+with the exact source schema and displayed Completed. Native psql matched
+the view definition and both result rows, including a SQL NULL, and
+confirmed the unrelated table was absent. Reconnecting the target profile
+populated Navigator with the restored table and view. Opening the view
+displayed IDs 731 and 732 with values PRESERVED and NULL. Refresh of
+metadata in an already-connected PostgreSQL restore target is blocked by
+the restore guard. Evidence is in `.sdd/postgresql-view-restore-evidence/`.
+
 ## Linux table-data search on the packaged GUI
 
 Retained Ubuntu 24.04 candidate DEB on private Xvfb, scale 1. At the default
