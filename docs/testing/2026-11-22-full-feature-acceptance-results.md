@@ -1307,6 +1307,15 @@ above the 2,000 ms budget. The probe used a monotonic clock and polled
 the mapped window from the same container. This is a software-rendered
 Xvfb observation. The physical-display cold-start gate remains open.
 
+A final diagnostic ran three fresh profiles on private Openbox/Xvfb.
+An Xlib probe polled the screen center directly on a monotonic clock.
+The first nonblack workspace sample appeared after 1,256 ms, 176 ms
+and 209 ms. All client areas measured 1280 × 800 and the captures
+showed an empty workspace without a banner. These samples are from
+one container without a host reboot. They do not resolve the prior
+2,874 ms observation or the dedicated cold-start gate.
+Evidence is in `.sdd/final-linux-shell-evidence/`.
+
 ### Linux theme, editor zoom and sidebar persistence
 
 In the SQLite script editor on private Xvfb, Zoom In twice changed
@@ -1941,7 +1950,7 @@ tracks the release workflow. Each case ID appears once in its matrix.
 | Phase B | The workspace run that includes the multiline fix passed 836 harness cases across 42 suites. The Linux attempt at the macOS bundle test reported a Minisign harness failure. macOS execution is deferred. [Bundle test finding](2026-11-23-test-findings.md#f-04--citest_bundle_macospy-cannot-fully-pass-on-linux-and-is-not-run-by-ci) |
 | Phase C | C1–C8 have passing Linux automated evidence, including the later C6 native backup retest with 22 checks. C9 vendor ODBC remains Blocked because vendor drivers and authorized server fixtures are absent. [Original results](2026-11-23-test-findings.md#results), [backup retest](#linux-native-backup-retest) |
 | Phase D | D3 and D4 Linux packaging and installed launch/removal passed. The minimal-install Fontconfig issue remains recorded. D5 failed because Linux exposes no About entry. D1 and D2 are macOS-only and deferred. [Packaging and updater](#linux-packaging-and-updater), [desktop installation](#ubuntu-2404-desktop-launcher-and-removal) |
-| Phase E | The overall Linux P0-05 gate is Fail. Test coverage includes an empty-profile launch and shortcut/window Quit. APP-01 remains Fail at 2,874 ms on Xvfb. APP-05 remains Fail because the Quit menu action has no reachable entry. [Release gate](#linux-p0-05-release-decision), [startup](#linux-empty-profile-startup), [Quit](#linux-quit-guards-and-save-recovery) |
+| Phase E | The overall Linux P0-05 gate is Fail. Test coverage includes an empty-profile launch and shortcut/window Quit. APP-01 retains the earlier 2,874 ms Fail. The later Xvfb diagnostics are below budget, with dedicated cold startup still open. APP-05 remains Fail because the Quit menu action has no reachable entry. [Release gate](#linux-p0-05-release-decision), [startup](#linux-empty-profile-startup), [Quit](#linux-quit-guards-and-save-recovery) |
 
 ## Open acceptance cases
 
