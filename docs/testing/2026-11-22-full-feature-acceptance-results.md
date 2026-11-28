@@ -725,6 +725,26 @@ Capture used the Ubuntu 24.04 candidate DEB on private Xvfb with MySQL
 | SQL-14 | MySQL and SQLite each ran 23 statements returning markers 1–23. The newest retained result returned 23 and the first retained result returned 4. Closing the first selected its adjacent result, which returned 5. PostgreSQL split bounds are covered in W05. See the retest below for PostgreSQL retention. |
 | APP-10 · unavailable portal | Saving the SQLite plan when the desktop portal was absent produced a visible service error and left the active plan visible. |
 
+### Linux PostgreSQL Query Plan node navigation
+
+The Ubuntu 24.04 candidate ran in private Openbox/Xvfb against a
+disposable PostgreSQL 16 server. The grouped read-only SELECT produced a
+Sort, Aggregate and Seq Scan over 30,000 fixture rows. FastDB showed the
+same estimated costs of 583.40, 583.13 and 433.00 as independent
+PostgreSQL JSON output. Next selected those operators in that order and
+wrapped to Sort. Previous from Sort wrapped back to Seq Scan. With
+Sort collapsed, Next selected Aggregate and reopened its ancestor.
+
+Analyze appended a separate plan and labeled the ranking as inclusive
+time multiplied by loops. On that GUI execution all three operators
+had one loop. Sort took 7.592 ms, Aggregate 7.520 ms and Seq Scan
+2.190 ms. The independent read-only Analyze returned the same ordering,
+13 output groups and 30,000 scanned rows. Next selected Sort, Aggregate
+and Seq Scan. Previous from Seq Scan returned to Aggregate.
+Switching to the estimate restored its previously selected Seq Scan.
+Native JSON, screenshot selections and pixel assertions are in
+`.sdd/postgresql-plan-ranking-evidence/`.
+
 ### Linux Query Plan file limits and provider checks
 
 On the Ubuntu 24.04 candidate in private Openbox/Xvfb with the GTK portal,
@@ -2165,7 +2185,7 @@ The phase checks and standalone provider fixtures have separate results.
 | --- | --- |
 | Linux P0-05 | Retest B01, S05, S06, T02, X02, X04 and L03 on a fixed candidate. The crash fix is already present in this package. B01 still clips the second line, and X04 still records BLOB fidelity and cleanup failures. |
 | Other desktop failures | Each Fail row records the observed result or absent route. Retest the Value Editor file and UTC actions, SQL timeout preset, and MySQL and SQLite native-tool dialogs when their UI entry points are available. |
-| Remaining provider subcases | PostgreSQL expensive-node selection still needs direct GUI evidence. The [native-tool checklist](p2-02-manual-acceptance.md#results) and [metadata results](#linux-navigator-folder-and-key-metadata) retain their provider-specific coverage. |
+| Remaining provider subcases | The [native-tool checklist](p2-02-manual-acceptance.md#results) and [metadata results](#linux-navigator-folder-and-key-metadata) retain their provider-specific coverage. |
 | Release packaging and performance | The minimal DEB startup reproduced the Fontconfig failure. AppImage extract-and-run passed and mounted launch requires FUSE. The dedicated cold-start check still requires the approved Linux host. |
 | Vendor providers | The live SQL Server, Oracle and Db2 fixtures remain Blocked by the agreed provider scope. Their directive parser cases passed. [Provider prerequisites](#linux-definition-search-ssh-and-credential-store-retest) |
 
