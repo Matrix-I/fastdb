@@ -142,6 +142,26 @@ workspace version both read 0.3.0. The plan's About version check still
 fails at the missing entry. This launcher run used a fresh app profile
 on a warm host. The earlier minimal-install Fontconfig failure stands.
 
+### Minimal Ubuntu 24.04 package startup
+
+The retained 0.3.0 amd64 DEB (SHA-256
+`23e7a07a81a58dd45f638ec0bbe57dfc5bb384ffbe69cfec6a0829a207823a77`)
+installed on fresh Ubuntu 24.04.5 with `--no-install-recommends`.
+FastDB and the Vulkan software renderer ran in one disposable container.
+A separately provisioned Xvfb container provided the private X11 socket
+at 1280 × 800 so its packages could not satisfy application dependencies.
+
+Neither `libfontconfig1` nor the checked DejaVu and Noto font packages was
+installed in the application container, and the loader cache contained
+no Fontconfig library. FastDB aborted with exit 134 when GPUI could not
+resolve `.SystemUIFont` or any fallback. Installing `libfontconfig1`
+with its required configuration and fonts in the same container let
+the same DEB open a viewable FastDB window with a fresh profile. It
+stayed running until the 12-second harness timeout. This reproduces
+the minimal-install failure on Ubuntu 24.04 and confirms that the
+library, configuration and font packages suffice without the Fontconfig
+command-line utilities. Evidence is in `.sdd/noble-font-evidence/`.
+
 ### Published Debian package upgrade from RC to final
 
 On `9d224ed`, a fresh Ubuntu 24.04 amd64 Podman container installed the
@@ -2011,7 +2031,7 @@ release gates remain separately scoped.
 | Navigator, editor and disabled capabilities | The desktop cases above cover the observed routes. PostgreSQL plan snapshots and driver definition search have separate evidence in this report. | Remaining keyboard and preference routes beyond the tab-order, group, color and timeout tests above, plus object actions, result controls and disabled states. |
 | Transfers and native jobs | CSV, same-provider transfer and native backup retests are recorded above. | All three planned GUI scalar directions and the cross-provider duplicate, FK and Cancel variants have native read-back above. BLOB rejection and silent byte changes remain failures. MySQL and SQLite native-tool GUI operations are blocked by missing entries. PostgreSQL GUI evidence covers full and scoped backups, restore success and populated-target refusal, maintenance, and Cancel with a controlled wait-only child. |
 | Administration and Session Monitor | The live and app-level Task 8 retests cover mutations, native privileges and target identity. | All eight Administration families and the Session Monitor chain have packaged GUI results above. Administration catalog filtering is absent, failure cleanup wording is ambiguous, and one restricted monitor row overlaps the details pane. |
-| Packages and updater | The tag-triggered [release workflow](../../.github/workflows/release.yml) checks apt install/remove, binary identity, launcher presence and linked libraries on Ubuntu 24.04. It does not launch the installed app. The retained package matches the recorded SHA-256 and its `Depends` field has no Fontconfig entry. The private Xvfb GUI cases used an explicitly installed Fontconfig. | Retest startup on a minimal Ubuntu 24.04 install once the dependency changes. Real signed update is Blocked while v0.3.0 is the latest published release. |
+| Packages and updater | The tag-triggered [release workflow](../../.github/workflows/release.yml) checks apt install/remove, binary identity, launcher presence and linked libraries on Ubuntu 24.04. It does not launch the installed app. The retained package matches the recorded SHA-256 and its `Depends` field has no Fontconfig entry. The [minimal Ubuntu 24.04 retest](#minimal-ubuntu-2404-package-startup) reproduced the abort and verified startup when Fontconfig and its font dependencies were installed. | Retest once the dependency changes. Real signed update is Blocked while v0.3.0 is the latest published release. |
 | Performance | The [desktop performance workflow](../../.github/workflows/benchmark.yml) is manually dispatched on a self-hosted macOS runner. This report records the Linux release PostgreSQL workload and private-display observations. | Approved Linux display policy run against a compatible baseline and separate dedicated-host cold start. |
 
 ## Linux acceptance reconciliation

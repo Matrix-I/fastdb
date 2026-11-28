@@ -155,7 +155,7 @@ records seven required failures.
 
 | Case | Status | Observation |
 | --- | --- | --- |
-| D4 | PASS | Ubuntu 24.04.5 with Fontconfig. `gtk-launch fastdb` executed the packaged binary. Quit and apt removal preserved the seeded profile file. [Launcher evidence](2026-11-22-full-feature-acceptance-results.md#ubuntu-2404-desktop-launcher-and-removal) |
+| D4 | PASS | Ubuntu 24.04.5 with Fontconfig. `gtk-launch fastdb` executed the packaged binary. Quit and apt removal preserved the seeded profile file. The separate minimal Ubuntu 24.04.5 subcase failed on GPUI font fallback until `libfontconfig1` and its dependencies were installed. [Minimal startup](2026-11-22-full-feature-acceptance-results.md#minimal-ubuntu-2404-package-startup), [Launcher evidence](2026-11-22-full-feature-acceptance-results.md#ubuntu-2404-desktop-launcher-and-removal) |
 | D5 | FAIL | The package version matched the workspace. The required About dialog entry was absent on Linux. [Launcher evidence](2026-11-22-full-feature-acceptance-results.md#ubuntu-2404-desktop-launcher-and-removal) |
 | APP-01 | FAIL | The centered 1280×800 empty workspace passed. The earlier Xvfb sample took 2,874 ms, over the 2,000 ms budget. Three later fresh-profile Xvfb samples were under budget. Dedicated cold startup remains unverified. [Evidence](2026-11-22-full-feature-acceptance-results.md#linux-empty-profile-startup) |
 | APP-02 | FAIL | Title and empty-bar double-click worked on X11 and left the window unchanged on native Wayland under nested Sway. Tab selection and close worked on both. The simulated update badge reopened release notes on X11 and native Wayland without changing window geometry. [Evidence](2026-11-22-full-feature-acceptance-results.md#linux-title-bar-and-tab-clicks) |
