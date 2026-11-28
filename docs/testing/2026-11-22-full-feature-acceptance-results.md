@@ -983,6 +983,21 @@ Switching to Text kept the same row and field page. Escape restored
 the two-row Text presentation on both providers. PostgreSQL W06 also
 covers ordinary Record navigation.
 
+### PostgreSQL Record mode in a SQL result
+
+On the packaged candidate in private Xvfb, a PostgreSQL SQL result
+contained three rows with exact decimals, timezone-aware timestamps
+and a SQL NULL. Selecting ID 732 opened Record at row 2. Grid and
+Text kept that row, Next moved to ID 733, and Previous returned to
+ID 732. Double-click and F2 left Record read-only. Escape and All rows
+returned to the three-row Grid with the amount cell still selected.
+
+An independent X11 clipboard read matched the native psql decimal
+`9007199254740993.0100` and the same UTC instant, with `(SQL NULL)`
+for the empty note field. Grid displayed both timestamp inputs with
+different source offsets at the same UTC instant. Evidence is in
+`.sdd/postgres-sql-record-evidence/`.
+
 ### Linux Find in loaded results
 
 The packaged candidate ran in private Debian 13 Xvfb. The table footer
@@ -1927,7 +1942,7 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 | W03 | Pass | Verified immediate Auto-Commit, Manual visibility and durability, failed-batch rollback, close/disconnect and selector placement with independent psql. |
 | W04 | Fail (parameter redaction) | A synthetic bound value appeared verbatim in Transaction log and matched a search. Paging and retention across tab close and disconnect passed. A later SQLite process opened with an empty session log. The controlled SQLite follow-up verified that closing the modal releases the pending snapshot descriptor. |
 | W05 | Pass | Verified zero-row, command and error results, split bounds, independent tab layouts, the rail at normal height and full editor after the last result closed. |
-| W06 | Pass | Private Xvfb verified Navigator autoload, read-only Record navigation, mode switches and copy, Text alignment, SQL NULL, horizontal scrolling and the 2,000-row / 255-character caps. |
+| W06 | Pass | Private Xvfb verified Navigator autoload, read-only Record navigation, mode switches and copy, Text alignment, SQL NULL, horizontal scrolling and the 2,000-row / 255-character caps. The PostgreSQL SQL-result retest also verified exact decimal and UTC display and retained selection. |
 | W07 | Pass | Setup retained values across tabs and deferred providers were unavailable. |
 
 ## Linux P0-05 release decision
