@@ -1052,6 +1052,25 @@ the unchecked option. The supported Cancel and Execute flows passed.
 The Cascade control remains a UI defect on these providers. Screenshots
 and independent catalog and row reads are in `.sdd/object-ddl-evidence/`.
 
+### Linux MySQL and SQLite view mutations
+
+On the packaged Ubuntu 24.04 candidate in private Openbox/Xvfb,
+each provider started with `qa_base` and `qa_view`. Independent
+reads returned 653 on MySQL 8.4 and 553 on SQLite.
+
+- MySQL Rename View generated a qualified `RENAME TABLE`. The view
+  appeared as `qa_renamed` and native reads confirmed the original
+  definition and value under the new name.
+- SQLite exposed Rename View and generated `ALTER TABLE "qa_view"
+  RENAME TO "qa_renamed";`. Execute reported `view qa_view may not
+  be altered`. The original view and its result remained, and no
+  renamed view appeared. This provider's Rename View flow failed.
+- Drop View → Cancel preserved each view and its result. Confirm
+  removed the view on each provider. The native clients still read
+  the exact original value from each base table.
+
+Screenshots and independent read-back are in `.sdd/view-mutation-evidence/`.
+
 ### Linux MySQL and SQLite native DDL copy and replay
 
 On the Ubuntu 24.04 package in private Openbox/Xvfb, both providers
@@ -2186,7 +2205,7 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 | T05 | Pass | Verified Save, stale-write conflict and retained draft, Cancel/reload, and read-only view and join rejection. |
 | D01 | Pass | Verified quoted preview, Cancel, Persist and catalog refresh, and Revert. Earlier tests also exercised dirty Close. |
 | D02 | Pass | Verified stale snapshot refusal, Refresh and rollback when a later DDL statement failed. |
-| D03 | Fail (index and constraint creation controls) | Verified table and column actions, view create/alter/drop, and index and constraint drop with independent PostgreSQL. The separate index and constraint creation controls were unavailable. |
+| D03 | Fail (index and constraint creation controls) | Verified table and column actions, view create/alter/drop, and index and constraint drop with independent PostgreSQL. The separate index and constraint creation controls were unavailable. MySQL renamed its view; SQLite exposed a Rename View action that the engine refused. Drop and Cancel passed on both. [View evidence](#linux-mysql-and-sqlite-view-mutations) |
 | D04 | Pass | Truncate and Drop Cancel/confirm, empty-name validation, and native duplicate-name failure matched independent PostgreSQL checks. The [MySQL and SQLite retest](#linux-mysql-and-sqlite-table-mutations) verified the same flows and found an ineffective Cascade option on both providers. |
 | V01 | Pass | Value viewer preserved exact JSON/XML, distinguished binary and NULL states, and displayed both matching UTC instants. Grid multiline clipping is tracked under B01. |
 | V02 | Fail (Value Editor entry) | Binary grid edit refers to Value Editor, but the candidate has no entry point. Typed edits and file round trips remain unverified. |
