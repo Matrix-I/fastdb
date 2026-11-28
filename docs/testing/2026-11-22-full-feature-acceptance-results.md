@@ -547,6 +547,23 @@ the transfer reported a primary-key conflict and zero committed rows.
 The subsequent destination read matched the successful state exactly.
 Evidence is in `.sdd/sqlite-same-provider-transfer-evidence/`.
 
+### MySQL transfer between schemas with matching table names
+
+On the packaged Ubuntu 24.04 candidate in private Openbox/Xvfb,
+two MySQL 8.4 profiles accessed separate schemas on one disposable
+server. FastDB refused `qasource.qa_items` as the target when selected
+through its source profile. Choosing `qadestination.qa_items` through
+the destination profile mapped both columns and Atomic Commit reported
+three rows committed and zero rejected.
+
+An independent MySQL client confirmed that both schemas held the same
+SQL NULL, empty string and Vietnamese/Japanese text separated by LF
+for IDs 11–13. The destination also retained its original row 90.
+Repeating the transfer returned native duplicate-key error 1062 and
+reported zero commits. The source and destination read-back was
+byte-identical to the successful state. Evidence is in
+`.sdd/mysql-same-provider-transfer-evidence/`.
+
 ## PostgreSQL catalog drop retest
 
 On `c27ca70`, the app's `postgres_live_drop_schema_and_database` test passed
