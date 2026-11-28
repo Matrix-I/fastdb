@@ -485,6 +485,23 @@ release. An independent native client confirmed the target database was
 absent and a marker in a sibling database still read `42`. Desktop preview,
 Cancel and confirmed-action controls remain pending.
 
+### PostgreSQL desktop catalog deletion
+
+The packaged candidate ran in private Openbox/Xvfb with a disposable
+PostgreSQL 16 instance. The Navigator preview quoted `qa_drop` and
+defaulted to RESTRICT. Cancel kept its row. Delete with RESTRICT
+displayed PostgreSQL's dependency error. Explicit CASCADE changed the
+preview and removed the selected schema and its test table.
+Independent psql still read 732 in the sibling schema.
+
+A separate app profile connected only to the disposable `qa_drop_db`.
+Navigator previewed the quoted database name. Typing `qa_keep_db`
+left Delete disabled, and Cancel left both databases present.
+Entering the exact name enabled Delete. Independent psql verified
+that only `qa_drop_db` was removed, and Navigator returned that profile
+to its disconnected state. Evidence is in
+`.sdd/postgresql-desktop-catalog-drop-evidence/`.
+
 ### PostgreSQL native-tool dialogs
 
 Private Xvfb, Ubuntu 24.04 DEB, PostgreSQL 16.16 server and Ubuntu 16.15
