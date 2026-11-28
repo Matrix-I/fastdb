@@ -146,7 +146,7 @@ records seven required failures.
 | E0 X02 | FAIL | Duplicate and cancel durability matched the expected counts for both policies. Both cancel attempts reported cleanup timeout, and the Per-Batch SQL was still running after the GUI outcome. |
 | E0 X04 | FAIL | SQL result scope, write-result refusal and duplicate/cancel durability matched native read-back. Cleanup timed out on both policies, and the BLOB runner changed or rejected valid bytes. |
 | E0 L03 | FAIL | Dirty guards and durability checks passed. The obsolete Save or Cancel banner survived Cancel and reconnect with no active draft. |
-| E0 R01 | FAIL | Theme and zoom restored. The saved hidden Navigator reopened visible. Remaining layout, tabs, logs and timeouts need verification. |
+| E0 R01 | FAIL | Theme and zoom restored. The saved hidden Navigator reopened visible. Pane widths and script tabs restored in the SQLite retest. Column order and visibility reset, as did the session transaction log. The Timeout preset is unavailable. |
 | E0 W01 | FAIL | The native Openbox frame moved, but dragging the documented FastDB title row did not move the window. Double-click zoom, divider resize, separate rows and the narrow scrollable toolbar worked. |
 | E0 W02 | FAIL | All mode searches, expanded tree restore and file open passed. Empty Tables search did not offer Browse catalog objects. |
 | E0 W04 | FAIL | A synthetic bound value appeared verbatim in Transaction log and matched a search. Paging and retention across tab close and disconnect passed. The later SQLite run verified a fresh session and file removal after normal Quit. The controlled SQLite follow-up verified that closing the modal releases its pending snapshot descriptor. |

@@ -1256,6 +1256,23 @@ Navigator was visible at 160 px with the same profile, even though
 the saved width was still 0. The startup restore path clamps the
 stored width to the 160–800 px resize range.
 
+### Linux pane, tab and column state after restart
+
+The packaged candidate ran on private Xvfb with two SQLite profiles
+whose tables shared a name. Dragging the pane dividers saved a 390-pixel
+Navigator and a 488-pixel Value panel. Both widths and the open Value
+panel restored. The table tab and two tabs named Script-1 kept their
+profile IDs and order. Both scripts retained exact bytes. Manually rerunning
+them returned 731 for Layout A and 732 for Layout B, matching independent
+SQLite reads.
+
+Moving Note left and hiding Label left visible columns ID and Note.
+After Quit, relaunch, reconnect and Refresh, the table showed its original
+ID, Label, Note order with Label visible. Column order and visibility
+therefore did not persist. The separate timeout test found no reachable
+preset, so preset lifetime could not be exercised. Evidence is in
+`.sdd/layout-restart-evidence/`.
+
 ### Linux title bar and tab clicks
 
 In private Openbox X11, double-clicking the in-app title and the empty
@@ -1810,7 +1827,7 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 | L02 | Pass | Explicit Cancel and Disconnect targeted A, B stayed usable on the same backend, and A did not reopen after the old query deadline. Earlier close/reopen discarded the old result. |
 | L03 | Fail (stale departure feedback) | Dirty guards and durability checks passed. The obsolete Save or Cancel banner survived Cancel and reconnect with no active draft. |
 | L04 | Pass for planned Linux contexts | Tab close, shortcut Quit, window close, and save failure/retry preserved the expected bytes. Native macOS menu and About paths are deferred. |
-| R01 | Fail (sidebar) | Theme and zoom restored. The saved hidden Navigator reopened visible. Remaining layout, tabs, logs and timeouts need verification. |
+| R01 | Fail (sidebar) | Theme and zoom restored. The saved hidden Navigator reopened visible. The SQLite follow-up restored pane widths and both script tabs but reset column order and visibility. The transaction log reset on restart. The Timeout preset is unavailable. |
 | R02 | Pass | Quit released the pending transaction, preserved exact script bytes, and restart left the unexecuted INSERT absent. |
 | R03 | Pass | Read-only refused writes and writable destinations as expected. Independent PostgreSQL confirmed a normal A profile write. |
 | R04 | Pass | Connection dialog verified SSH pinning, TLS CA and hostname, and client identity. PostgreSQL confirmed the connected session used TLS 1.3 and the intended client DN. |
@@ -1869,7 +1886,7 @@ tracks the release workflow. Each case ID appears once in its matrix.
 | --- | --- |
 | Linux P0-05 | Retest B01, S05, S06, T02, X02, X04 and L03 on a fixed candidate. The crash fix is already present in this package. B01 still clips the second line, and X04 still records BLOB fidelity and cleanup failures. |
 | Other desktop failures | See each Fail entry in the findings matrix for the provider, missing route or observed behavior. V03 stale Apply and the Value Editor file and UTC actions require a reachable Value Editor. MySQL and SQLite native backup and restore require reachable menu entries. |
-| Remaining subcases | The runbook and case evidence identify remaining preference restart checks, metadata and schema mutations, and additional PostgreSQL native-tool variants. Provider-specific outcomes are recorded alongside the completed subcases. |
+| Remaining subcases | The runbook and case evidence identify remaining timeout preference checks, metadata and schema mutations, and additional PostgreSQL native-tool variants. Provider-specific outcomes are recorded alongside the completed subcases. |
 | Production updater | UPD-04 requires a compatible newer release signed with the production trust key. The package upgrade and synthetic updater cases have separate evidence. |
 | Linux performance | PERF-02 requires the approved X11 display configuration and a comparable baseline. Dedicated-host cold-start acceptance remains open. The private native Wayland benchmark completed and recorded its frame intervals. |
 | Platform and provider scope | macOS is deferred for this Linux run. Live vendor ODBC is Blocked. |
