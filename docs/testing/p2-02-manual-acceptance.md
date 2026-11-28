@@ -57,6 +57,7 @@ desktop input. The macOS run is deferred.
 | Case | Linux result |
 | --- | --- |
 | PostgreSQL scoped table archive | PASS. Restore into an empty database with the exact source schema preserved NULL, empty text and binary values. Only the selected table was restored. |
+| PostgreSQL scoped partitioned archive and missing client | PASS. Backup Table captured both nonempty children. Restore preserved their boundaries, rows, keys and exact bytes. A missing `pg_dump` override displayed an error and published no file. [Evidence](2026-11-22-full-feature-acceptance-results.md#postgresql-partitioned-table-backup-and-restore) |
 | PostgreSQL invalid archive and target confirmation | PASS. The invalid archive left the target empty. Editing the target cleared confirmation and disabled Run. |
 | PostgreSQL full backup, existing output, populated target, cancellation and maintenance | See the packaged GUI observations in the acceptance report. |
 | MySQL and SQLite desktop backup and restore | FAIL. The tested candidate omitted the native-tool entries. Independent automated native-client results are recorded separately. |

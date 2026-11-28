@@ -615,6 +615,28 @@ source rows, including SQL NULL, empty text, zero-byte binary and
 `00 01 7f ff`. The unrelated source table was absent from the target.
 Evidence is in `.sdd/postgresql-scoped-restore-evidence/`.
 
+### PostgreSQL partitioned table backup and restore
+
+On the Ubuntu 24.04 candidate in private Openbox/Xvfb with a GTK
+portal, PostgreSQL 16.16 held two nonempty partitions under
+`restore_qa.events`. **Backup Table…** on the parent produced a
+custom archive with the parent, both children, their attach entries and
+data for both children. The Ubuntu 16.15 `pg_restore -l` confirmed
+the archive scope. FastDB restored that archive into the independently
+verified empty `qa_dst` database using the source schema field.
+
+Independent PostgreSQL reads matched both partition bounds and all
+four rows byte for byte, including the partition that owned each row,
+SQL NULL, empty text, an empty binary value, Vietnamese and Japanese
+text, and binary values containing zero bytes. The three primary keys
+were present. The unrelated source table was absent from the target.
+
+A separate backup with **Client Directory…** pointed to a directory
+without `pg_dump` displayed the missing-executable error. The new
+destination and staging files were absent, and the completed archive's
+SHA-256 stayed unchanged. Archive listings, native read-back and
+screenshots are in `.sdd/postgresql-partitioned-restore-evidence/`.
+
 ### PostgreSQL view restore and connected target
 
 On the same packaged candidate in private Wayland, a native pg_dump custom
