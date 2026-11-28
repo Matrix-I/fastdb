@@ -940,10 +940,19 @@ With beta through kappa selected, right-clicking the unselected omega
 and choosing View Table Data opened only omega. It returned ID 735.
 Escape cleared the highlighted relations. A separate double-click
 opened only alpha from the same Navigator, returning ID 731 with
-omega still open. Both IDs matched independent SQLite reads. This
-retest exercised the collapsed-folder path on one connection.
-The filtered-anchor and cross-connection range states were not
-exercised. Evidence is in `.sdd/navigator-range-evidence/`.
+omega still open. Both IDs matched independent SQLite reads.
+
+Filtering for `group` hid the selected alpha. Shift-clicking group_b
+selected only group_b, and clearing the filter preserved that selection.
+Shift-clicking omega then selected group_b, kappa, and omega, showing
+that group_b became the anchor.
+
+A second SQLite connection with the same relation names initially
+showed no selection. Selecting alpha through group_a there and
+switching back to the first connection restored its group_b through
+omega selection. Returning to the second connection restored its
+alpha through group_a selection. Evidence is in
+`.sdd/navigator-range-evidence/`.
 
 ### Linux Navigator folder and key metadata
 
