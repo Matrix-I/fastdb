@@ -927,6 +927,24 @@ The keyboard route on connected MySQL and SQLite opened Catalog objects
 and displayed `Object discovery is not supported by this provider`.
 Neither profile displayed the PostgreSQL favorite.
 
+### Linux Navigator range selection and clicked-item actions
+
+On the packaged candidate in private Openbox/Xvfb with SQLite,
+clicking beta and then Shift-clicking omega highlighted beta through
+omega inclusively. Shift-clicking alpha then highlighted only alpha
+and beta, retaining beta as the anchor. With the Tables folder collapsed,
+Shift-clicking the visible view replaced the hidden anchor. Reopening
+Tables showed only the view selected.
+
+With beta through kappa selected, right-clicking the unselected omega
+and choosing View Table Data opened only omega. It returned ID 735.
+Escape cleared the highlighted relations. A separate double-click
+opened only alpha from the same Navigator, returning ID 731 with
+omega still open. Both IDs matched independent SQLite reads. This
+retest exercised the collapsed-folder path on one connection.
+The filtered-anchor and cross-connection range states were not
+exercised. Evidence is in `.sdd/navigator-range-evidence/`.
+
 ### Linux Navigator folder and key metadata
 
 On the packaged candidate under Debian 13 private Xvfb, each fixture
