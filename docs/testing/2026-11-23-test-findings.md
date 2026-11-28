@@ -32,7 +32,7 @@ Defects found during the pass are recorded here and were not fixed during it.
 | C6 native backup | FAIL (SQLite), BLOCKED (PostgreSQL, MySQL) | See F-01 and F-05 |
 | C7 PostgreSQL schema/database drop | PASS | |
 | C8 credential store (Secret Service) | PASS | Private D-Bus session with a disposable gnome-keyring |
-| C9 ODBC providers | SKIP | Vendor drivers and servers not set up; desktop providers disabled |
+| C9 ODBC providers | BLOCKED | The original suite skipped the live cases. Acceptance remains blocked until authorized SQL Server, Oracle and Db2 fixtures and compatible vendor drivers are available. |
 | APP-01 launch smoke (automated part only) | PASS | Debug build ran 15 s under Xvfb without a panic; GUI not inspected |
 | A4 release build | PASS | Via `bundle_linux.sh`; executable 34.5 MB (budget 100 MiB) |
 | D3 `bundle_linux.sh`, `ci/test-package-deb.sh` | PASS | Binary and `fastdb_0.3.0_amd64.deb` built; no AppImage because `appimagetool` is not installed |

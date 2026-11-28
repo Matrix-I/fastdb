@@ -1964,6 +1964,18 @@ cases passed in the planned Linux contexts. The runbook case rows above
 describe the exact failures and retest conditions. The macOS and supplemental
 release gates remain separately scoped.
 
+### Evidence required for the seven Linux release retests
+
+| Case | Retest and pass evidence |
+| --- | --- |
+| B01 | At 1280 pixels and scale 1, display both lines of the PostgreSQL fixture's LF-containing note within its row and compare the copied bytes with psql. |
+| S05 | Run the success, notice and failure statements through the SQL editor. Verify a reachable Execution log shows the native notice separately and reports each statement's outcome. |
+| S06 | Set the tab timeout to five seconds, run a query longer than the preset, verify it ends and the tab recovers, then clear the preset and verify it no longer cancels that query. |
+| T02 | Invoke explicit Begin from the toolbar. Verify with an independent connection that an update remains invisible before Commit, persists after Commit and disappears after Rollback. |
+| X02 | Cancel during a server-confirmed PostgreSQL insert in batch two under both commit policies. Verify the active insert terminates, cleanup succeeds and independent reads see the policy-specific committed rows. |
+| X04 | Verify exact MySQL-to-SQLite BLOB read-back on a corrected candidate. Separately cancel PostgreSQL transfer during batch two under both policies and confirm writer cleanup and committed row counts. |
+| L03 | Stage an edit, trigger the departure guard, cancel the edit and reconnect. Verify the guard clears when the draft is discarded, stays clear after reconnect and native data is unchanged. |
+
 ## CI coverage and supplemental gates
 
 | Scope | Automated evidence | Remaining Linux acceptance |
