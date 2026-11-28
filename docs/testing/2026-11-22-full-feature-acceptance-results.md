@@ -457,6 +457,28 @@ paging, cancellation, transport and batch execution still need live fixtures.
 | Oracle | Blocked | Registered Oracle Instant Client Basic/ODBC and an isolated Oracle service with a fixture user. |
 | Db2 | Blocked | Registered IBM Data Server ODBC/CLI driver and a disposable Db2 LUW database. Retest the corrected connection string before running the write and session cases. |
 
+### Linux ODBC live-test coverage audit
+
+The retained `provider_test` executable took the fixture-skip path in
+all four test wrappers. With `FASTDB_REQUIRE_PROVIDER_TESTS=1` the same
+executable failed before opening any connection because the three
+vendor port variables were unset. The four `vendor_script` parser tests
+passed separately. These checks confirm the harness behavior. The
+live requirements below apply to SQL Server, Oracle and Db2 unless a
+provider is named.
+
+| Live case | Status | Fixture and verification required |
+| --- | --- | --- |
+| Connect, read, metadata and failed-query recovery | Blocked | Use the registered driver and disposable server listed above. Run the existing provider integration test for streamed values, metadata, and recovery after a native error. |
+| Writes and session rollback | Blocked | Enable the suite's opt-in writes on a disposable writable schema. Verify the failed change set, savepoint rollback and closing a session with uncommitted work. |
+| SQL Server estimated plan | Blocked | Use a SQL Server fixture with SHOWPLAN permission. The existing test verifies estimated output and subsequent normal execution on the same session. |
+| Paging | Blocked | A vendor table with more rows than the page size and stable ordering is required. Compare successive pages with native rows. The one-row provider test does not exercise paging. |
+| Active cancellation | Blocked | Use a vendor statement that can be observed while active. Verify cancellation and a fresh statement on the session. The integration test has no active-cancel probe. |
+| Transport | Blocked | Use a TLS-enabled vendor listener and the matching trusted CA or vendor trust configuration. Verify encryption and native refusal with an invalid trust setup. The suite accepts TLS settings but does not assert the transport. SSH is unsupported for vendor ODBC. |
+| Native script batches | Blocked | Run provider-appropriate SQL Server GO, Oracle slash or Db2 terminator batches on a disposable schema and independently verify exact write counts and batch scope. The directive parser covers splitting, and the provider suite has no end-to-end directive batch probe. |
+
+Harness output is in `.sdd/odbc-coverage-audit/`.
+
 ## Linux native backup retest
 
 On `9d224ed`, all 22 `fastdb-app` tests under `native_backup` passed in
