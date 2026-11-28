@@ -2284,11 +2284,20 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 
 ## Linux P0-05 release decision
 
-**Fail on the tested Linux candidate.** Required cases B01, S05, S06, T02,
-X02, X04 and L03 contain observed failures. The other 16 indexed gate
-cases passed in the planned Linux contexts. The runbook case rows above
-describe the exact failures and retest conditions. The macOS and supplemental
-release gates remain separately scoped.
+**Fail on the tested Linux candidate.** Expanding the case ranges in the
+[runbook release rule](0.2.0-postgres-manual-acceptance.md#release-decision-and-result-template)
+gives 23 required IDs. Each has a matching entry in the desktop index.
+
+| Result | Required IDs |
+| --- | --- |
+| Pass (16) | C02, C04, B02, B03, G01, G02, G03, S01, T03, X01, X03, X05, X06, L01, L02, L04 |
+| Fail (7) | B01, S05, S06, T02, X02, X04, L03 |
+
+The current PR's crate sources, Cargo inputs, resources and packaging
+scripts match the tested product tree at `4197887`. The seven failures
+below still require a corrected candidate. The engine and app CI jobs
+cover automated checks. The runbook also requires the desktop outcomes
+above, including GUI entry points and native read-back.
 
 ### Evidence required for the seven Linux release retests
 
