@@ -2009,6 +2009,23 @@ Copy Value returned the exact fixture text from both viewers. At 262,145
 bytes, both showed the 256 KiB limit. Raw evidence is in
 `.sdd/value-panel-provider-evidence/`.
 
+### Value Editor automated coverage and desktop prerequisite
+
+The fixed-candidate workspace test executable (SHA-256
+`664c7373680489059314ab04143cc90141d5a2503ecf33369a0cfef7028c3886`)
+passed four `workspace::value_editor::tests` and six
+`workspace::value_files::` cases in a focused Linux rerun. The stale-source
+guard rejected a replaced driver, tab, result or staged edit, including
+after Undo. The other tests covered staging as one Undo step, binary,
+NULL and empty values, Unicode file round trips, encoding and size
+refusals, and UTC display. An initial sandboxed run failed all four
+editor cases at spill-file creation because `/var/tmp/fastdb` was
+read-only. They passed after the harness could use its normal spill path.
+
+This is automated coverage for the editor logic. The packaged desktop
+still has no route to open the Value Editor. V02 remains Fail and V03
+remains Blocked until the desktop can open the editor and exercise Apply.
+
 ## Linux Administration and Session Monitor retest
 
 On `9d224ed`, the existing driver test binaries passed all five
@@ -2209,7 +2226,7 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 | D04 | Pass | Truncate and Drop Cancel/confirm, empty-name validation, and native duplicate-name failure matched independent PostgreSQL checks. The [MySQL and SQLite retest](#linux-mysql-and-sqlite-table-mutations) verified the same flows and found an ineffective Cascade option on both providers. |
 | V01 | Pass | Value viewer preserved exact JSON/XML, distinguished binary and NULL states, and displayed both matching UTC instants. Grid multiline clipping is tracked under B01. |
 | V02 | Fail (Value Editor entry) | Binary grid edit refers to Value Editor, but the candidate has no entry point. Typed edits and file round trips remain unverified. |
-| V03 | Blocked | Stale Apply requires a reachable Value Editor. |
+| V03 | Blocked | Stale Apply requires a reachable Value Editor. The [focused editor tests](#value-editor-automated-coverage-and-desktop-prerequisite) passed at the logic level. |
 | X01 | Pass | Cancel left zero rows. The UTF-8 comma import preserved all three exact notes. In the semicolon import, the preview showed the default unquoted `\N` as NULL. Independent psql confirmed ID 5 was SQL NULL and ID 6 was empty text with length 0. |
 | X02 | Fail (cancel cleanup) | Duplicate and cancel durability matched the expected counts for both policies. Both cancel attempts reported cleanup timeout, and the Per-Batch SQL was still running after the GUI outcome. |
 | X03 | Pass | On one capped, ordered query, loaded CSV/SQL contained 10 rows and full CSV/SQL contained 25. CSV content and independently replayed SQL matched the fixture. |
