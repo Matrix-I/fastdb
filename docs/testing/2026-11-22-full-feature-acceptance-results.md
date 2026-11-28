@@ -48,7 +48,7 @@ The databases and files were disposable. GUI profile checks have separate eviden
 | PostgreSQL native tools | Scope, restore, refusal and maintenance passed against PostgreSQL 16.16 with matching 16.16 CLI executables. A separate run with 18.6 executables failed against the 16.16 server because restore SQL included `transaction_timeout`. | Pass with matching clients |
 | MySQL native tools | Native backup, scoped restore, broader-grant refusal, concurrent restore and maintenance passed with client and server 8.4.13. Initial fixture grants had wildcard semantics and failed before the expected refusal path. The successful run used exact schema grants and a separate account with access to both source and destination for the broader-grant refusal. | Pass |
 | Updater | The candidate app test binary passed 19 updater and two update-controller cases. Native installation of a signed update requires a separate disposable installation and a supported signed target. | Pass at automated test level |
-| Debian package structure | The development binary passed the package script's launcher, metadata, payload and validation assertions. Candidate release package installation remains open. | Pass for development artifact |
+| Debian package structure | The development binary passed the package script's launcher, metadata, payload and validation assertions. The later [candidate release installation](#ubuntu-2404-desktop-launcher-and-removal) has separate evidence. | Pass for development artifact |
 | PostgreSQL load fixture | The development example produced complete JSON for five workload samples and a passing 300,000-byte LOB check against PostgreSQL 18. The shell wrapper exited with signal status 143 after the report was written. The report is functional evidence. Release thresholds and cold startup require separate runs. | Partial |
 | PostgreSQL Administration and Session Monitor | Five live integration tests passed on 16.16. In the original X11 GUI, Restart Sequence reported commit and a separate `psql` read returned `42\|f`. Session Monitor showed the blocking chain, reported cancellation/termination against PID 224 and refreshed the list. The independent waiter returned SQLSTATE 57014 and the downstream client returned 00000. Restricted-profile activity fields showed Details unavailable. | Pass for these subcases |
 
@@ -347,7 +347,7 @@ could not find the build libraries.
 The installed package reproduced the Fontconfig startup failure on Ubuntu 24.04
 under Xvfb, exiting 134 at GPUI fallback font resolution. After installing
 `fontconfig`, it remained running until the ten-second deadline with no panic.
-This was a startup probe. Interactive Ubuntu 24.04 desktop acceptance remains open.
+This was a startup probe. A later [interactive Ubuntu 24.04 launcher test](#ubuntu-2404-desktop-launcher-and-removal) verified the desktop entry, window startup, Quit and removal.
 
 The [draft PR](https://github.com/Matrix-I/fastdb/pull/30) hosted checks passed
 for live engine and drivers, Linux build and macOS build/test at `9d224ed`.
@@ -2141,7 +2141,10 @@ The [test plan](../plans/2026-11-23-full-feature-test-plan.md) and its
 [findings matrix](2026-11-23-test-findings.md#supplemental-observations)
 track the app, connection, grid, SQL, updater and performance cases.
 The [separate PostgreSQL runbook index](#linux-desktop-runbook-coverage)
-tracks the release workflow. Each case ID appears once in its matrix.
+tracks the release workflow. The two indexes cover all 136 IDs in their
+source checklists, each exactly once. Of those, 131 were exercised and
+86 passed. The five cases without an executed verdict are listed below.
+The phase checks and standalone provider fixtures have separate results.
 
 | Matrix | Pass | Fail | Blocked | Skipped or deferred | Total |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -2161,16 +2164,24 @@ tracks the release workflow. Each case ID appears once in its matrix.
 | Scope | Remaining work or prerequisite |
 | --- | --- |
 | Linux P0-05 | Retest B01, S05, S06, T02, X02, X04 and L03 on a fixed candidate. The crash fix is already present in this package. B01 still clips the second line, and X04 still records BLOB fidelity and cleanup failures. |
-| Other desktop failures | See each Fail entry in the findings matrix for the provider, missing route or observed behavior. V03 stale Apply and the Value Editor file and UTC actions require a reachable Value Editor. MySQL and SQLite native backup and restore require reachable menu entries. |
-| Remaining subcases | The runbook and case evidence identify remaining timeout preference checks, metadata and schema mutations, and additional PostgreSQL native-tool variants. Provider-specific outcomes are recorded alongside the completed subcases. |
-| Production updater | UPD-04 requires a compatible newer release signed with the production trust key. The package upgrade and synthetic updater cases have separate evidence. |
-| Linux performance | PERF-02 requires the approved X11 display configuration and a comparable baseline. Dedicated-host cold-start acceptance remains open. The private native Wayland benchmark completed and recorded its frame intervals. |
-| Platform and provider scope | macOS is deferred for this Linux run. Live vendor ODBC is Blocked. |
+| Other desktop failures | Each Fail row records the observed result or absent route. Retest the Value Editor file and UTC actions, SQL timeout preset, and MySQL and SQLite native-tool dialogs when their UI entry points are available. |
+| Remaining provider subcases | PostgreSQL expensive-node selection still needs direct GUI evidence. The [native-tool checklist](p2-02-manual-acceptance.md#results) and [metadata results](#linux-navigator-folder-and-key-metadata) retain their provider-specific coverage. |
+| Release packaging and performance | The minimal DEB startup reproduced the Fontconfig failure. AppImage extract-and-run passed and mounted launch requires FUSE. The dedicated cold-start check still requires the approved Linux host. |
+| Vendor providers | The live SQL Server, Oracle and Db2 fixtures remain Blocked by the agreed provider scope. Their directive parser cases passed. [Provider prerequisites](#linux-definition-search-ssh-and-credential-store-retest) |
+
+| Case without an executed verdict | Disposition and prerequisite |
+| --- | --- |
+| V03 | Blocked. A reachable Value Editor is required to stage and reject a stale Apply. |
+| UPD-04 | Blocked. The latest public stable release is v0.3.0. In-app acceptance requires a compatible newer package signed with the production trust key. |
+| PERF-02 | Blocked. An approved X11 display configuration and comparable baseline are required. PERF-03 recorded native Wayland frame intervals separately. |
+| PERF-01 | Skipped. This run covers Linux. The fixed-display macOS benchmark is deferred. |
+| R05 | Deferred. This run covers Linux. Finder and signed macOS package acceptance are deferred. |
 
 ## Documentation audit
 
 The candidate package SHA-256 is
 `23e7a07a81a58dd45f638ec0bbe57dfc5bb384ffbe69cfec6a0829a207823a77`.
-The branch diff from `7c248df` contains acceptance documentation only.
-The local links and anchors in the two plans and both reports were checked
+Comparing the current tracked tree directly to `7c248df` finds only
+acceptance-documentation differences.
+Local links and anchors in the two plans, both reports and the native-tool checklist were checked
 along with `git diff --check` and `cargo fmt --all -- --check`.
