@@ -1589,9 +1589,25 @@ database and TCP connection. After another Quit, the private bus
 confirmed that the login collection and item were locked. On relaunch,
 FastDB logged that the unlock prompt was dismissed. Opening the profile
 showed an empty password field, PostgreSQL reported zero matching TCP
-sessions, and the locked item and its reference remained. Unlocking
-through a desktop prompt was not exercised in the isolated session.
-Evidence is in `.sdd/native-credential-evidence/`.
+sessions, and the locked item and its reference remained. Evidence is
+in `.sdd/native-credential-evidence/`.
+
+A follow-up on the packaged Ubuntu 24.04 candidate used a separate
+Openbox/Xvfb session, private D-Bus, GNOME Keyring 46.1 and Gcr 3.41.2.
+FastDB migrated the disposable profile's password to the login keyring.
+After Quit, a Secret Service Lock call marked the collection and its
+one item locked. Relaunch raised **Unlock Login Keyring**. A wrong unlock
+password displayed an error, the item stayed locked, and PostgreSQL
+showed no FastDB session. The correct unlock password closed the prompt
+and cleared the locked flags without replacing the keyring item.
+
+Opening the saved profile connected without re-entering the database
+password. Independent PostgreSQL 16.16 queries saw one non-loopback TCP
+session for the expected role, database and application name, covered
+by the server's SCRAM rule. The saved profile still held only the
+keyring reference. After Quit the session count returned to zero.
+Evidence is in `.sdd/native-keyring-unlock-evidence/`.
+[Secret Service prompt specification](https://specifications.freedesktop.org/secret-service/latest/prompts.html)
 
 ### Linux local and native credential isolation
 
