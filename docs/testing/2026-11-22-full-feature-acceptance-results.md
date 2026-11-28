@@ -532,6 +532,21 @@ MySQL 8.4.13 and file-based SQLite.
 Screenshots and native reads are retained in
 `.sdd/cross-provider-transfer-gui/`.
 
+### SQLite transfer between separate files with matching table names
+
+The packaged Ubuntu 24.04 candidate ran on private Openbox/Xvfb.
+Two connected SQLite files each contained `main.qa_items`. Selecting
+the exact source as destination reported that source and destination were
+the same table. Selecting the same-named table on the other connection
+mapped both columns and Atomic Commit reported three committed rows.
+
+Independent read-only SQLite queries verified NULL, an empty string and
+the exact Vietnamese and Japanese text separated by LF. The source rows
+and the destination's pre-existing sentinel were unchanged. Repeating
+the transfer reported a primary-key conflict and zero committed rows.
+The subsequent destination read matched the successful state exactly.
+Evidence is in `.sdd/sqlite-same-provider-transfer-evidence/`.
+
 ## PostgreSQL catalog drop retest
 
 On `c27ca70`, the app's `postgres_live_drop_schema_and_database` test passed
