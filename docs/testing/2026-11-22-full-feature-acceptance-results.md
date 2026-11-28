@@ -894,6 +894,28 @@ the independently seeded row 42. PostgreSQL `pg_sleep` and cancellation
 are covered in S06. These runs exercise long statements and recovery.
 The documented preset configuration and firing remain unverified.
 
+### Linux Transaction log responsiveness after a long SQLite statement
+
+The packaged Ubuntu 24.04 candidate ran in private Openbox/Xvfb. Each
+trial used a fresh FastDB process and profile with the same SQLite file.
+An independent SQLite handle verified each result, and the autosaved
+script matched the input bytes. The session JSONL recorded one successful
+row for each statement, with recorded SQL execution durations of 0–1 ms.
+
+| Input | Transaction log interaction | Time from Ctrl+Q to process exit |
+| --- | --- | ---: |
+| 88 bytes, result 42 | The filter accepted the query text and displayed one match. Close dismissed the modal. | 0.14 s |
+| 67,113 bytes, result 67,067, implicit column name | The log appeared, but the filter text was absent at capture and Close left the modal visible. | 31.04 s |
+| 67,113 bytes, result 67,067, short explicit column alias | The modal had yet to appear at the first filter capture. The later Close capture showed the unfiltered modal still open. | 33.41 s |
+
+Both long trials reproduced the responsiveness failure without dragging
+the editor/result splitter. The short alias also reproduced it. Each
+process eventually exited and removed its own mode-0600 log while
+Xvfb remained running. The timings measure the interval after the
+Quit input in each trial. The code-level cause remains unconfirmed.
+Screenshots and independent read-back are in
+`.sdd/transaction-log-long-script-evidence/`.
+
 ### Linux Transaction log resource release on close
 
 The packaged candidate ran with a SQLite fixture on private Xvfb.
