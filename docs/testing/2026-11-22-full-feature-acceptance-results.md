@@ -1157,6 +1157,17 @@ run verified Vietnamese, CJK and emoji paste in SQL and grid text.
 Screenshots and commit-event excerpts are in `.sdd/wayland-ime-evidence/`
 and `.sdd/wayland-ime-cjk-emoji-evidence/`.
 
+### Linux IBus Unikey composition on private X11
+
+A separate Openbox/Xvfb session used the packaged candidate, an isolated
+IBus daemon, and the Unikey engine. The X11 root advertised `@server=ibus`.
+Typing the Telex sequence in GNOME Text Editor produced `Tiếng Việt`.
+With the FastDB SQL editor focused, the same input terminated FastDB.
+The main thread panicked in `zed-xim` 0.4.0-zed while decoding UTF-8.
+The X11 fixture covered Vietnamese in the SQL editor. The other fields,
+CJK and emoji were exercised separately on native Wayland. Screenshots
+and the panic excerpt are in `.sdd/x11-ibus-composition-evidence/`.
+
 ### Linux clipboard round trips on private X11 and Wayland
 
 FastDB and GNOME Text Editor ran as native Wayland clients on a private
