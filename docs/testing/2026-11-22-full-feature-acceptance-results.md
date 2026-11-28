@@ -169,14 +169,26 @@ the apt upgrade. Both emitted the protocol-1 first-frame event for a
 and did not emit the event in 20 seconds. The successful retry used
 Openbox, Fontconfig and software Vulkan on private Xvfb.
 
-Both tags predate the P3-05 verification commit `c8768a4`. This result covers
-apt, startup with an empty probe profile, and preservation of the on-disk
-test file. Interactive restart and saved-workspace read-back, verified updater
-download and installer handoff remain pending.
-On 2026-11-26, `gh release list --repo Matrix-I/fastdb` identified v0.3.0
-as the latest published release. All other listed releases were older
-or prerelease. The real signed-update gate is **Blocked** until a newer
-compatible production-signed target is published.
+Both tags predate the P3-05 verification commit `c8768a4`.
+
+### Interactive restart after the signed Debian package upgrade
+
+On Debian 13 in private Openbox/Xvfb, both released DEBs again matched
+production-signed manifests. The RC created Script-1 through the GUI,
+ran it against a disposable SQLite profile and displayed ID 731 and
+`signed-upgrade-fixture`. Ctrl+Q saved its exact SQL bytes. Apt unpacked
+the final DEB over the RC and reported version 0.3.0. The final build
+reopened the same profile and script without running it. Execute opened
+a connection dialog because the profile was disconnected. After
+explicit reconnect and Execute, the same row appeared. Independent
+SQLite and SHA-256 checks proved the database and script bytes survived
+the upgrade and package removal. Screenshots and hashes are in
+`.sdd/interactive-signed-deb-upgrade-evidence/`.
+
+GitHub's latest-release API still returned v0.3.0 on 2026-11-28, with
+signed checksums and the Linux DEB. The tested v0.3.0 candidate requires
+a newer compatible production-signed target to exercise the in-app
+download, verification and installer handoff. UPD-04 remains Blocked.
 
 ## Linux release performance
 
