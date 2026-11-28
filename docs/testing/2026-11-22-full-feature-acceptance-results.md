@@ -1030,6 +1030,29 @@ the unchecked option. The supported Cancel and Execute flows passed.
 The Cascade control remains a UI defect on these providers. Screenshots
 and independent catalog and row reads are in `.sdd/object-ddl-evidence/`.
 
+### Linux MySQL and SQLite native DDL copy and replay
+
+On the Ubuntu 24.04 package in private Openbox/Xvfb, both providers
+showed Native DDL in Properties. On each provider, **Copy DDL** and
+select-all followed by keyboard Copy returned identical UTF-8 bytes
+without line numbers.
+
+- SQLite returned 405 bytes matching the native table, explicit index
+  and trigger definitions. Replaying into a separate file reproduced
+  the three catalog entries. Inserts verified the `Việt` default, the
+  trigger's replacement of a NULL note, and generated values 10 and 12.
+- MySQL 8.4.13 returned 398 bytes matching `SHOW CREATE TABLE` with the
+  terminating semicolon and newline. Replaying into a separate schema
+  preserved the complete definition, including the collation, index,
+  check and generated column. A new row returned default UTF-8 bytes
+  `5669E1BB8774` and generated value 10.
+
+The initial MySQL fixture load used an implicit client character set.
+Its source catalog already held the misencoded default. The retest
+explicitly set the native client's character set to `utf8mb4` and
+verified the corrected source bytes before comparing FastDB's output.
+Evidence is in `.sdd/native-ddl-replay-evidence/`.
+
 ### Linux Reveal active object across connections
 
 The packaged candidate ran on Debian 13 private Xvfb with MySQL 8.4.13
