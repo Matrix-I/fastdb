@@ -979,8 +979,16 @@ and two separate SQLite files. Each contained a `qa_items` table and
 | SQLite column tab | With the SQLite A column tab active and SQLite B connected, Reveal selected the owning table in SQLite A. |
 | Target hidden by filter | With the MySQL `qa_items.value` tab active, searching for `qa_view` hid the owning table. Clicking Reveal left the filter and visible tree unchanged, so the target remained hidden. |
 
-PostgreSQL view evidence is recorded under M04. PostgreSQL table and
-column reveal were not rerun in this batch.
+PostgreSQL view evidence is recorded under M04. A follow-up on the
+packaged candidate in private Openbox/Xvfb used PostgreSQL 16.16 and
+MySQL 8.4.13. Both had a `qa_anchor` table. Independent reads returned
+611 on PostgreSQL and 711 on MySQL. FastDB displayed 611 in the
+PostgreSQL table tab. From that tab, and again from its `qa_anchor.id`
+column tab, Reveal switched the Navigator from the MySQL tree to
+PostgreSQL and selected the owning `qa_anchor` row. With `qa_view`
+entered as a filter, Reveal left the PostgreSQL target hidden.
+Clearing the filter and clicking Reveal selected it again. Evidence is
+in `.sdd/navigator-reveal-postgres-evidence/`.
 
 ### Linux Catalog Browser keyboard route
 
