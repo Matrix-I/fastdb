@@ -936,6 +936,26 @@ ownership during catalog Refresh.
   View only. The action coverage falls short of NAV-05's per-node check.
   Individual MySQL and PostgreSQL branch-level reloads remain unverified.
 
+### Linux MySQL and SQLite table mutations
+
+The packaged Ubuntu 24.04 candidate ran in private Openbox/Xvfb with
+MySQL 8.4.13 and a file-backed SQLite database. On each provider the
+initial `qa_ddl` and unrelated `qa_keep` tables each held one sentinel row.
+
+| Action | SQLite | MySQL |
+| --- | --- | --- |
+| Add Column | The native `sqlite_schema` showed nullable `qa_probe text DEFAULT 17`. The original row 731 remained. | Preview and native catalogs showed nullable `qa_probe17 varchar(40)` with default `marker`. Independent SQL returned row 831 with that value. The dialog warned that MySQL DDL commits automatically. |
+| Rename Table | Empty input disabled Execute. Renaming to `qa_keep` returned the native name collision and preserved both tables. Renaming to `qa_renamed` updated the tree and catalog and preserved row 731. | Empty input disabled Execute. Renaming to `qa_keep` returned native error 1050 and preserved both tables. Renaming to `qa_renamed` updated the tree and catalog and preserved row 831. |
+| Truncate Table | Preview used `DELETE FROM "qa_renamed";`. Cancel kept row 731. Confirm left the table with zero rows. | Preview used qualified `TRUNCATE TABLE`. Cancel kept row 831. Confirm left the table with zero rows. |
+| Drop Table | Cancel kept `qa_renamed`; confirm removed it from the tree and native schema. The unrelated row 732 in `qa_keep` remained. | Cancel kept `qa_renamed`; confirm removed its catalog entries and tree row. The unrelated row 832 in `qa_keep` remained. |
+
+The Truncate and Drop dialogs on both providers offered an enabled
+**CASCADE dependent objects** checkbox. Toggling it did not alter either
+SQL preview. Those probes were canceled. The confirmed operations used
+the unchecked option. The supported Cancel and Execute flows passed.
+The Cascade control remains a UI defect on these providers. Screenshots
+and independent catalog and row reads are in `.sdd/object-ddl-evidence/`.
+
 ### Linux Reveal active object across connections
 
 The packaged candidate ran on Debian 13 private Xvfb with MySQL 8.4.13
@@ -2001,7 +2021,7 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 | D01 | Pass | Verified quoted preview, Cancel, Persist and catalog refresh, and Revert. Earlier tests also exercised dirty Close. |
 | D02 | Pass | Verified stale snapshot refusal, Refresh and rollback when a later DDL statement failed. |
 | D03 | Fail (index and constraint creation controls) | Verified table and column actions, view create/alter/drop, and index and constraint drop with independent PostgreSQL. The separate index and constraint creation controls were unavailable. |
-| D04 | Pass | Truncate and Drop Cancel/confirm, empty-name validation, and native duplicate-name failure matched independent PostgreSQL checks. |
+| D04 | Pass | Truncate and Drop Cancel/confirm, empty-name validation, and native duplicate-name failure matched independent PostgreSQL checks. The [MySQL and SQLite retest](#linux-mysql-and-sqlite-table-mutations) verified the same flows and found an ineffective Cascade option on both providers. |
 | V01 | Pass | Value viewer preserved exact JSON/XML, distinguished binary and NULL states, and displayed both matching UTC instants. Grid multiline clipping is tracked under B01. |
 | V02 | Fail (Value Editor entry) | Binary grid edit refers to Value Editor, but the candidate has no entry point. Typed edits and file round trips remain unverified. |
 | V03 | Blocked | Stale Apply requires a reachable Value Editor. |
