@@ -6,7 +6,7 @@
 
 - **Transaction log acceptance.** The split transaction toolbar selector (`T`/arrow for the mode menu, `Auto`/`Manual` label for the session-only Transaction log) and bounded disk-backed log modal have automated coverage; manual GUI acceptance is pending.
 
-- **Workflow acceptance.** The SQLite, PostgreSQL and MySQL data paths have automated coverage. Manual acceptance of the [desktop workflow cases](../WORKFLOW_ACCEPTANCE.md#desktop-case-record), including the guard on tab close, disconnect and Quit with staged grid edits, remains pending.
+- **Workflow acceptance.** The SQLite, PostgreSQL and MySQL data paths have automated coverage. The PostgreSQL Linux X11 smoke verified the staged-edit guards, script autosave, and GUI save-failure recovery. Native macOS Quit and About cases and the full PostgreSQL release acceptance remain pending. See the [desktop case record](../WORKFLOW_ACCEPTANCE.md#postgresql-desktop-smoke-follow-up-2026-11-23).
 
 - **Table transactions acceptance.** Table tabs own dedicated physical sessions with Auto-Commit and Manual modes, Save/Commit/Rollback transaction boundaries, read-your-writes, and batch savepoint recovery; manual GUI verification is pending.
 
