@@ -2230,6 +2230,19 @@ restores the panel. The temporary harness also had a stale expectation of
 The app logged a separate certificate-trust failure checking GitHub from
 this isolated fixture.
 
+### SQLite departure guard after discarding a draft
+
+On the packaged Ubuntu 24.04 candidate in private Openbox/Xvfb,
+a staged change from `original` to `draft-only` blocked SQLite
+Disconnect and displayed the Save or Cancel banner. Grid Cancel
+restored `original` and the second Disconnect succeeded.
+Reconnecting the same profile restored its live Navigator indicator,
+but the obsolete banner stayed visible in the clean table tab.
+Table Refresh removed the banner. Independent read-only SQLite
+returned both original fixture rows. The PostgreSQL L03 failure
+therefore also occurs on SQLite. Evidence is in
+`.sdd/sqlite-departure-guard-evidence/`.
+
 ## Linux desktop runbook coverage
 
 This index covers the IDs in the [PostgreSQL runbook](0.2.0-postgres-manual-acceptance.md).
@@ -2289,7 +2302,7 @@ Linux contexts, sixteen fail a subcase, one is blocked, and one is deferred.
 | X06 | Pass | Checked UTF-16, NULL tokens, manual mapping, skipped-column default, rejected conversions and the wizard cancellation lifecycle. X02 records the underlying cleanup failure. |
 | L01 | Pass | Verified query, Save and Refresh ownership, error isolation, same-name tabs and staged edit retention. |
 | L02 | Pass | Explicit Cancel and Disconnect targeted A, B stayed usable on the same backend, and A did not reopen after the old query deadline. Earlier close/reopen discarded the old result. |
-| L03 | Fail (stale departure feedback) | Dirty guards and durability checks passed. The obsolete Save or Cancel banner survived Cancel and reconnect with no active draft. |
+| L03 | Fail (stale departure feedback) | Dirty guards and durability checks passed. The obsolete Save or Cancel banner survived Cancel and reconnect with no active draft on PostgreSQL and [SQLite](#sqlite-departure-guard-after-discarding-a-draft). |
 | L04 | Pass for planned Linux contexts | Tab close, shortcut Quit, window close, and save failure/retry preserved the expected bytes. Native macOS menu and About paths are deferred. |
 | R01 | Fail (sidebar) | Theme and zoom restored. The saved hidden Navigator reopened visible. The SQLite follow-up restored pane widths and both script tabs but reset column order and visibility. The transaction log reset on restart. The Timeout preset is unavailable. |
 | R02 | Pass | Quit released the pending transaction, preserved exact script bytes, and restart left the unexecuted INSERT absent. |
