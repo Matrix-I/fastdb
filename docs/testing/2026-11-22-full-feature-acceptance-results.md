@@ -1419,6 +1419,12 @@ the shortcut behavior recorded in L04.
 The tested Linux window exposed no application menu for Quit.
 F10 did not open an application menu, consistent with APP-04.
 
+In the final empty-profile smoke, the window manager close action exited
+with code 0 once and Ctrl+Q exited with code 0 twice. Each run removed
+its own mode-0600 session log while Xvfb stayed available. The app-menu
+Quit failure remains recorded. Evidence is in
+`.sdd/final-linux-shell-evidence/`.
+
 ### Linux Secret Service restart, lock and save retry
 
 FastDB ran on private Sway nested in Xvfb, with its own D-Bus and
