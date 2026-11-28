@@ -120,10 +120,35 @@ the grid copied both multiline values byte for byte via the Wayland clipboard.
 - Updater tests passed 21 cases. The public v0.3.0 Minisign manifest and Debian
   payload verified against the production public key. A live upgrade remains
   blocked because the newest signed public release is the same version.
-- The retained Linux output directories contain Debian and standalone
-  artifacts but no AppImage. The Linux build script generates an AppImage
-  only when `appimagetool` is available, and this test shell does not have it.
-  The conditional AppImage launch was not run.
+- The original Linux build produced Debian and standalone artifacts.
+  The separate [AppImage retest](#linux-appimage-packaging-and-startup)
+  exercised the conditional AppImage path.
+
+### Linux AppImage packaging and startup
+
+The AppImage portion of `ci/build-linux.sh` packaged the retained
+Ubuntu 24.04 release executable (SHA-256
+`00af96e67fa90681bda0e4cd2ab38fb7493c87f5f2cc77a095d2b5a63c6f38fb`).
+A disposable Ubuntu 24.04.5 container used the verified x86_64
+appimagetool 1.9.1 asset and supplied the verified x86_64 type-2 runtime
+with `--runtime-file`. The resulting AppImage SHA-256 was
+`da9c6131fc97428dc405753b10ff35a8f5c45130819ada07f0379d4491bda344`.
+Extraction returned an executable `AppRun`, the icon and a desktop entry
+accepted by `desktop-file-validate`. The embedded FastDB executable
+matched the original byte for byte. [AppImage tools](https://github.com/AppImage/appimagetool/releases/tag/1.9.1),
+[type-2 runtime](https://github.com/AppImage/type2-runtime/releases/tag/continuous)
+
+With `APPIMAGE_EXTRACT_AND_RUN=1`, the AppImage opened on private
+Openbox/Xvfb. Its Navigator connected to a disposable SQLite file.
+The table grid and a SQL editor result both showed ID 76031 and
+`appimage-fixture`, matching an independent read-only SQLite query.
+Ctrl+Q closed the window and saved the SQL text byte for byte. Relaunch
+restored the tab and text without rerunning the query.
+
+The extract-and-run smoke passed. Direct launch exited 127 because the
+environment lacked both `/dev/fuse` and a suitable `fusermount`. The mounted
+launch remains unverified and requires a FUSE-enabled environment.
+Evidence is in `.sdd/appimage-evidence/`.
 
 ### Ubuntu 24.04 desktop launcher and removal
 

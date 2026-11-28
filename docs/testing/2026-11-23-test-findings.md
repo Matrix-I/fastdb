@@ -35,7 +35,7 @@ Defects found during the pass are recorded here and were not fixed during it.
 | C9 ODBC providers | BLOCKED | The original suite skipped the live cases. Acceptance remains blocked until authorized SQL Server, Oracle and Db2 fixtures and compatible vendor drivers are available. |
 | APP-01 launch smoke (automated part only) | PASS | Debug build ran 15 s under Xvfb without a panic; GUI not inspected |
 | A4 release build | PASS | Via `bundle_linux.sh`; executable 34.5 MB (budget 100 MiB) |
-| D3 `bundle_linux.sh`, `ci/test-package-deb.sh` | PASS | Binary and `fastdb_0.3.0_amd64.deb` built; no AppImage because `appimagetool` is not installed |
+| D3 `bundle_linux.sh`, `ci/test-package-deb.sh` | PASS | Binary and `fastdb_0.3.0_amd64.deb` built. The follow-up AppImage built and passed the extract-and-run GUI smoke. Mounted startup requires a FUSE-enabled environment. [AppImage evidence](2026-11-22-full-feature-acceptance-results.md#linux-appimage-packaging-and-startup) |
 | D4 apt install / remove | PASS (partial) | Installed 0.3.0, desktop entry validates, `/usr/bin/fastdb` ran 10 s under Xvfb without a panic, removal left no files. Launch from a desktop launcher not tested (no desktop session) |
 
 ## Findings
