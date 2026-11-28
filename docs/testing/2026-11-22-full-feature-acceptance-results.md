@@ -725,6 +725,29 @@ Capture used the Ubuntu 24.04 candidate DEB on private Xvfb with MySQL
 | SQL-14 | MySQL and SQLite each ran 23 statements returning markers 1–23. The newest retained result returned 23 and the first retained result returned 4. Closing the first selected its adjacent result, which returned 5. PostgreSQL split bounds are covered in W05. See the retest below for PostgreSQL retention. |
 | APP-10 · unavailable portal | Saving the SQLite plan when the desktop portal was absent produced a visible service error and left the active plan visible. |
 
+### Linux Query Plan file limits and provider checks
+
+On the Ubuntu 24.04 candidate in private Openbox/Xvfb with the GTK portal,
+SQLite returned `plan-fixture` in Result 1 and showed the native
+`qa_plan` primary-key lookup in Result 2. Both matched independent
+SQLite reads.
+
+| Input | GUI result |
+| --- | --- |
+| 16,777,217-byte JSON snapshot | Open rejected the file with the 16 MiB limit. |
+| Malformed JSON | Open reported invalid saved-plan JSON. |
+| Row with three values for four columns | Open reported invalid saved-plan row width. |
+| Snapshot with 4,097 rows | Open reported too many saved-plan rows. |
+| PostgreSQL snapshot compared to the SQLite plan | Compare rejected the different provider and explained that engine costs cannot be compared. |
+| 16,777,216-byte JSON snapshot | Open appended Result 3 with the same lookup and reported that no SQL was executed. |
+
+The two size fixtures contained identical plan data and differed by one
+trailing whitespace byte. Every rejected request left the two original
+result tabs in place. After the valid open, the original rows and native
+plan remained readable, and an independent SQLite read still returned
+the same fixture row. Input hashes and screenshots are in
+`.sdd/query-plan-file-limits-evidence/`.
+
 ## Linux SQL history and result retention retest
 
 The Ubuntu 24.04 candidate package (SHA-256
