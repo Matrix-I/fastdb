@@ -225,6 +225,46 @@ mod state_and_width_tests {
     }
 
     #[test]
+    fn cell_width_sample_fits_one_line_with_utf8_bounds() {
+        assert_eq!(
+            cell_measure_sample("quoted text\nsecond line"),
+            "quoted text"
+        );
+        assert_eq!(cell_measure_sample("café\r\nsecond line"), "café");
+        assert_eq!(cell_measure_sample("\nsecond line"), "");
+
+        let first_line = "界".repeat(CELL_MEASURE_CHARS);
+        assert_eq!(
+            cell_measure_sample(&format!("{first_line}界\nsecond line")),
+            first_line
+        );
+    }
+
+    #[test]
+    fn grid_autofit_uses_one_line_without_shortening_values_or_names() {
+        let first_line = "the first line of the value";
+        let extra_line = "W".repeat(CELL_MEASURE_CHARS);
+        let value = format!("{first_line}\n{extra_line}");
+        let header = format!("note\r\n{extra_line}");
+        let grid_for = |column: &str, cell: &str| {
+            let pager = Arc::new(
+                QueryResultPager::new(vec![ColumnMeta::new(column, DataType::Text)]).unwrap(),
+            );
+            pager.append_row([Some(cell.as_bytes())]).unwrap();
+            VirtualDataGrid::new(Some(pager), Theme::dark())
+        };
+
+        let reference_widths = grid_for("note", first_line).column_widths;
+        assert_eq!(grid_for("note", &value).column_widths, reference_widths);
+
+        let mut grid = grid_for(&header, &value);
+        assert_eq!(grid.column_widths, reference_widths);
+        assert_eq!(grid.pager.as_ref().unwrap().columns[0].name, header);
+        grid.selection = GridSelection::single(0, 0);
+        assert_eq!(grid.selection_text().as_deref(), Some(value.as_str()));
+    }
+
+    #[test]
     fn test_auto_fit_content_widths() {
         let cols = vec![
             ColumnMeta::new("id", DataType::Int8),

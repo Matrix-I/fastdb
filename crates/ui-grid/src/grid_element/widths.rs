@@ -41,7 +41,8 @@ impl VirtualDataGrid {
                 // 1. Column header width; until it is measured with real fonts, estimated per character.
                 // Name and badge render heavier than the estimator assumes, hence the 10% margin.
                 let header_w = self.header_widths.get(col_idx).copied().unwrap_or_else(|| {
-                    let name_w = Self::estimate_text_width(&col.name, 12.0) * 1.1;
+                    let name_w =
+                        Self::estimate_text_width(width_measure_line(&col.name), 12.0) * 1.1;
                     let badge_w =
                         Self::estimate_text_width(dbeaver_type_badge(col.data_type), 10.0) * 1.1;
                     let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
@@ -162,7 +163,7 @@ impl VirtualDataGrid {
             .iter()
             .map(|col| {
                 let badge_w = text_width(dbeaver_type_badge(col.data_type), 10.0, FontWeight::BOLD);
-                let name_w = text_width(&col.name, 12.0, FontWeight::SEMIBOLD);
+                let name_w = text_width(width_measure_line(&col.name), 12.0, FontWeight::SEMIBOLD);
                 let is_pk = col.is_primary_key || col.name.eq_ignore_ascii_case("id");
                 let sort_glyph = self
                     .ordering

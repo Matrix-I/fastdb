@@ -149,6 +149,10 @@ Tagging and the release workflow are outside this pass.
 Launch the candidate with a fresh `FASTDB_CONFIG_DIR`, with the OS credential
 store enabled unless a case says otherwise. Use `Ctrl` for `Cmd` on Linux.
 
+The Linux continuation runs desktop checks automatically on isolated
+Xvfb displays. See the [continuation findings](../testing/2026-11-23-test-findings.md#linux-continuation--2026-11-26)
+for outcomes. The macOS cases are deferred.
+
 ### E0. Existing runbooks (both platforms)
 
 1. Run every case of the
