@@ -513,6 +513,23 @@ reloading its private session D-Bus enabled the chooser.
   timestamps set for both, and the valid items primary-key index move
   from filenode 16403 to 16624.
 
+### PostgreSQL scoped restore and invalid archive retest
+
+The same DEB ran in private Sway nested in Xvfb, with a disposable
+PostgreSQL 16.16 server and its native clients selected through GTK.
+Changing the target after confirmation removed the check and disabled
+Run. Choosing a non-archive file and reconfirming displayed
+`Select a PostgreSQL custom archive file`. Independent psql found zero
+user tables in that target.
+
+A separate empty target received a custom archive built by native
+pg_dump for only `scoped_qa.sample`. With `scoped_qa` entered in
+Source schema for scoped archive, FastDB displayed Completed and
+native output included CREATE SCHEMA. Independent psql matched both
+source rows, including SQL NULL, empty text, zero-byte binary and
+`00 01 7f ff`. The unrelated source table was absent from the target.
+Evidence is in `.sdd/postgresql-scoped-restore-evidence/`.
+
 ## Linux table-data search on the packaged GUI
 
 Retained Ubuntu 24.04 candidate DEB on private Xvfb, scale 1. At the default
