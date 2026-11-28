@@ -1636,6 +1636,29 @@ two tables and one foreign-key arrow from `child.parent_id` to
 `parent.id` at both scales. Card headings and fields stayed within
 their borders.
 
+### Linux MySQL and SQLite composite relationship diagrams
+
+The Ubuntu 24.04 candidate ran in private Openbox/Xvfb with MySQL
+8.4.13 and file-backed SQLite. Each focused child diagram showed three
+qualified tables and four column links. Selecting one link of the
+composite foreign key highlighted both mapped column pairs. The
+distinct self-reference and incoming link remained visible.
+
+Each GTK SVG export parsed as XML and contained all three tables,
+four separate paths and arrowheads at the referenced columns. The
+paths' endpoints matched all four foreign-key mappings read
+independently from MySQL and SQLite. Double-clicking the parent card
+opened the matching row and displayed `mysql-parent` or
+`sqlite-parent` from the owning connection.
+
+Dragging the MySQL parent moved its layout coordinates from
+about (565, 52) to (705, 137). Closing and reopening the child tab
+preserved the changed layout. The moved and reopened MySQL SVGs were
+byte-identical. Revisiting the SQLite child yielded the original
+SQLite SVG byte for byte, and only MySQL had saved positions.
+Native reads, SVGs and screenshots are in
+`.sdd/mysql-sqlite-diagram-evidence/`.
+
 ### Linux plain-text font fallback
 
 With the default DejaVu Sans Mono on Debian 13, all five `END` markers
