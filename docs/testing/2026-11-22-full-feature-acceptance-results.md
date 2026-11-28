@@ -513,6 +513,17 @@ reloading its private session D-Bus enabled the chooser.
   timestamps set for both, and the valid items primary-key index move
   from filenode 16403 to 16624.
 
+### PostgreSQL backup cancellation in a short window
+
+The packaged candidate ran in native Wayland under private Sway on Xvfb.
+A controlled pg_dump stand-in emitted a progress line and waited in a
+live child process. The compositor resized FastDB to 1280 × 350 while
+the job was active. The native output and Cancel Job button stayed
+visible. Clicking Cancel Job reported Canceled and reaped the child
+before its deadline. No final backup or staging file remained in the
+isolated destination. Escape then dismissed the modal.
+Evidence is in `.sdd/postgresql-short-backup-evidence/`.
+
 ### PostgreSQL scoped restore and invalid archive retest
 
 The same DEB ran in private Sway nested in Xvfb, with a disposable

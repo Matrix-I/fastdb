@@ -60,7 +60,8 @@ desktop input. The macOS run is deferred.
 | PostgreSQL invalid archive and target confirmation | PASS. The invalid archive left the target empty. Editing the target cleared confirmation and disabled Run. |
 | PostgreSQL full backup, existing output, populated target, cancellation and maintenance | See the packaged GUI observations in the acceptance report. |
 | MySQL and SQLite desktop backup and restore | FAIL. The tested candidate omitted the native-tool entries. Independent automated native-client results are recorded separately. |
-| PostgreSQL scoped view dependency restore and short running modal | Still open. |
+| PostgreSQL short running modal | PASS. At 1280 × 350, native output and Cancel Job remained visible. Cancel reaped the controlled child without leaving an output file. Escape closed the modal. [Evidence](2026-11-22-full-feature-acceptance-results.md#postgresql-backup-cancellation-in-a-short-window) |
+| PostgreSQL scoped view dependency restore and connected-target metadata refresh | Still open. |
 
 [Linux restore retest](2026-11-22-full-feature-acceptance-results.md#postgresql-scoped-restore-and-invalid-archive-retest)
 and [native-tool evidence](2026-11-22-full-feature-acceptance-results.md#postgresql-native-tool-dialogs).
